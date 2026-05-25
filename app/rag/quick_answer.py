@@ -11,6 +11,10 @@ class AnswerSource:
     content: str
     score: float
     title: str | None = None
+    context_header: str | None = None
+    parent_chunk_id: str | None = None
+    chunk_type: str | None = None
+    metadata: dict | None = None
 
 
 @dataclass(frozen=True)
@@ -39,8 +43,18 @@ class QuickAnswerEngine:
                 content=hit["content"],
                 score=float(hit["score"]),
                 title=hit.get("title"),
+                context_header=hit.get("context_header"),
+                parent_chunk_id=hit.get("parent_chunk_id"),
+                chunk_type=hit.get("chunk_type"),
+                metadata=hit.get("metadata") or {},
             )
             for hit in hits
         ]
-        messages = build_quick_answer_messages(query=query, contexts=[source.content for source in sources])
+        messages = build_quick_answer_messages(
+            query=query,
+            contexts=[
+                f"{source.context_header}\n\n{source.content}" if source.context_header else source.content
+                for source in sources
+            ],
+        )
         return AnswerResult(answer=self.chat_model.complete(messages), sources=sources)

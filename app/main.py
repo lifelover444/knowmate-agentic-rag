@@ -11,7 +11,7 @@ from app.api.v1.router import api_router
 from app.core.config import Settings, get_settings
 from app.core.logging import configure_logging
 from app.db.session import make_session_factory
-from app.integrations.llm_openai import OpenAIChatModel, OpenAIEmbedder
+from app.integrations.llm_openai import OpenAICompatibleModelTester
 from app.integrations.qdrant_store import QdrantVectorStore
 
 
@@ -22,6 +22,7 @@ def create_app(
     embedder=None,
     chat_model=None,
     vector_store=None,
+    model_tester=None,
 ) -> FastAPI:
     configure_logging()
     resolved_settings = settings or get_settings()
@@ -30,9 +31,10 @@ def create_app(
     app = FastAPI(title=resolved_settings.app_name)
     app.state.settings = resolved_settings
     app.state.session_factory = session_factory or make_session_factory(resolved_settings)
-    app.state.embedder = embedder or OpenAIEmbedder(resolved_settings)
-    app.state.chat_model = chat_model or OpenAIChatModel(resolved_settings)
+    app.state.embedder = embedder
+    app.state.chat_model = chat_model
     app.state.vector_store = vector_store or QdrantVectorStore(resolved_settings)
+    app.state.model_tester = model_tester or OpenAICompatibleModelTester()
 
     @app.get("/health")
     def health():

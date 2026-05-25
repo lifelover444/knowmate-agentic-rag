@@ -34,6 +34,8 @@ def quick_answer(
         )
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     return QuickAnswerResponse(
         answer=result.answer,
         sources=[
@@ -44,6 +46,10 @@ def quick_answer(
                 title=source.title,
                 content=source.content,
                 score=source.score,
+                context_header=source.context_header,
+                parent_chunk_id=source.parent_chunk_id,
+                chunk_type=source.chunk_type,
+                metadata=source.metadata,
             )
             for source in result.sources
         ],

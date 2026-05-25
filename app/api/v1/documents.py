@@ -3,19 +3,21 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from sqlalchemy.orm import Session
 
-from app.api.v1.deps import get_db, get_settings
+from app.api.v1.deps import get_db, get_embedder, get_settings
 from app.core.config import Settings
 from app.db.repositories.chunk import ChunkRepository
 from app.db.repositories.document import DocumentRepository
 from app.db.repositories.knowledge_base import KnowledgeBaseRepository
 from app.schemas.document import ChunkRead, DocumentRead
 from app.services.document import DocumentService
+from app.services.model_config import MODEL_CONFIG_REQUIRED_MESSAGE, ModelConfigService
 from app.workers import tasks
 
 router = APIRouter()
 
 DBSession = Annotated[Session, Depends(get_db)]
 AppSettings = Annotated[Settings, Depends(get_settings)]
+EmbedderDep = Annotated[object, Depends(get_embedder)]
 UploadDocumentFile = Annotated[UploadFile, File(...)]
 
 
@@ -39,7 +41,10 @@ def create_document_from_file(
     file: UploadDocumentFile,
     db: DBSession,
     settings: AppSettings,
+    embedder: EmbedderDep,
 ):
+    if embedder is None and ModelConfigService(db, settings).get_active() is None:
+        raise HTTPException(status_code=400, detail=MODEL_CONFIG_REQUIRED_MESSAGE)
     document = DocumentService(
         DocumentRepository(db),
         KnowledgeBaseRepository(db),

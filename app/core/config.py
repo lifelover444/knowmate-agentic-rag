@@ -26,11 +26,14 @@ class Settings(BaseSettings):
     qdrant_use_tls: bool = False
     qdrant_collection: str = "knowmate_embeddings"
 
+    model_config_encryption_key: str | None = None
+
     openai_api_key: str = Field(default="change-me")
     openai_base_url: str = "https://api.openai.com/v1"
     chat_model: str = "gpt-4o-mini"
     embedding_model: str = "text-embedding-3-small"
     embedding_dimension: int = 1536
+    embedding_batch_size: int = 10
 
     default_chunk_size: int = 512
     default_chunk_overlap: int = 80

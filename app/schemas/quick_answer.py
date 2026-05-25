@@ -14,6 +14,10 @@ class SourceRead(BaseModel):
     title: str | None = None
     content: str
     score: float
+    context_header: str | None = None
+    parent_chunk_id: str | None = None
+    chunk_type: str | None = None
+    metadata: dict | None = None
 
 
 class QuickAnswerResponse(BaseModel):

@@ -48,6 +48,11 @@ class FakeVectorStore:
                 "knowledge_id": payload["knowledge_id"],
                 "knowledge_base_id": payload["knowledge_base_id"],
                 "content": payload["content"],
+                "context_header": payload.get("context_header"),
+                "parent_chunk_id": payload.get("parent_chunk_id"),
+                "chunk_type": payload.get("chunk_type"),
+                "metadata": payload.get("metadata") or {},
+                "title": payload.get("title"),
                 "score": 1.0,
             }
             for payload in payloads

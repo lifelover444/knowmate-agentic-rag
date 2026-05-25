@@ -19,6 +19,7 @@ body {
 
 button,
 input,
+select,
 textarea {
   font: inherit;
 }
@@ -64,7 +65,14 @@ label span {
   text-transform: uppercase;
 }
 
+label small {
+  color: #6f786e;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
 input,
+select,
 textarea {
   width: 100%;
   border: 1px solid #d8ddd3;
@@ -77,6 +85,7 @@ textarea {
 }
 
 input:focus,
+select:focus,
 textarea:focus {
   border-color: #174b38;
   box-shadow: 0 0 0 3px rgba(23, 75, 56, 0.12);
@@ -157,7 +166,7 @@ h3 {
 
 .pipeline {
   display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-template-columns: repeat(6, minmax(0, 1fr));
   gap: 8px;
   margin-bottom: 16px;
 }
@@ -197,6 +206,105 @@ h3 {
   min-height: 620px;
 }
 
+.model-panel {
+  display: grid;
+  gap: 14px;
+  margin-bottom: 14px;
+}
+
+.ingest-panel {
+  display: grid;
+  gap: 14px;
+  margin-bottom: 14px;
+}
+
+.model-grid,
+.ingest-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.model-grid label:nth-child(4),
+.model-grid label:nth-child(5) {
+  grid-column: span 2;
+}
+
+.toggle-row {
+  align-content: end;
+}
+
+.toggle-row input {
+  width: 20px;
+  height: 20px;
+}
+
+.preview-box {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(180px, 220px);
+  gap: 12px;
+  align-items: end;
+}
+
+.preview-result {
+  display: grid;
+  gap: 10px;
+  border-top: 1px solid #e1e5dd;
+  padding-top: 12px;
+}
+
+.preview-result > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  color: #526052;
+  font-size: 13px;
+}
+
+.preview-profile span {
+  border: 1px solid #dce2d7;
+  border-radius: 999px;
+  padding: 4px 8px;
+  background: #f8faf6;
+}
+
+.preview-chunk {
+  display: grid;
+  gap: 6px;
+  border-top: 1px solid #e6eae3;
+  padding-top: 10px;
+}
+
+.preview-chunk small,
+.chunk > small {
+  color: #365244;
+  white-space: pre-line;
+}
+
+.model-actions {
+  display: grid;
+  grid-template-columns: minmax(180px, 220px) minmax(180px, 220px);
+  gap: 10px;
+}
+
+.model-result,
+.model-note {
+  color: #526052;
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.model-result {
+  border-left: 3px solid #cd5c2e;
+  padding-left: 12px;
+  font-weight: 700;
+}
+
+.model-result.ok {
+  border-color: #174b38;
+  color: #174b38;
+}
+
 .panel {
   border: 1px solid #d8ddd3;
   border-radius: 8px;
@@ -224,29 +332,65 @@ h3 {
 }
 
 .file-picker {
+  display: block;
   position: relative;
+}
+
+.native-file-input {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.native-file-input:disabled {
+  cursor: not-allowed;
+}
+
+.file-picker .file-picker-button {
+  display: block;
+  justify-content: flex-start;
   min-height: 44px;
   border: 1px dashed #aeb8aa;
   border-radius: 7px;
   padding: 12px;
   color: #4d594d;
+  font-size: 14px;
+  font-weight: 500;
+  letter-spacing: 0;
   background: #f7f8f4;
+  text-align: left;
+  text-transform: none;
   cursor: pointer;
 }
 
-.file-picker input {
-  position: absolute;
-  inset: 0;
-  opacity: 0;
-  cursor: pointer;
+.native-file-input:hover + .file-picker-button {
+  background: #eef2ea;
 }
 
-.file-picker span {
-  display: block;
+.native-file-input:focus-visible + .file-picker-button {
+  border-color: #174b38;
+  box-shadow: 0 0 0 3px rgba(23, 75, 56, 0.12);
+}
+
+.native-file-input:disabled + .file-picker-button {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.file-picker .file-picker-button {
   overflow: hidden;
-  color: #4d594d;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.upload-hint {
+  color: #6f786e;
+  font-size: 12px;
+  line-height: 1.4;
 }
 
 .object-block {
@@ -382,6 +526,11 @@ h3 {
     grid-template-columns: 1fr;
   }
 
+  .model-grid,
+  .ingest-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
   .panel,
   .chunk-list,
   .answer {
@@ -401,5 +550,17 @@ h3 {
 
   .pipeline {
     grid-template-columns: 1fr;
+  }
+
+  .model-grid,
+  .ingest-grid,
+  .preview-box,
+  .model-actions {
+    grid-template-columns: 1fr;
+  }
+
+  .model-grid label:nth-child(4),
+  .model-grid label:nth-child(5) {
+    grid-column: auto;
   }
 }

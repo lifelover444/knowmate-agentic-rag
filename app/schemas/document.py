@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class DocumentRead(BaseModel):
@@ -37,6 +37,10 @@ class ChunkRead(BaseModel):
     pre_chunk_id: str | None
     next_chunk_id: str | None
     chunk_type: str
+    parent_chunk_id: str | None = None
+    context_header: str | None = None
+    metadata: dict | None = Field(default=None, validation_alias="chunk_metadata")
+    images: list | None = None
     created_at: datetime
 
     model_config = {"from_attributes": True}

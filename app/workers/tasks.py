@@ -1,6 +1,5 @@
 from app.core.config import get_settings
 from app.db.session import make_session_factory
-from app.integrations.llm_openai import OpenAIEmbedder
 from app.integrations.qdrant_store import QdrantVectorStore
 from app.services.document_processing import DocumentProcessingService
 from app.workers.celery_app import celery_app
@@ -18,6 +17,6 @@ def process_document(document_id: str) -> None:
         DocumentProcessingService(
             db=db,
             upload_dir=settings.upload_dir,
-            embedder=OpenAIEmbedder(settings),
+            settings=settings,
             vector_store=QdrantVectorStore(settings),
         ).process(document_id)

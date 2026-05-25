@@ -31,6 +31,7 @@ class KnowledgeBase(Base):
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     description: Mapped[str | None] = mapped_column(Text)
     chunking_config: Mapped[dict] = mapped_column(JSON, nullable=False)
+    parser_engine_rules: Mapped[list | None] = mapped_column(JSON)
     embedding_model_id: Mapped[str] = mapped_column(String(128), nullable=False)
     summary_model_id: Mapped[str] = mapped_column(String(128), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
@@ -39,6 +40,24 @@ class KnowledgeBase(Base):
 
     documents: Mapped[list["Knowledge"]] = relationship(back_populates="knowledge_base")
     chunks: Mapped[list["Chunk"]] = relationship(back_populates="knowledge_base")
+
+
+class ModelConfig(Base):
+    __tablename__ = "model_configs"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    tenant_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    provider: Mapped[str] = mapped_column(String(50), nullable=False)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    base_url: Mapped[str] = mapped_column(String(512), nullable=False)
+    api_key_encrypted: Mapped[str] = mapped_column(Text, nullable=False)
+    api_key_last4: Mapped[str] = mapped_column(String(8), nullable=False)
+    chat_model: Mapped[str] = mapped_column(String(128), nullable=False)
+    embedding_model: Mapped[str] = mapped_column(String(128), nullable=False)
+    embedding_dimension: Mapped[int] = mapped_column(Integer, nullable=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
 
 
 class Knowledge(Base):
@@ -87,6 +106,9 @@ class Chunk(Base):
     next_chunk_id: Mapped[str | None] = mapped_column(String(36))
     chunk_type: Mapped[str] = mapped_column(String(20), nullable=False, default="text")
     parent_chunk_id: Mapped[str | None] = mapped_column(String(36))
+    context_header: Mapped[str | None] = mapped_column(Text)
+    chunk_metadata: Mapped[dict | None] = mapped_column("metadata", JSON)
+    images: Mapped[list | None] = mapped_column(JSON)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

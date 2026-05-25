@@ -1,8 +1,19 @@
 import hashlib
+from dataclasses import dataclass
 
 from openai import OpenAI
 
 from app.core.config import Settings
+
+
+@dataclass(frozen=True)
+class OpenAICompatibleConfig:
+    provider: str
+    base_url: str
+    api_key: str
+    chat_model: str
+    embedding_model: str
+    embedding_dimension: int
 
 
 def _use_local_fallback(api_key: str) -> bool:
@@ -10,15 +21,14 @@ def _use_local_fallback(api_key: str) -> bool:
 
 
 class OpenAIEmbedder:
-    def __init__(self, settings: Settings) -> None:
-        self.local_fallback = _use_local_fallback(settings.openai_api_key)
-        self.client = (
-            None
-            if self.local_fallback
-            else OpenAI(api_key=settings.openai_api_key, base_url=settings.openai_base_url)
-        )
-        self.model = settings.embedding_model
-        self.dimensions = settings.embedding_dimension
+    def __init__(self, config: Settings | OpenAICompatibleConfig) -> None:
+        self.local_fallback = isinstance(config, Settings) and _use_local_fallback(config.openai_api_key)
+        api_key = config.openai_api_key if isinstance(config, Settings) else config.api_key
+        base_url = config.openai_base_url if isinstance(config, Settings) else config.base_url
+        self.client = None if self.local_fallback else OpenAI(api_key=api_key, base_url=base_url)
+        self.model = config.embedding_model
+        self.dimensions = config.embedding_dimension
+        self.batch_size = config.embedding_batch_size if isinstance(config, Settings) else 10
 
     def embed(self, text: str) -> list[float]:
         return self.embed_many([text])[0]
@@ -29,12 +39,16 @@ class OpenAIEmbedder:
         sanitized = [text[:20000] for text in texts]
         if self.client is None:
             raise RuntimeError("OpenAI client is not configured")
-        response = self.client.embeddings.create(
-            model=self.model,
-            input=sanitized,
-            dimensions=self.dimensions,
-        )
-        return [item.embedding for item in response.data]
+        vectors: list[list[float]] = []
+        for start in range(0, len(sanitized), self.batch_size):
+            batch = sanitized[start : start + self.batch_size]
+            response = self.client.embeddings.create(
+                model=self.model,
+                input=batch,
+                dimensions=self.dimensions,
+            )
+            vectors.extend(item.embedding for item in response.data)
+        return vectors
 
     def _local_embedding(self, text: str) -> list[float]:
         digest = hashlib.sha256(text.encode("utf-8")).digest()
@@ -46,14 +60,12 @@ class OpenAIEmbedder:
 
 
 class OpenAIChatModel:
-    def __init__(self, settings: Settings) -> None:
-        self.local_fallback = _use_local_fallback(settings.openai_api_key)
-        self.client = (
-            None
-            if self.local_fallback
-            else OpenAI(api_key=settings.openai_api_key, base_url=settings.openai_base_url)
-        )
-        self.model = settings.chat_model
+    def __init__(self, config: Settings | OpenAICompatibleConfig) -> None:
+        self.local_fallback = isinstance(config, Settings) and _use_local_fallback(config.openai_api_key)
+        api_key = config.openai_api_key if isinstance(config, Settings) else config.api_key
+        base_url = config.openai_base_url if isinstance(config, Settings) else config.base_url
+        self.client = None if self.local_fallback else OpenAI(api_key=api_key, base_url=base_url)
+        self.model = config.chat_model
 
     def complete(self, messages: list[dict[str, str]]) -> str:
         if self.local_fallback:
@@ -74,3 +86,41 @@ class OpenAIChatModel:
             return "没有在知识库中找到可引用的内容。"
         context = user_content.split(marker, 1)[1].split("\n\nQuestion:", 1)[0].strip()
         return context.split("\n\n---\n\n", 1)[0].strip() if context else "没有在知识库中找到可引用的内容。"
+
+
+class OpenAICompatibleModelTester:
+    def test(self, config: OpenAICompatibleConfig) -> dict:
+        chat_ok = False
+        embedding_ok = False
+        detected_dimension = None
+        messages: list[str] = []
+        try:
+            answer = OpenAIChatModel(config).complete(
+                [
+                    {"role": "system", "content": "你是 knowmate知友 的模型连通性测试助手。"},
+                    {"role": "user", "content": "请只回复：连接正常"},
+                ]
+            )
+            chat_ok = bool(answer.strip())
+        except Exception as exc:
+            messages.append(f"对话模型测试失败: {exc}")
+
+        try:
+            vector = OpenAIEmbedder(config).embed("知友模型连接测试")
+            detected_dimension = len(vector)
+            embedding_ok = detected_dimension == config.embedding_dimension
+            if not embedding_ok:
+                messages.append(f"向量维度不匹配: 返回 {detected_dimension}, 配置 {config.embedding_dimension}")
+        except Exception as exc:
+            messages.append(f"向量模型测试失败: {exc}")
+
+        if chat_ok and embedding_ok:
+            message = "连接测试通过"
+        else:
+            message = "；".join(messages) or "连接测试失败"
+        return {
+            "chat_ok": chat_ok,
+            "embedding_ok": embedding_ok,
+            "detected_dimension": detected_dimension,
+            "message": message,
+        }

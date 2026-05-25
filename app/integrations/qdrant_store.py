@@ -12,6 +12,7 @@ class QdrantVectorStore:
             port=settings.qdrant_port,
             api_key=settings.qdrant_api_key or None,
             https=settings.qdrant_use_tls,
+            check_compatibility=False,
         )
 
     def collection_name(self, dimension: int) -> str:
@@ -30,8 +31,11 @@ class QdrantVectorStore:
                 "knowledge_id": models.PayloadSchemaType.KEYWORD,
                 "knowledge_base_id": models.PayloadSchemaType.KEYWORD,
                 "source_id": models.PayloadSchemaType.KEYWORD,
+                "parent_chunk_id": models.PayloadSchemaType.KEYWORD,
+                "chunk_type": models.PayloadSchemaType.KEYWORD,
                 "is_enabled": models.PayloadSchemaType.BOOL,
                 "content": models.PayloadSchemaType.TEXT,
+                "context_header": models.PayloadSchemaType.TEXT,
             }.items():
                 self.client.create_payload_index(collection_name=collection, field_name=field, field_schema=schema)
 
@@ -83,6 +87,10 @@ class QdrantVectorStore:
                 "knowledge_id": str(hit.payload.get("knowledge_id")),
                 "knowledge_base_id": str(hit.payload.get("knowledge_base_id")),
                 "content": str(hit.payload.get("content")),
+                "context_header": hit.payload.get("context_header"),
+                "parent_chunk_id": hit.payload.get("parent_chunk_id"),
+                "chunk_type": hit.payload.get("chunk_type"),
+                "metadata": hit.payload.get("metadata") or {},
                 "title": hit.payload.get("title"),
                 "score": float(hit.score),
             }
