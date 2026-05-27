@@ -2,7 +2,7 @@
 
 knowmate 知友是一个参考 [Tencent/WeKnora](https://github.com/Tencent/WeKnora) 核心思路实现的知识库 RAG 项目。后端技术栈从 WeKnora 的 Go 实现改为 Python / FastAPI；项目不是 Tencent/WeKnora 官方项目。
 
-当前版本为 v0.3.1，主线仍聚焦 WeKnora-style Quick Q&A。v0.3 补齐 WeKnora 方向的 hybrid retrieval / knowledge search / rerank 边界；v0.3.1 不新增功能，只做质量补齐：
+当前版本为 v0.4，主线仍聚焦 WeKnora-style Quick Q&A。v0.3 补齐 WeKnora 方向的 hybrid retrieval / knowledge search / rerank 边界；v0.3.1 做质量补齐；v0.4 不新增后端 API，重点把前端从单页测试工作台重构为 TypeScript 化、组件化的浅色企业 Dashboard：
 
 ```text
 模型管理
@@ -75,9 +75,15 @@ knowmate 知友是一个参考 [Tencent/WeKnora](https://github.com/Tencent/WeKn
 - WeKnora 风格通用解析注册表：`builtin` 支持 `.txt/.md/.pdf/.docx/.csv/.json/.xlsx`。
 - WeKnora 风格自适应切分：`auto / heading / heuristic / legacy`，支持 protected blocks、context header、parent-child chunking。
 - Chunking preview/debug API：可预览命中策略、profile、chunk 统计和切片内容。
-- Vue 中文测试台：模型管理、解析切分设置、检索配置、知识库创建、文档上传、文档重处理、切片查看、knowledge-search、quick-answer 问答。
+- v0.4 Vue / TypeScript Dashboard：
+  - 使用 Vue 3、Vite、TypeScript、Arco Design Vue、Pinia、vue-router、markdown-it 和 highlight.js。
+  - 使用 hash router，生产路径形态为 `/#/chat`、`/#/knowledge-bases`、`/#/knowledge-bases/:kbId/documents`、`/#/settings/models`、`/#/settings/retrieval`。
+  - 从旧单文件 `App.vue` 拆分为布局、复用组件、Pinia stores、API utils、类型定义和 5 个业务视图。
+  - 页面覆盖快速问答、知识搜索、知识库列表、文档管理、模型配置、检索配置和切分预览。
+  - 保持 WeKnora 风格浅色界面：近白页面背景、绿色品牌主色、低饱和边框、中文企业软件观感。
+  - quick-answer 回答使用 `markdown-it` 渲染，禁用 HTML 直通，sources 使用复用 `SourceCard` 展示完整检索 metadata。
 - 自动化测试：覆盖多模型 CRUD、凭据加密、知识库模型校验、重处理、检索配置、hybrid/RRF/rerank/parent-child retrieval、knowledge-search API、前端关键逻辑、API 和文档处理 payload。
-- v0.3.1 后端质量验证当前为 `51 passed`，详见下方“验证命令”和 [CHANGELOG.md](CHANGELOG.md)。
+- v0.4 质量验证当前为 `51 passed`，详见下方“验证命令”和 [CHANGELOG.md](CHANGELOG.md)。
 
 暂未实现：
 
@@ -97,7 +103,7 @@ knowmate 知友是一个参考 [Tencent/WeKnora](https://github.com/Tencent/WeKn
 | 向量库 | Qdrant |
 | 模型接入 | OpenAI Python SDK, OpenAI-compatible API, OpenAI-compatible rerank API |
 | 检索 | Qdrant dense retrieval, PostgreSQL FTS, jieba, RRF |
-| 前端 | Vue 3, Vite, lucide-vue-next |
+| 前端 | Vue 3, TypeScript, Vite, Arco Design Vue, Pinia, vue-router, markdown-it, highlight.js |
 | 测试与质量 | pytest, Ruff |
 
 ## 快速启动
@@ -188,23 +194,21 @@ npm --prefix frontend run dev
 http://127.0.0.1:5173
 ```
 
-Vite 会把 `/api` 代理到 `http://127.0.0.1:8000`。
+Vite 会把 `/api` 和 `/health` 代理到 `http://127.0.0.1:8000`。
 
 ## 页面使用流程
 
-1. 在“模型配置”里分别配置 QA 模型和 Embedding 模型。
+1. 进入 `/#/settings/models`，在“模型配置”里分别配置 QA、Embedding 和可选 Rerank 模型。
 2. QA 模型可选择 Qwen / DashScope、DeepSeek 或 OpenAI-compatible；Embedding 模型当前主要使用 Qwen / DashScope。
-3. 填入 API Key 后点击“测试 QA”或“测试向量”。
+3. 填入 API Key 后点击“测试模型”。
 4. 保存模型后，API Key 输入框会清空；再次测试会使用后端已加密保存的 Key。
-5. 在绑定下拉框里选择 `KnowledgeQA` 和 `Embedding` 模型。
-6. 在“解析与切分设置”里选择 parser engine 和 chunking strategy，可先点“切分预览”。
-7. 创建知识库，知识库会绑定当前选择的 QA 和 Embedding 模型。
-8. 上传 `.txt/.md/.pdf/.docx/.csv/.json/.xlsx` 文档。
-9. 等待 Worker 处理到“解析完成”，页面展示 chunks。
-10. 切换向量模型、维度或切分参数后，点击“重建文档”或“重建知识库”重建向量。
-11. 在“检索配置”里选择 `hybrid / vector_only / keyword_only`，可调整 keyword 阈值、RRF 权重和 rerank 开关。
-12. 在“知识搜索”里调试 sources，不调用 LLM。
-13. 在“快速问答”里提问，返回回答和来源依据。
+5. 进入 `/#/settings/retrieval`，配置 `hybrid / vector_only / keyword_only`、keyword 阈值、RRF 权重、rerank 开关、parser engine 和 chunking strategy，可先点“切分预览”。
+6. 进入 `/#/knowledge-bases` 创建知识库，知识库会绑定选择的 QA 和 Embedding 模型，并保存切分配置与解析规则。
+7. 进入知识库的文档管理页，上传 `.txt/.md/.pdf/.docx/.csv/.json/.xlsx` 文档。
+8. 等待 Worker 处理到“解析完成”，页面可在 drawer 中查看 chunks。
+9. 切换向量模型、维度或切分参数后，点击“重新处理”或“重建知识库”重建向量。
+10. 进入 `/#/chat`，在“知识搜索”里调试 sources，不调用 LLM。
+11. 在“快速问答”里提问，返回 Markdown 回答和来源依据。
 
 ## 核心 API
 
@@ -328,7 +332,7 @@ app/
   schemas/             Pydantic schemas
   services/            应用服务层
   workers/             Celery app 和任务
-frontend/              Vue 中文测试台
+frontend/              Vue 3 + TypeScript Dashboard
 alembic/               数据库迁移
 tests/                 pytest 测试
 storage/               本地上传文件目录
@@ -348,7 +352,7 @@ npm --prefix frontend run build
 - `python -m pytest -q`：`51 passed`
 - `ruff check .`：通过
 - `python -m compileall app tests`：通过
-- v0.3 前端构建和本地启动自测：
+- v0.4 前端构建和本地启动自测：
   - `npm --prefix frontend run build`：通过。
   - Docker Compose `postgres / redis / qdrant` healthy。
   - `alembic upgrade head` 已升级到 `0005_v03_keyword_retrieval`。
@@ -365,7 +369,7 @@ npm --prefix frontend run build
 - v0.3 keyword search 是 PostgreSQL FTS + 应用层 `jieba` 分词，不是完整 BM25；真正 BM25 引擎留到后续版本。
 - Rerank 默认关闭；启用时必须先创建可用的 `Rerank` 模型，并在检索配置中绑定 `rerank_model_id`。
 - 当前 OCR / MinerU 未接入，图片类文件会明确显示 unsupported/unavailable。
-- 模型测试会透传 provider 的真实错误，例如认证失败、模型不存在、维度不匹配等，前端会渲染中文可读文本。
+- 模型测试会透传 provider 的真实错误，例如认证失败、模型不存在、维度不匹配等，前端会渲染中文可读文本，不渲染 `[object Object]`。
 - 生产部署前需要更换默认数据库密码，固定并妥善保存 `MODEL_CONFIG_ENCRYPTION_KEY`，并增加鉴权和访问控制。
 
 ## 版本记录

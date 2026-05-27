@@ -1,5 +1,86 @@
 # Changelog
 
+## v0.4
+
+v0.4 不新增后端 API，重点把前端从单页 monolithic 测试工作台重构为 TypeScript 化、组件化的 WeKnora-style 浅色 Dashboard。后端 Quick Q&A、knowledge-search、模型管理、检索配置、文档处理等能力保持原有端点和响应形态。
+
+### Added
+
+- 新增 TypeScript 前端配置：
+  - `frontend/tsconfig.json`
+  - `frontend/tsconfig.node.json`
+  - `frontend/src/env.d.ts`
+- 新增 Vue Router hash 路由：
+  - `/#/chat`
+  - `/#/knowledge-bases`
+  - `/#/knowledge-bases/:kbId/documents`
+  - `/#/settings/models`
+  - `/#/settings/retrieval`
+- 新增 Pinia store 分层：
+  - `models`
+  - `knowledgeBase`
+  - `retrieval`
+  - `chat`
+- 新增复用组件：
+  - `AppSidebar`
+  - `ModelConfigForm`
+  - `DocumentUpload`
+  - `ChunkPreview`
+  - `SourceCard`
+- 新增业务视图：
+  - `ChatView`
+  - `KnowledgeBaseView`
+  - `DocumentsView`
+  - `ModelSettingsView`
+  - `RetrievalSettingsView`
+- 新增前端 API 类型定义和请求封装：
+  - `frontend/src/types/api.ts`
+  - `frontend/src/utils/api.ts`
+- 新增 Markdown 回答渲染：
+  - 使用 `markdown-it`
+  - `html: false`，不让回答中的 HTML 直通 `v-html`
+  - 使用 `highlight.js` 支持代码块高亮
+
+### Changed
+
+- 前端运行时依赖改为 Vue 3 + TypeScript + Vite + Arco Design Vue + Pinia + vue-router。
+- 移除 `lucide-vue-next`，不再保留旧绿色单页测试台样式。
+- `App.vue` 只负责全局布局，业务 API 调用迁移到 stores 和视图组件。
+- `main.js` 迁移为 `main.ts`。
+- `apiErrors.js` 迁移为 `utils/api.ts`，继续保留非 JSON 错误响应处理和中文可读错误格式化。
+- `styles.css` 迁移为 `styles/app.css`，采用浅色 WeKnora 风格：
+  - 近白页面背景
+  - 白色内容卡片
+  - 绿色品牌主色
+  - 低饱和边框和浅绿色选中态
+- `vite.config.js` 保留 `/api` proxy，并新增 `/health` proxy。
+- `package.json` 新增 `type-check`，`build` 会先执行 `vue-tsc --noEmit` 再执行 `vite build`。
+- 前端字符串测试改为扫描 `frontend/src/**/*.{vue,ts,css}`，适配组件化结构。
+
+### Preserved
+
+- 不新增后端 API。
+- 不修改 `app/` 后端代码。
+- 继续调用现有 v0.3 端点：
+  - 模型 CRUD、模型测试、凭据更新
+  - 检索配置加载和保存
+  - parser engine 加载
+  - chunker preview
+  - 知识库创建、列表、详情、删除、重建
+  - 文档列表、上传、状态轮询、chunks 查看、重处理、删除
+  - quick-answer
+  - knowledge-search
+- API Key 仍不回显明文，只展示配置状态和尾号。
+- 文档解析轮询仍为最多 300 次、每秒一次。
+- sources 继续展示 `retrieval_method`、`vector_score`、`keyword_score`、`rrf_score`、`rerank_score`、`context_chunk_id`、`parent_chunk_id`、`chunk_type` 等检索解释字段。
+
+### Verification
+
+最近一次本地验证：
+
+- `npm --prefix frontend run build`：通过
+- `python -m pytest -q`：`51 passed`
+
 ## v0.3.1
 
 v0.3.1 是 v0.3 的质量补齐版本，不新增功能，修复审查中发现的疏漏。
