@@ -2,7 +2,7 @@
 
 knowmate 知友是一个参考 [Tencent/WeKnora](https://github.com/Tencent/WeKnora) 核心思路实现的知识库 RAG 项目。后端技术栈从 WeKnora 的 Go 实现改为 Python / FastAPI；项目不是 Tencent/WeKnora 官方项目。
 
-当前版本为 v0.3，主线仍聚焦 WeKnora-style Quick Q&A，并补齐 WeKnora 方向的 hybrid retrieval / knowledge search / rerank 边界：
+当前版本为 v0.3.1，主线仍聚焦 WeKnora-style Quick Q&A。v0.3 补齐 WeKnora 方向的 hybrid retrieval / knowledge search / rerank 边界；v0.3.1 不新增功能，只做质量补齐：
 
 ```text
 模型管理
@@ -52,6 +52,13 @@ knowmate 知友是一个参考 [Tencent/WeKnora](https://github.com/Tencent/WeKn
   - `RerankPipeline` 支持 passage cleaning、阈值过滤和 score 映射。
   - `ParentChildExpander` 支持 child 命中后回填 parent context，sources 仍保留 matched child 信息。
   - 新增 `POST /api/v1/knowledge-search`，用于不调用 LLM 的检索调试。
+- v0.3.1 质量补齐：
+  - 清理 v0.2 遗留 `QuickAnswerEngine`，quick-answer 只保留统一 `KnowledgeSearchService` / retriever pipeline 路径。
+  - `AnswerSource` / `AnswerResult` 保留在 `app/rag/quick_answer.py`，维持现有 import 兼容。
+  - 修复测试夹具 `FakeVectorStore.search()` 的 `score_threshold` 参数和阈值过滤，避免测试误走 TypeError 降级路径。
+  - keyword hit 的 title 在 chunk metadata 缺失时回退到文档标题，和 vector payload title 保持一致。
+  - `SourceRead` 新增可选 `context_content`，用于透传 parent chunk context。
+  - 补充 `tokenize_query`、软删除后检索排除、QuickAnswerService fallback 和 parent context 序列化测试。
 - Redis + Celery 后台文档处理：上传后异步解析、切分、embedding、写入 Qdrant。
 - Qdrant 向量存储：按 embedding dimension 使用 collection `knowmate_embeddings_{dimension}`。
 - PostgreSQL keyword 检索字段：
@@ -70,6 +77,7 @@ knowmate 知友是一个参考 [Tencent/WeKnora](https://github.com/Tencent/WeKn
 - Chunking preview/debug API：可预览命中策略、profile、chunk 统计和切片内容。
 - Vue 中文测试台：模型管理、解析切分设置、检索配置、知识库创建、文档上传、文档重处理、切片查看、knowledge-search、quick-answer 问答。
 - 自动化测试：覆盖多模型 CRUD、凭据加密、知识库模型校验、重处理、检索配置、hybrid/RRF/rerank/parent-child retrieval、knowledge-search API、前端关键逻辑、API 和文档处理 payload。
+- v0.3.1 后端质量验证当前为 `51 passed`，详见下方“验证命令”和 [CHANGELOG.md](CHANGELOG.md)。
 
 暂未实现：
 
@@ -233,7 +241,7 @@ Vite 会把 `/api` 代理到 `http://127.0.0.1:8000`。
 | `POST` | `/api/v1/knowledge-search` | 知识搜索，只返回检索 hits，不调用 LLM |
 | `POST` | `/api/v1/quick-answer` | 快速问答 |
 
-## v0.3 Schema 变化
+## v0.3 / v0.3.1 Schema 变化
 
 `KnowledgeBaseCreate` 新增必填字段：
 
@@ -267,9 +275,12 @@ Vite 会把 `/api` 代理到 `http://127.0.0.1:8000`。
   "keyword_score": 0.6,
   "rrf_score": 0.0149,
   "rerank_score": null,
-  "context_chunk_id": "parent chunk id when expanded"
+  "context_chunk_id": "parent chunk id when expanded",
+  "context_content": "parent chunk content when expanded"
 }
 ```
+
+`context_content` 是 v0.3.1 新增的可选字段；不影响旧客户端读取已有 sources 字段。
 
 `RetrievalConfigSchema` v0.3 关键字段：
 
@@ -334,11 +345,11 @@ npm --prefix frontend run build
 
 最近一次本地验证结果：
 
-- `python -m pytest -q`：`44 passed`
+- `python -m pytest -q`：`51 passed`
 - `ruff check .`：通过
 - `python -m compileall app tests`：通过
-- `npm --prefix frontend run build`：通过
-- 浏览器自测：
+- v0.3 前端构建和本地启动自测：
+  - `npm --prefix frontend run build`：通过。
   - Docker Compose `postgres / redis / qdrant` healthy。
   - `alembic upgrade head` 已升级到 `0005_v03_keyword_retrieval`。
   - API `/health` 返回 `{"status":"ok"}`。

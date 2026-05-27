@@ -26,6 +26,7 @@ class SourceRead(BaseModel):
     rrf_score: float | None = None
     rerank_score: float | None = None
     context_chunk_id: str | None = None
+    context_content: str | None = None
 
 
 class QuickAnswerResponse(BaseModel):

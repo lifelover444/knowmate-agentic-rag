@@ -1,5 +1,29 @@
 # Changelog
 
+## v0.3.1
+
+v0.3.1 是 v0.3 的质量补齐版本，不新增功能，修复审查中发现的疏漏。
+
+### Fixed
+
+- 清理遗留 `QuickAnswerEngine` 类，消除 v0.2 双路径，`AnswerSource` / `AnswerResult` 保留在原模块以维持现有 import 兼容。
+- 修复 `FakeVectorStore.search()` 缺少 `score_threshold` 参数导致测试走 TypeError 降级路径。
+- 统一 keyword/vector hit 的 title 来源。
+- `SourceRead` 新增可选 `context_content` 字段，便于前端调试展示 parent context。
+
+### Added
+
+- 补充 `tokenize_query` 单元测试（纯中文/纯英文/中英混合/短 term 过滤/空 query）。
+- 补充软删除文档后的检索排除集成测试（keyword_only + hybrid）。
+
+### Verification
+
+最近一次本地验证：
+
+- `python -m pytest -q`：`51 passed`
+- `ruff check .`：通过
+- `python -m compileall app tests`：通过
+
 ## v0.3
 
 v0.3 对齐 Tencent/WeKnora 的检索增强方向，在 v0.2 Quick Q&A 主链路基础上补齐 keyword/sparse search、RRF hybrid retrieval、可选 rerank、parent-child retrieval expansion 和 Knowledge Search 调试入口。

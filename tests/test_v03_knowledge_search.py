@@ -57,6 +57,7 @@ def test_knowledge_search_supports_keyword_only_and_returns_method_scores(client
     assert response.status_code == 200, response.text
     hits = response.json()["hits"]
     assert [hit["chunk_id"] for hit in hits] == ["chunk-keyword"]
+    assert hits[0]["title"] == "检索文档"
     assert hits[0]["retrieval_method"] == "keyword"
     assert hits[0]["keyword_score"] > 0
 
@@ -95,3 +96,47 @@ def test_knowledge_search_requires_rerank_model_when_enabled(client):
 
     assert response.status_code == 400
     assert "Rerank" in response.text or "重排" in response.text
+
+
+def test_soft_deleted_document_chunks_are_excluded_from_keyword_and_hybrid_search(
+    client,
+    db_session,
+    fake_vector_store,
+):
+    kb_id = create_kb(client)
+    add_completed_document(db_session, kb_id, document_id="doc-deleted")
+    fake_vector_store.results = [
+        {
+            "chunk_id": "chunk-keyword",
+            "knowledge_id": "doc-deleted",
+            "knowledge_base_id": kb_id,
+            "content": "知友支持混合检索和来源展示",
+            "title": "检索文档",
+            "score": 0.88,
+        }
+    ]
+
+    before_delete = client.post(
+        "/api/v1/knowledge-search",
+        json={"knowledge_base_id": kb_id, "query": "混合检索", "mode": "keyword_only", "top_k": 5},
+    )
+    assert before_delete.status_code == 200, before_delete.text
+    assert [hit["chunk_id"] for hit in before_delete.json()["hits"]] == ["chunk-keyword"]
+
+    delete_response = client.delete("/api/v1/documents/doc-deleted")
+    assert delete_response.status_code == 204
+    db_session.expire_all()
+
+    keyword_response = client.post(
+        "/api/v1/knowledge-search",
+        json={"knowledge_base_id": kb_id, "query": "混合检索", "mode": "keyword_only", "top_k": 5},
+    )
+    assert keyword_response.status_code == 200, keyword_response.text
+    assert keyword_response.json()["hits"] == []
+
+    hybrid_response = client.post(
+        "/api/v1/knowledge-search",
+        json={"knowledge_base_id": kb_id, "query": "混合检索", "mode": "hybrid", "top_k": 5},
+    )
+    assert hybrid_response.status_code == 200, hybrid_response.text
+    assert hybrid_response.json()["hits"] == []

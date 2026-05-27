@@ -124,6 +124,10 @@ class ChunkRepository:
 
 
 def _keyword_row(chunk: Chunk, score: float) -> dict:
+    metadata = chunk.chunk_metadata or {}
+    title = metadata.get("title")
+    if title is None:
+        title = getattr(getattr(chunk, "knowledge", None), "title", None)
     return {
         "chunk_id": chunk.id,
         "knowledge_id": chunk.knowledge_id,
@@ -132,7 +136,7 @@ def _keyword_row(chunk: Chunk, score: float) -> dict:
         "context_header": chunk.context_header,
         "parent_chunk_id": chunk.parent_chunk_id,
         "chunk_type": chunk.chunk_type,
-        "metadata": chunk.chunk_metadata or {},
-        "title": (chunk.chunk_metadata or {}).get("title"),
+        "metadata": metadata,
+        "title": title,
         "score": score,
     }

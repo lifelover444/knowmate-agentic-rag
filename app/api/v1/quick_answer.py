@@ -58,6 +58,7 @@ def quick_answer(
                 rrf_score=source.rrf_score,
                 rerank_score=source.rerank_score,
                 context_chunk_id=source.context_chunk_id,
+                context_content=source.context_content,
             )
             for source in result.sources
         ],

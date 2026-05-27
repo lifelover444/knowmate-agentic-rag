@@ -63,12 +63,22 @@ class FakeVectorStore:
         self.points = [item for item in self.points if item["payload"]["knowledge_id"] != knowledge_id]
         self.results = [item for item in self.results if item["knowledge_id"] != knowledge_id]
 
-    def search(self, *, knowledge_base_id: str, query_vector: list[float], limit: int) -> list[dict]:
-        return [
+    def search(
+        self,
+        *,
+        knowledge_base_id: str,
+        query_vector: list[float],
+        limit: int,
+        score_threshold: float | None = None,
+    ) -> list[dict]:
+        results = [
             item
             for item in self.results
             if item["knowledge_base_id"] == knowledge_base_id
-        ][:limit]
+        ]
+        if score_threshold is not None:
+            results = [item for item in results if float(item.get("score") or 0) >= score_threshold]
+        return results[:limit]
 
 
 @pytest.fixture

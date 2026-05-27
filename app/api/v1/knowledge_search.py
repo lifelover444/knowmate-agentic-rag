@@ -58,4 +58,5 @@ def _to_source(hit) -> SourceRead:
         rrf_score=hit.rrf_score,
         rerank_score=hit.rerank_score,
         context_chunk_id=hit.context_chunk_id,
+        context_content=hit.context_content,
     )

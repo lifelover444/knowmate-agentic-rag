@@ -4,7 +4,9 @@ from app.rag.retriever import (
     RerankPipeline,
     RetrievalHit,
     clean_rerank_passage,
+    tokenize_query,
 )
+from app.schemas.quick_answer import SourceRead
 
 
 class FakeKeywordRetriever:
@@ -118,3 +120,66 @@ def test_parent_child_expander_uses_parent_context_but_keeps_matched_child_ident
     assert result[0].context_content == "父块上下文"
     assert result[0].context_header == "## 父标题"
     assert result[0].context_chunk_id == "parent-1"
+
+    serialized = SourceRead(
+        document_id=result[0].document_id,
+        knowledge_base_id=result[0].knowledge_base_id,
+        chunk_id=result[0].chunk_id,
+        content=result[0].content,
+        score=result[0].score,
+        context_content=result[0].context_content,
+    ).model_dump()
+    assert serialized["context_content"] == "父块上下文"
+
+
+def test_tokenize_query_handles_chinese_terms_and_cjk_characters():
+    terms = tokenize_query("知识库检索")
+
+    assert "知" in terms
+    assert "识" in terms
+    assert "检" in terms
+    assert "索" in terms
+    assert any(term in terms for term in ("知识库", "知识", "检索"))
+
+
+def test_tokenize_query_handles_english_terms():
+    terms = tokenize_query("knowledge base retrieval")
+
+    assert "knowledge" in terms
+    assert "base" in terms
+    assert "retrieval" in terms
+
+
+def test_tokenize_query_handles_mixed_english_and_chinese_terms():
+    terms = tokenize_query("RAG检索策略")
+
+    assert "rag" in terms
+    assert "检" in terms
+    assert "索" in terms
+    assert "策" in terms
+    assert "略" in terms
+
+
+def test_tokenize_query_filters_short_non_cjk_terms_but_keeps_single_cjk():
+    assert "a" not in tokenize_query("a")
+    assert tokenize_query("知") == ["知"]
+
+
+def test_tokenize_query_returns_empty_list_for_empty_query():
+    assert tokenize_query("") == []
+
+
+def test_fake_vector_store_applies_score_threshold(fake_vector_store):
+    fake_vector_store.results = [
+        {"chunk_id": "low", "knowledge_base_id": "kb-1", "score": 0.2},
+        {"chunk_id": "high", "knowledge_base_id": "kb-1", "score": 0.8},
+    ]
+
+    hits = fake_vector_store.search(
+        knowledge_base_id="kb-1",
+        query_vector=[0.0, 0.0, 0.0],
+        limit=10,
+        score_threshold=0.5,
+    )
+
+    assert [hit["chunk_id"] for hit in hits] == ["high"]
