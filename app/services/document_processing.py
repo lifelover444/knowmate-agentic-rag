@@ -55,12 +55,17 @@ class DocumentProcessingService:
                     chunk.pre_chunk_id = db_chunks[idx - 1].id
                 if idx < len(db_chunks) - 1:
                     chunk.next_chunk_id = db_chunks[idx + 1].id
+            if hasattr(self.vector_store, "delete_by_knowledge_id"):
+                self.vector_store.delete_by_knowledge_id(document.id)
             self.chunks.replace_for_document(document.id, db_chunks)
 
             contents = [_embedding_content(chunk) for chunk in embedding_chunks]
             embedder = self.embedder
             if embedder is None:
-                runtime_config = ModelConfigService(self.db, self.settings).build_runtime_config()
+                runtime_config = ModelConfigService(self.db, self.settings).build_runtime_config_for_model(
+                    kb.embedding_model_id,
+                    "Embedding",
+                )
                 embedder = OpenAIEmbedder(runtime_config)
             vectors = embedder.embed_many(contents)
             payloads = [
@@ -84,6 +89,7 @@ class DocumentProcessingService:
 
             document.parse_status = "completed"
             document.error_message = None
+            document.embedding_model_id = kb.embedding_model_id
             document.processed_at = datetime.now(UTC)
             self.documents.save(document)
         except Exception as exc:
@@ -139,19 +145,22 @@ def _build_db_chunks(document, text: str, chunking: dict) -> tuple[list[Chunk], 
 
 
 def _to_db_chunk(document, item: ParsedChunk, index: int, chunk_type: str) -> Chunk:
+    metadata = {**(item.metadata or {}), "title": document.title}
+    search_text = _search_text(document.title, item.context_header, item.content)
     return Chunk(
         id=str(uuid.uuid4()),
         tenant_id=document.tenant_id,
         knowledge_base_id=document.knowledge_base_id,
         knowledge_id=document.id,
         content=item.content,
+        search_text=search_text,
         chunk_index=index,
         is_enabled=True,
         start_at=item.start,
         end_at=item.end,
         chunk_type=chunk_type,
         context_header=item.context_header or None,
-        chunk_metadata=item.metadata or {},
+        chunk_metadata=metadata,
         images=item.images or [],
     )
 
@@ -159,3 +168,7 @@ def _to_db_chunk(document, item: ParsedChunk, index: int, chunk_type: str) -> Ch
 def _embedding_content(chunk: Chunk) -> str:
     content = chunk.content.strip()
     return f"{chunk.context_header}\n\n{content}" if chunk.context_header else content
+
+
+def _search_text(title: str | None, context_header: str | None, content: str) -> str:
+    return "\n".join(item for item in (title, context_header, content) if item).strip()

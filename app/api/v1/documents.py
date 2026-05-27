@@ -1,6 +1,6 @@
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile, status
 from sqlalchemy.orm import Session
 
 from app.api.v1.deps import get_db, get_embedder, get_settings
@@ -10,6 +10,7 @@ from app.db.repositories.document import DocumentRepository
 from app.db.repositories.knowledge_base import KnowledgeBaseRepository
 from app.schemas.document import ChunkRead, DocumentRead
 from app.services.document import DocumentService
+from app.services.document_processing import DocumentProcessingService
 from app.services.model_config import MODEL_CONFIG_REQUIRED_MESSAGE, ModelConfigService
 from app.workers import tasks
 
@@ -29,11 +30,44 @@ def get_document(document_id: str, db: DBSession):
     return document
 
 
+@router.delete("/{document_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_document(document_id: str, db: DBSession, settings: AppSettings, request: Request):
+    repo = DocumentRepository(db)
+    document = repo.get(document_id)
+    if document is None:
+        raise HTTPException(status_code=404, detail="document not found")
+    DocumentService(
+        repo,
+        KnowledgeBaseRepository(db),
+        settings,
+        settings.upload_dir,
+    ).soft_delete(document, vector_store=request.app.state.vector_store)
+    return None
+
+
 @router.get("/{document_id}/chunks", response_model=list[ChunkRead])
 def list_document_chunks(document_id: str, db: DBSession):
     if DocumentRepository(db).get(document_id) is None:
         raise HTTPException(status_code=404, detail="document not found")
     return ChunkRepository(db).list_by_document(document_id)
+
+
+@router.post("/{document_id}/reprocess", response_model=DocumentRead, status_code=status.HTTP_202_ACCEPTED)
+def reprocess_document(document_id: str, db: DBSession, settings: AppSettings, request: Request):
+    document = DocumentRepository(db).get(document_id)
+    if document is None:
+        raise HTTPException(status_code=404, detail="document not found")
+    try:
+        DocumentProcessingService(
+            db=db,
+            upload_dir=settings.upload_dir,
+            settings=settings,
+            embedder=request.app.state.embedder,
+            vector_store=request.app.state.vector_store,
+        ).process(document_id)
+    except (RuntimeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return DocumentRepository(db).get(document_id)
 
 
 def create_document_from_file(
@@ -43,8 +77,14 @@ def create_document_from_file(
     settings: AppSettings,
     embedder: EmbedderDep,
 ):
-    if embedder is None and ModelConfigService(db, settings).get_active() is None:
-        raise HTTPException(status_code=400, detail=MODEL_CONFIG_REQUIRED_MESSAGE)
+    kb = KnowledgeBaseRepository(db).get(kb_id, settings.default_tenant_id)
+    if kb is None:
+        raise HTTPException(status_code=404, detail="knowledge base not found")
+    if embedder is None:
+        try:
+            ModelConfigService(db, settings).get_model(kb.embedding_model_id, "Embedding")
+        except (LookupError, RuntimeError):
+            raise HTTPException(status_code=400, detail=MODEL_CONFIG_REQUIRED_MESSAGE) from None
     document = DocumentService(
         DocumentRepository(db),
         KnowledgeBaseRepository(db),

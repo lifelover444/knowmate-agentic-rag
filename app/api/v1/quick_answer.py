@@ -31,6 +31,8 @@ def quick_answer(
             knowledge_base_id=payload.knowledge_base_id,
             query=payload.query,
             top_k=payload.top_k,
+            mode=payload.mode,
+            enable_rerank=payload.enable_rerank,
         )
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -50,6 +52,12 @@ def quick_answer(
                 parent_chunk_id=source.parent_chunk_id,
                 chunk_type=source.chunk_type,
                 metadata=source.metadata,
+                retrieval_method=source.retrieval_method,
+                vector_score=source.vector_score,
+                keyword_score=source.keyword_score,
+                rrf_score=source.rrf_score,
+                rerank_score=source.rerank_score,
+                context_chunk_id=source.context_chunk_id,
             )
             for source in result.sources
         ],

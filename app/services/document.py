@@ -54,3 +54,9 @@ class DocumentService:
             doc_metadata={},
         )
         return self.document_repo.create(document)
+
+    def soft_delete(self, document: Knowledge, vector_store=None) -> Knowledge:
+        deleted = self.document_repo.soft_delete(document)
+        if vector_store is not None and hasattr(vector_store, "delete_by_knowledge_id"):
+            vector_store.delete_by_knowledge_id(document.id)
+        return deleted

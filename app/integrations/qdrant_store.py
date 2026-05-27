@@ -50,7 +50,32 @@ class QdrantVectorStore:
         ]
         self.client.upsert(collection_name=self.collection_name(dimension), points=points)
 
-    def search(self, *, knowledge_base_id: str, query_vector: list[float], limit: int) -> list[dict]:
+    def delete_by_knowledge_id(self, knowledge_id: str) -> None:
+        for collection in self.client.get_collections().collections:
+            if not collection.name.startswith(f"{self.base_collection}_"):
+                continue
+            self.client.delete(
+                collection_name=collection.name,
+                points_selector=models.FilterSelector(
+                    filter=models.Filter(
+                        must=[
+                            models.FieldCondition(
+                                key="knowledge_id",
+                                match=models.MatchValue(value=knowledge_id),
+                            )
+                        ]
+                    )
+                ),
+            )
+
+    def search(
+        self,
+        *,
+        knowledge_base_id: str,
+        query_vector: list[float],
+        limit: int,
+        score_threshold: float | None = None,
+    ) -> list[dict]:
         dimension = len(query_vector)
         collection = self.collection_name(dimension)
         collections = {item.name for item in self.client.get_collections().collections}
@@ -72,6 +97,7 @@ class QdrantVectorStore:
                 limit=limit,
                 query_filter=query_filter,
                 with_payload=True,
+                score_threshold=score_threshold,
             )
         else:
             results = self.client.query_points(
@@ -80,6 +106,7 @@ class QdrantVectorStore:
                 limit=limit,
                 query_filter=query_filter,
                 with_payload=True,
+                score_threshold=score_threshold,
             ).points
         return [
             {

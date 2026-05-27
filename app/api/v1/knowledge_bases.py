@@ -1,12 +1,15 @@
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.orm import Session
 
 from app.api.v1.deps import get_db, get_settings
 from app.core.config import Settings
+from app.db.repositories.document import DocumentRepository
 from app.db.repositories.knowledge_base import KnowledgeBaseRepository
-from app.schemas.knowledge_base import KnowledgeBaseCreate, KnowledgeBaseRead
+from app.schemas.document import DocumentRead
+from app.schemas.knowledge_base import KnowledgeBaseCreate, KnowledgeBaseRead, KnowledgeBaseUpdate
+from app.services.document_processing import DocumentProcessingService
 from app.services.knowledge_base import KnowledgeBaseService, normalize_chunking_config
 
 router = APIRouter()
@@ -35,8 +38,20 @@ def create_knowledge_base(
     settings: AppSettings,
 ):
     repo = KnowledgeBaseRepository(db)
-    kb = KnowledgeBaseService(repo, settings).create(payload)
+    try:
+        kb = KnowledgeBaseService(repo, settings).create(payload)
+    except (RuntimeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     return to_read(kb, repo, settings)
+
+
+@router.get("", response_model=list[KnowledgeBaseRead])
+def list_knowledge_bases(
+    db: DBSession,
+    settings: AppSettings,
+):
+    repo = KnowledgeBaseRepository(db)
+    return [to_read(kb, repo, settings) for kb in repo.list(settings.default_tenant_id)]
 
 
 @router.get("/{kb_id}", response_model=KnowledgeBaseRead)
@@ -50,3 +65,58 @@ def get_knowledge_base(
     if kb is None:
         raise HTTPException(status_code=404, detail="knowledge base not found")
     return to_read(kb, repo, settings)
+
+
+@router.put("/{kb_id}", response_model=KnowledgeBaseRead)
+def update_knowledge_base(
+    kb_id: str,
+    payload: KnowledgeBaseUpdate,
+    db: DBSession,
+    settings: AppSettings,
+):
+    repo = KnowledgeBaseRepository(db)
+    kb = repo.get(kb_id, settings.default_tenant_id)
+    if kb is None:
+        raise HTTPException(status_code=404, detail="knowledge base not found")
+    try:
+        updated = KnowledgeBaseService(repo, settings).update(kb, payload)
+    except (RuntimeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return to_read(updated, repo, settings)
+
+
+@router.delete("/{kb_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_knowledge_base(kb_id: str, db: DBSession, settings: AppSettings, request: Request):
+    repo = KnowledgeBaseRepository(db)
+    kb = repo.get(kb_id, settings.default_tenant_id)
+    if kb is None:
+        raise HTTPException(status_code=404, detail="knowledge base not found")
+    KnowledgeBaseService(repo, settings).soft_delete(kb, vector_store=request.app.state.vector_store)
+    return None
+
+
+@router.get("/{kb_id}/documents", response_model=list[DocumentRead])
+def list_knowledge_base_documents(kb_id: str, db: DBSession, settings: AppSettings):
+    repo = KnowledgeBaseRepository(db)
+    if repo.get(kb_id, settings.default_tenant_id) is None:
+        raise HTTPException(status_code=404, detail="knowledge base not found")
+    return DocumentRepository(db).list_by_knowledge_base(kb_id)
+
+
+@router.post("/{kb_id}/reprocess", status_code=status.HTTP_202_ACCEPTED)
+def reprocess_knowledge_base(kb_id: str, db: DBSession, settings: AppSettings, request: Request):
+    repo = KnowledgeBaseRepository(db)
+    kb = repo.get(kb_id, settings.default_tenant_id)
+    if kb is None:
+        raise HTTPException(status_code=404, detail="knowledge base not found")
+    documents = DocumentRepository(db).list_by_knowledge_base(kb_id)
+    processor = DocumentProcessingService(
+        db=db,
+        upload_dir=settings.upload_dir,
+        settings=settings,
+        embedder=request.app.state.embedder,
+        vector_store=request.app.state.vector_store,
+    )
+    for document in documents:
+        processor.process(document.id)
+    return {"queued": len(documents)}

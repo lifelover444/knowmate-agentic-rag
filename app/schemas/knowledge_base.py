@@ -23,6 +23,17 @@ class ParserEngineRuleSchema(BaseModel):
 class KnowledgeBaseCreate(BaseModel):
     name: str = Field(min_length=1, max_length=255)
     description: str | None = None
+    embedding_model_id: str | None = Field(default=None, max_length=128)
+    summary_model_id: str | None = Field(default=None, max_length=128)
+    chunking_config: ChunkingConfigSchema | None = None
+    parser_engine_rules: list[ParserEngineRuleSchema] | None = None
+
+
+class KnowledgeBaseUpdate(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=255)
+    description: str | None = None
+    embedding_model_id: str | None = Field(default=None, max_length=128)
+    summary_model_id: str | None = Field(default=None, max_length=128)
     chunking_config: ChunkingConfigSchema | None = None
     parser_engine_rules: list[ParserEngineRuleSchema] | None = None
 

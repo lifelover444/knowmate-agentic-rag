@@ -1,5 +1,7 @@
 from pathlib import Path
 
+from conftest import create_bound_models
+
 from app.db.models import Chunk, KnowledgeBase
 from app.services.document_processing import DocumentProcessingService
 
@@ -25,11 +27,14 @@ def test_document_processing_uses_context_headers_and_parent_child_payloads(
 
     monkeypatch.setattr("app.workers.tasks.enqueue_document_processing", run_processing_now)
     holder["app"] = client.app
+    chat_id, embedding_id = create_bound_models(client)
 
     create_response = client.post(
         "/api/v1/knowledge-bases",
         json={
             "name": "Chunk Context KB",
+            "summary_model_id": chat_id,
+            "embedding_model_id": embedding_id,
             "chunking_config": {
                 "strategy": "heading",
                 "chunk_size": 180,

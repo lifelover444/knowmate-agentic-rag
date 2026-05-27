@@ -225,6 +225,25 @@ h3 {
   gap: 12px;
 }
 
+.model-split {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.model-subpanel {
+  display: grid;
+  gap: 12px;
+  border: 1px solid #e1e5dd;
+  border-radius: 8px;
+  padding: 14px;
+  background: #f8faf6;
+}
+
+.model-grid.compact {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
 .model-grid label:nth-child(4),
 .model-grid label:nth-child(5) {
   grid-column: span 2;
@@ -303,6 +322,45 @@ h3 {
 .model-result.ok {
   border-color: #174b38;
   color: #174b38;
+}
+
+.model-list,
+.retrieval-config {
+  display: grid;
+  gap: 10px;
+}
+
+.model-list {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.model-list article {
+  display: grid;
+  gap: 4px;
+  border: 1px solid #e1e5dd;
+  border-radius: 7px;
+  padding: 10px;
+  background: #f8faf6;
+}
+
+.model-list span,
+.model-list small {
+  overflow: hidden;
+  color: #526052;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.retrieval-config {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  align-items: end;
+  border-top: 1px solid #e1e5dd;
+  padding-top: 12px;
+}
+
+.inline-error {
+  color: #8a241b;
 }
 
 .panel {
@@ -529,6 +587,15 @@ h3 {
   .model-grid,
   .ingest-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .model-split {
+    grid-template-columns: 1fr;
+  }
+
+  .model-list,
+  .retrieval-config {
+    grid-template-columns: 1fr;
   }
 
   .panel,

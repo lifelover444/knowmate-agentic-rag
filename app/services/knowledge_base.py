@@ -1,7 +1,9 @@
 from app.core.config import Settings
 from app.db.models import KnowledgeBase
+from app.db.repositories.document import DocumentRepository
 from app.db.repositories.knowledge_base import KnowledgeBaseRepository
-from app.schemas.knowledge_base import KnowledgeBaseCreate
+from app.schemas.knowledge_base import KnowledgeBaseCreate, KnowledgeBaseUpdate
+from app.services.model_config import MODEL_CONFIG_REQUIRED_MESSAGE, ModelConfigService
 
 
 def default_chunking_config(settings: Settings) -> dict:
@@ -41,6 +43,13 @@ class KnowledgeBaseService:
         self.settings = settings
 
     def create(self, payload: KnowledgeBaseCreate) -> KnowledgeBase:
+        model_service = ModelConfigService(self.repo.db, self.settings)
+        embedding_model_id = payload.embedding_model_id
+        summary_model_id = payload.summary_model_id
+        if not embedding_model_id or not summary_model_id:
+            raise ValueError(MODEL_CONFIG_REQUIRED_MESSAGE)
+        model_service.get_model(embedding_model_id, "Embedding")
+        model_service.get_model(summary_model_id, "KnowledgeQA")
         chunking = payload.chunking_config or {}
         if hasattr(chunking, "model_dump"):
             chunking = chunking.model_dump()
@@ -59,7 +68,37 @@ class KnowledgeBaseService:
                 description=payload.description,
                 chunking_config=chunking,
                 parser_engine_rules=parser_engine_rules,
-                embedding_model_id=self.settings.embedding_model,
-                summary_model_id=self.settings.chat_model,
+                embedding_model_id=embedding_model_id,
+                summary_model_id=summary_model_id,
             )
         )
+
+    def update(self, kb: KnowledgeBase, payload: KnowledgeBaseUpdate) -> KnowledgeBase:
+        model_service = ModelConfigService(self.repo.db, self.settings)
+        data = payload.model_dump(exclude_unset=True)
+
+        if "embedding_model_id" in data and data["embedding_model_id"]:
+            model_service.get_model(data["embedding_model_id"], "Embedding")
+            kb.embedding_model_id = data["embedding_model_id"]
+        if "summary_model_id" in data and data["summary_model_id"]:
+            model_service.get_model(data["summary_model_id"], "KnowledgeQA")
+            kb.summary_model_id = data["summary_model_id"]
+        if "name" in data and data["name"] is not None:
+            kb.name = data["name"]
+        if "description" in data:
+            kb.description = data["description"]
+        if "chunking_config" in data and data["chunking_config"] is not None:
+            kb.chunking_config = normalize_chunking_config(data["chunking_config"], self.settings)
+        if "parser_engine_rules" in data and data["parser_engine_rules"] is not None:
+            kb.parser_engine_rules = [
+                item.model_dump() if hasattr(item, "model_dump") else item
+                for item in data["parser_engine_rules"]
+            ]
+        return self.repo.save(kb)
+
+    def soft_delete(self, kb: KnowledgeBase, vector_store=None) -> KnowledgeBase:
+        documents = DocumentRepository(self.repo.db).soft_delete_by_knowledge_base(kb.id)
+        if vector_store is not None and hasattr(vector_store, "delete_by_knowledge_id"):
+            for document in documents:
+                vector_store.delete_by_knowledge_id(document.id)
+        return self.repo.soft_delete(kb)

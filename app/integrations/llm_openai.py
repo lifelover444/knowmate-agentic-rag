@@ -90,9 +90,28 @@ class OpenAIChatModel:
 
 class OpenAICompatibleModelTester:
     def test(self, config: OpenAICompatibleConfig) -> dict:
+        chat_result = self.test_chat(config)
+        embedding_result = self.test_embedding(config)
+        messages = [
+            item
+            for item in (chat_result.get("message"), embedding_result.get("message"))
+            if item and item != "连接测试通过"
+        ]
+        chat_ok = bool(chat_result.get("chat_ok"))
+        embedding_ok = bool(embedding_result.get("embedding_ok"))
+        if chat_ok and embedding_ok:
+            message = "连接测试通过"
+        else:
+            message = "；".join(messages) or "连接测试失败"
+        return {
+            "chat_ok": chat_ok,
+            "embedding_ok": embedding_ok,
+            "detected_dimension": embedding_result.get("detected_dimension"),
+            "message": message,
+        }
+
+    def test_chat(self, config: OpenAICompatibleConfig) -> dict:
         chat_ok = False
-        embedding_ok = False
-        detected_dimension = None
         messages: list[str] = []
         try:
             answer = OpenAIChatModel(config).complete(
@@ -104,7 +123,17 @@ class OpenAICompatibleModelTester:
             chat_ok = bool(answer.strip())
         except Exception as exc:
             messages.append(f"对话模型测试失败: {exc}")
+        return {
+            "chat_ok": chat_ok,
+            "embedding_ok": True,
+            "detected_dimension": None,
+            "message": "连接测试通过" if chat_ok else "；".join(messages) or "连接测试失败",
+        }
 
+    def test_embedding(self, config: OpenAICompatibleConfig) -> dict:
+        embedding_ok = False
+        detected_dimension = None
+        messages: list[str] = []
         try:
             vector = OpenAIEmbedder(config).embed("知友模型连接测试")
             detected_dimension = len(vector)
@@ -113,14 +142,9 @@ class OpenAICompatibleModelTester:
                 messages.append(f"向量维度不匹配: 返回 {detected_dimension}, 配置 {config.embedding_dimension}")
         except Exception as exc:
             messages.append(f"向量模型测试失败: {exc}")
-
-        if chat_ok and embedding_ok:
-            message = "连接测试通过"
-        else:
-            message = "；".join(messages) or "连接测试失败"
         return {
-            "chat_ok": chat_ok,
+            "chat_ok": True,
             "embedding_ok": embedding_ok,
             "detected_dimension": detected_dimension,
-            "message": message,
+            "message": "连接测试通过" if embedding_ok else "；".join(messages) or "连接测试失败",
         }

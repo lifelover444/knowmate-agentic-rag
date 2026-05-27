@@ -2,6 +2,7 @@ from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
+from cryptography.fernet import Fernet
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
@@ -58,6 +59,10 @@ class FakeVectorStore:
             for payload in payloads
         ]
 
+    def delete_by_knowledge_id(self, knowledge_id: str) -> None:
+        self.points = [item for item in self.points if item["payload"]["knowledge_id"] != knowledge_id]
+        self.results = [item for item in self.results if item["knowledge_id"] != knowledge_id]
+
     def search(self, *, knowledge_base_id: str, query_vector: list[float], limit: int) -> list[dict]:
         return [
             item
@@ -107,6 +112,7 @@ def client(
             upload_dir=tmp_path,
             celery_broker_url="memory://",
             celery_result_backend="cache+memory://",
+            model_config_encryption_key=Fernet.generate_key().decode("ascii"),
         ),
         session_factory=lambda: db_session,
         embedder=fake_embedder,
@@ -115,3 +121,34 @@ def client(
     )
     with TestClient(app) as test_client:
         yield test_client
+
+
+def create_bound_models(client: TestClient) -> tuple[str, str]:
+    chat_response = client.post(
+        "/api/v1/models",
+        json={
+            "name": "Test Chat",
+            "type": "KnowledgeQA",
+            "provider": "qwen",
+            "source": "remote",
+            "base_url": "https://example.com/v1",
+            "api_key": "sk-test-1234",
+            "model_name": "qwen-plus",
+        },
+    )
+    assert chat_response.status_code == 201, chat_response.text
+    embedding_response = client.post(
+        "/api/v1/models",
+        json={
+            "name": "Test Embedding",
+            "type": "Embedding",
+            "provider": "qwen",
+            "source": "remote",
+            "base_url": "https://example.com/v1",
+            "api_key": "sk-test-1234",
+            "model_name": "text-embedding-v4",
+            "embedding_dimension": 3,
+        },
+    )
+    assert embedding_response.status_code == 201, embedding_response.text
+    return chat_response.json()["id"], embedding_response.json()["id"]

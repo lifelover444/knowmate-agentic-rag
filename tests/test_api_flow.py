@@ -1,5 +1,6 @@
 from pathlib import Path
 
+from conftest import create_bound_models
 from fastapi.testclient import TestClient
 
 from app.db.models import Chunk, Knowledge
@@ -41,9 +42,15 @@ def test_knowledge_upload_processing_and_quick_answer_flow(
     )
     holder["app"] = app
     local_client = TestClient(app)
+    chat_id, embedding_id = create_bound_models(local_client)
     create_response = local_client.post(
         "/api/v1/knowledge-bases",
-        json={"name": "Knowmate KB", "description": "Test knowledge base"},
+        json={
+            "name": "Knowmate KB",
+            "description": "Test knowledge base",
+            "summary_model_id": chat_id,
+            "embedding_model_id": embedding_id,
+        },
     )
     assert create_response.status_code == 201
     kb_id = create_response.json()["id"]

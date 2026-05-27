@@ -19,6 +19,7 @@ class Tenant(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     description: Mapped[str | None] = mapped_column(Text)
+    retrieval_config: Mapped[dict | None] = mapped_column(JSON)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
 
@@ -47,6 +48,8 @@ class ModelConfig(Base):
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     tenant_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    type: Mapped[str] = mapped_column(String(32), nullable=False, default="KnowledgeQA", index=True)
+    source: Mapped[str] = mapped_column(String(32), nullable=False, default="remote")
     provider: Mapped[str] = mapped_column(String(50), nullable=False)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     base_url: Mapped[str] = mapped_column(String(512), nullable=False)
@@ -56,6 +59,8 @@ class ModelConfig(Base):
     embedding_model: Mapped[str] = mapped_column(String(128), nullable=False)
     embedding_dimension: Mapped[int] = mapped_column(Integer, nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, index=True)
+    is_builtin: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="active", index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
 
@@ -98,6 +103,7 @@ class Chunk(Base):
     knowledge_base_id: Mapped[str] = mapped_column(ForeignKey("knowledge_bases.id"), nullable=False, index=True)
     knowledge_id: Mapped[str] = mapped_column(ForeignKey("knowledges.id"), nullable=False, index=True)
     content: Mapped[str] = mapped_column(Text, nullable=False)
+    search_text: Mapped[str | None] = mapped_column(Text)
     chunk_index: Mapped[int] = mapped_column(Integer, nullable=False)
     is_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     start_at: Mapped[int] = mapped_column(Integer, nullable=False)
