@@ -6,7 +6,16 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def test_frontend_formats_fastapi_validation_errors_without_object_object():
     script = """
-        import { formatApiError } from './frontend/src/apiErrors.js';
+        import { readFileSync } from 'node:fs';
+        import { Buffer } from 'node:buffer';
+        import ts from './frontend/node_modules/typescript/lib/typescript.js';
+
+        const source = readFileSync('./frontend/src/utils/api.ts', 'utf-8');
+        const output = ts.transpileModule(source, {
+          compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 },
+        }).outputText;
+        const moduleUrl = `data:text/javascript;base64,${Buffer.from(output).toString('base64')}`;
+        const { formatApiError } = await import(moduleUrl);
 
         const message = formatApiError({
           detail: [

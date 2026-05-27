@@ -12,11 +12,13 @@ export default defineConfig({
   server: {
     proxy: {
       "/api": apiProxy,
+      "/health": apiProxy,
     },
   },
   preview: {
     proxy: {
       "/api": apiProxy,
+      "/health": apiProxy,
     },
   },
 });

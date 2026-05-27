@@ -3,9 +3,17 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def frontend_source() -> str:
+    return "\n".join(
+        path.read_text(encoding="utf-8")
+        for path in (ROOT / "frontend" / "src").rglob("*")
+        if path.suffix in {".vue", ".ts", ".css"}
+    )
+
+
 def test_file_picker_uses_native_input_as_full_click_target():
-    app = (ROOT / "frontend" / "src" / "App.vue").read_text(encoding="utf-8")
-    css = (ROOT / "frontend" / "src" / "styles.css").read_text(encoding="utf-8")
+    app = frontend_source()
+    css = (ROOT / "frontend" / "src" / "styles" / "app.css").read_text(encoding="utf-8")
 
     assert 'ref="fileInput"' not in app
     assert "@click=\"openFilePicker\"" not in app

@@ -1,0 +1,104 @@
+const apiBase = "/api/v1";
+
+function stringifyUnknown(value: unknown): string {
+  if (value === null || value === undefined) return "";
+  if (typeof value === "string") return value;
+  if (typeof value === "number" || typeof value === "boolean") return String(value);
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return "请求失败，响应内容无法解析。";
+  }
+}
+
+function formatLocation(loc: unknown): string {
+  if (!Array.isArray(loc)) return "";
+  return loc.filter((part) => part !== "body").join(".");
+}
+
+function formatValidationError(item: unknown): string {
+  if (!item || typeof item !== "object") return stringifyUnknown(item);
+  const record = item as Record<string, unknown>;
+  const location = formatLocation(record.loc);
+  const message = stringifyUnknown(record.msg ?? record.message ?? record);
+  return location ? `${location}: ${message}` : message;
+}
+
+export function formatApiError(payload: unknown, fallback = "请求失败"): string {
+  if (!payload) return fallback;
+  if (typeof payload === "string") return payload;
+
+  if (typeof payload === "object") {
+    const record = payload as Record<string, unknown>;
+    const detail = record.detail ?? record.message ?? record.error;
+    if (Array.isArray(detail)) {
+      return detail.map(formatValidationError).filter(Boolean).join("；") || fallback;
+    }
+    if (detail && typeof detail === "object") return formatValidationError(detail);
+    if (typeof detail === "string") return detail;
+    const serialized = stringifyUnknown(payload);
+    return serialized && serialized !== "{}" ? serialized : fallback;
+  }
+
+  return stringifyUnknown(payload) || fallback;
+}
+
+export function parseResponsePayload(text: string): unknown {
+  if (!text) return null;
+  try {
+    return JSON.parse(text);
+  } catch {
+    return null;
+  }
+}
+
+async function request<T>(url: string, options: RequestInit = {}): Promise<T> {
+  const response = await fetch(url, options);
+  const text = await response.text();
+  const payload = parseResponsePayload(text);
+
+  if (!response.ok) {
+    throw new Error(formatApiError(payload, text || `HTTP ${response.status}`));
+  }
+
+  return payload as T;
+}
+
+function apiUrl(path: string): string {
+  return `${apiBase}${path}`;
+}
+
+export function getJson<T>(path: string): Promise<T> {
+  return request<T>(apiUrl(path));
+}
+
+export function getRootJson<T>(path: string): Promise<T> {
+  return request<T>(path);
+}
+
+export function postJson<T, P = unknown>(path: string, payload?: P): Promise<T> {
+  return request<T>(apiUrl(path), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload ?? {}),
+  });
+}
+
+export function putJson<T, P = unknown>(path: string, payload?: P): Promise<T> {
+  return request<T>(apiUrl(path), {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload ?? {}),
+  });
+}
+
+export function deleteRequest<T = unknown>(path: string): Promise<T> {
+  return request<T>(apiUrl(path), { method: "DELETE" });
+}
+
+export function postForm<T>(path: string, form: FormData): Promise<T> {
+  return request<T>(apiUrl(path), {
+    method: "POST",
+    body: form,
+  });
+}
