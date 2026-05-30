@@ -2,6 +2,7 @@ from app.core.config import Settings
 from app.db.models import KnowledgeBase
 from app.db.repositories.document import DocumentRepository
 from app.db.repositories.knowledge_base import KnowledgeBaseRepository
+from app.db.repositories.vector_store import VectorStoreRepository
 from app.schemas.knowledge_base import KnowledgeBaseCreate, KnowledgeBaseUpdate
 from app.services.model_config import MODEL_CONFIG_REQUIRED_MESSAGE, ModelConfigService
 
@@ -37,6 +38,33 @@ def default_parser_engine_rules() -> list[dict]:
     ]
 
 
+def default_indexing_strategy() -> dict:
+    return {
+        "enable_vector": True,
+        "enable_keyword": True,
+        "enable_parent_child": False,
+        "enable_rerank": False,
+        "enable_wiki": False,
+        "enable_knowledge_graph": False,
+    }
+
+
+def normalize_indexing_strategy(strategy: dict | None) -> dict:
+    normalized = default_indexing_strategy()
+    if strategy:
+        normalized.update({key: bool(value) for key, value in strategy.items() if key in normalized})
+    normalized["enable_wiki"] = False
+    normalized["enable_knowledge_graph"] = False
+    return normalized
+
+
+def normalize_kb_type(value: str | None) -> str:
+    kb_type = (value or "document").strip().lower()
+    if kb_type not in {"document", "faq"}:
+        raise ValueError("知识库类型仅支持 document 或 faq")
+    return kb_type
+
+
 class KnowledgeBaseService:
     def __init__(self, repo: KnowledgeBaseRepository, settings: Settings) -> None:
         self.repo = repo
@@ -50,10 +78,18 @@ class KnowledgeBaseService:
             raise ValueError(MODEL_CONFIG_REQUIRED_MESSAGE)
         model_service.get_model(embedding_model_id, "Embedding")
         model_service.get_model(summary_model_id, "KnowledgeQA")
+        vector_store_id = payload.vector_store_id
+        if vector_store_id:
+            vector_store = VectorStoreRepository(self.repo.db).get(vector_store_id, self.settings.default_tenant_id)
+            if vector_store is None or vector_store.status != "active":
+                raise ValueError("VectorStore 不存在或不可用")
         chunking = payload.chunking_config or {}
         if hasattr(chunking, "model_dump"):
             chunking = chunking.model_dump()
         chunking = normalize_chunking_config(chunking, self.settings)
+        indexing_strategy = payload.indexing_strategy or {}
+        if hasattr(indexing_strategy, "model_dump"):
+            indexing_strategy = indexing_strategy.model_dump()
         parser_engine_rules = payload.parser_engine_rules or default_parser_engine_rules()
         if hasattr(parser_engine_rules, "model_dump"):
             parser_engine_rules = parser_engine_rules.model_dump()
@@ -66,8 +102,11 @@ class KnowledgeBaseService:
                 tenant_id=self.settings.default_tenant_id,
                 name=payload.name,
                 description=payload.description,
+                kb_type=normalize_kb_type(payload.kb_type),
                 chunking_config=chunking,
                 parser_engine_rules=parser_engine_rules,
+                indexing_strategy=normalize_indexing_strategy(indexing_strategy),
+                vector_store_id=vector_store_id,
                 embedding_model_id=embedding_model_id,
                 summary_model_id=summary_model_id,
             )
@@ -87,6 +126,8 @@ class KnowledgeBaseService:
             kb.name = data["name"]
         if "description" in data:
             kb.description = data["description"]
+        if "kb_type" in data and data["kb_type"] is not None:
+            kb.kb_type = normalize_kb_type(data["kb_type"])
         if "chunking_config" in data and data["chunking_config"] is not None:
             kb.chunking_config = normalize_chunking_config(data["chunking_config"], self.settings)
         if "parser_engine_rules" in data and data["parser_engine_rules"] is not None:
@@ -94,6 +135,15 @@ class KnowledgeBaseService:
                 item.model_dump() if hasattr(item, "model_dump") else item
                 for item in data["parser_engine_rules"]
             ]
+        if "indexing_strategy" in data and data["indexing_strategy"] is not None:
+            kb.indexing_strategy = normalize_indexing_strategy(data["indexing_strategy"])
+        if "vector_store_id" in data:
+            vector_store_id = data["vector_store_id"]
+            if vector_store_id:
+                vector_store = VectorStoreRepository(self.repo.db).get(vector_store_id, self.settings.default_tenant_id)
+                if vector_store is None or vector_store.status != "active":
+                    raise ValueError("VectorStore 不存在或不可用")
+            kb.vector_store_id = vector_store_id
         return self.repo.save(kb)
 
     def soft_delete(self, kb: KnowledgeBase, vector_store=None) -> KnowledgeBase:

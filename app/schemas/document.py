@@ -8,6 +8,7 @@ class DocumentRead(BaseModel):
     tenant_id: int
     knowledge_base_id: str
     type: str
+    source_type: str = "file"
     title: str
     source: str
     parse_status: str
@@ -16,12 +17,35 @@ class DocumentRead(BaseModel):
     file_type: str | None
     file_size: int
     storage_size: int
+    embedding_model_id: str | None = None
+    chunk_count: int = 0
+    task_status: str | None = None
     processed_at: datetime | None
     error_message: str | None
     created_at: datetime
     updated_at: datetime
 
     model_config = {"from_attributes": True}
+
+
+class ManualTextImportRequest(BaseModel):
+    title: str = Field(min_length=1, max_length=255)
+    content: str = Field(min_length=1)
+    format: str = "text"
+
+
+class URLImportRequest(BaseModel):
+    url: str = Field(min_length=1, max_length=2048)
+
+
+class BatchDocumentRequest(BaseModel):
+    document_ids: list[str] = Field(min_length=1)
+
+
+class BatchDocumentResponse(BaseModel):
+    deleted: int = 0
+    queued: int = 0
+    task_ids: list[str] = Field(default_factory=list)
 
 
 class ChunkRead(BaseModel):

@@ -16,6 +16,7 @@ from app.rag.retriever import (
     VectorRetriever,
 )
 from app.schemas.retrieval import RETRIEVAL_MODES, RetrievalConfigSchema
+from app.services.knowledge_base import normalize_indexing_strategy
 from app.services.model_config import ModelConfigService
 from app.services.retrieval_config import RetrievalConfigService
 
@@ -47,12 +48,16 @@ class KnowledgeSearchService:
         resolved_mode = mode or config.retrieval_mode
         if resolved_mode not in RETRIEVAL_MODES:
             raise ValueError("不支持的检索模式")
+        strategy = normalize_indexing_strategy(kb.indexing_strategy)
+        _validate_mode_allowed(resolved_mode, strategy)
         limit = top_k or config.rerank_top_k
         retriever = self._build_retriever(kb.embedding_model_id, config, resolved_mode)
         hits = retriever.search(query, knowledge_base_id=knowledge_base_id, limit=config.embedding_top_k)
         hits = ParentChildExpander(ChunkRepository(self.db)).expand(hits)
         should_rerank = enable_rerank if enable_rerank is not None else config.enable_rerank
         if should_rerank:
+            if not strategy["enable_rerank"]:
+                raise ValueError("当前知识库未启用重排")
             hits = self._rerank(query, hits, config)
         return _deduplicate_hits(hits)[:limit]
 
@@ -110,6 +115,15 @@ def _deduplicate_hits(hits: list[RetrievalHit]) -> list[RetrievalHit]:
                 rrf_score=existing.rrf_score or hit.rrf_score,
             )
     return sorted(by_chunk.values(), key=lambda item: float(item.score or 0), reverse=True)
+
+
+def _validate_mode_allowed(mode: str, strategy: dict) -> None:
+    if mode == "vector_only" and not strategy["enable_vector"]:
+        raise ValueError("当前知识库未启用向量检索")
+    if mode == "keyword_only" and not strategy["enable_keyword"]:
+        raise ValueError("当前知识库未启用关键词检索")
+    if mode == "hybrid" and not (strategy["enable_vector"] and strategy["enable_keyword"]):
+        raise ValueError("混合检索需要同时启用向量检索和关键词检索")
 
 
 class _ThresholdRetriever:

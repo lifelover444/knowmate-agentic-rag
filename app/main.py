@@ -6,13 +6,14 @@ from fastapi.responses import FileResponse, HTMLResponse, Response
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy.orm import Session
 
-from app.api.v1.documents import create_document_from_file
+from app.api.v1.documents import create_document_from_file, create_document_from_text, create_document_from_url
 from app.api.v1.router import api_router
 from app.core.config import Settings, get_settings
 from app.core.logging import configure_logging
 from app.db.session import make_session_factory
 from app.integrations.llm_openai import OpenAICompatibleModelTester
-from app.integrations.qdrant_store import QdrantVectorStore
+from app.integrations.vector_store import VectorStoreRegistry
+from app.schemas.document import DocumentRead
 
 
 def create_app(
@@ -33,7 +34,8 @@ def create_app(
     app.state.session_factory = session_factory or make_session_factory(resolved_settings)
     app.state.embedder = embedder
     app.state.chat_model = chat_model
-    app.state.vector_store = vector_store or QdrantVectorStore(resolved_settings)
+    app.state.vector_store_registry = VectorStoreRegistry(resolved_settings)
+    app.state.vector_store = vector_store or app.state.vector_store_registry.build("qdrant")
     app.state.model_tester = model_tester or OpenAICompatibleModelTester()
 
     @app.get("/health")
@@ -50,6 +52,23 @@ def create_app(
         create_document_from_file,
         methods=["POST"],
         status_code=201,
+        response_model=DocumentRead,
+        tags=["documents"],
+    )
+    app.add_api_route(
+        f"{resolved_settings.api_v1_prefix}/knowledge-bases/{{kb_id}}/documents/text",
+        create_document_from_text,
+        methods=["POST"],
+        status_code=201,
+        response_model=DocumentRead,
+        tags=["documents"],
+    )
+    app.add_api_route(
+        f"{resolved_settings.api_v1_prefix}/knowledge-bases/{{kb_id}}/documents/url",
+        create_document_from_url,
+        methods=["POST"],
+        status_code=201,
+        response_model=DocumentRead,
         tags=["documents"],
     )
 

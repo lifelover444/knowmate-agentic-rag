@@ -1,5 +1,47 @@
 # Changelog
 
+## v0.5
+
+v0.5 开发 “WeKnora-style Knowledge Base Platform Foundation”，在 v0.4 Dashboard 和 v0.3 Quick Q&A 主链路基础上补齐任务中心、FAQ 知识库、per-KB indexing strategy、VectorStore 管理与绑定、文档批量管理，以及 manual text / URL 在线导入边界。
+
+### Added
+
+- 新增 `processing_tasks` 任务中心表和 API：
+  - `GET /api/v1/tasks`
+  - `GET /api/v1/tasks/{task_id}`
+  - `POST /api/v1/tasks/{task_id}/retry`
+- 文档上传、单文档重处理、知识库重建均创建任务记录；重处理和重建改为投递 Celery，不在 API 请求内同步处理。
+- 新增 `document / faq` 知识库类型。
+- 新增 `faq_entries` 表和 FAQ API，FAQ 条目会写入 `knowledges`、`chunks` 和 Qdrant payload，复用 quick-answer / knowledge-search 检索管线。
+- 新增 per-KB `indexing_strategy`，支持 `enable_vector`、`enable_keyword`、`enable_parent_child`、`enable_rerank`；`enable_wiki` 和 `enable_knowledge_graph` 仅保存并展示为不可用边界。
+- 新增 `vector_stores` 表、Qdrant VectorStore registry/factory 和 VectorStore CRUD / test API，敏感配置读取时脱敏。
+- 知识库可绑定 `vector_store_id`。
+- 文档列表支持状态、文件类型、关键字筛选，并返回 `chunk_count`、`task_status`、`embedding_model_id`、`processed_at` 和 `error_message`。
+- 新增批量删除、批量重处理、manual text / markdown 导入、轻量 URL HTML title + readable text 导入。
+- 前端新增：
+  - VectorStore 管理页。
+  - FAQ 管理页。
+  - 知识库创建时选择文档 / FAQ 类型、VectorStore 和 indexing strategy。
+  - 文档页筛选、批量操作、任务状态、在线文本导入和 URL 导入。
+
+### Changed
+
+- `KnowledgeSearchService` 会先按 KB `indexing_strategy` 校验请求的 `vector_only / keyword_only / hybrid` 和 rerank 能力，冲突时返回中文可读错误。
+- quick-answer 继续复用统一检索管线，并把 KB strategy 冲突作为 400 错误返回。
+- Qdrant 默认实例创建集中到 `VectorStoreRegistry`，减少业务服务中散落的 Qdrant 初始化。
+
+### Not Included
+
+- 不实现 Agent Mode、Wiki Mode、MCP 工具、GraphRAG、IM / 小程序或复杂外部数据源同步。
+- URL 导入仅做最小 HTML 抽取，不接 Feishu / Notion / Yuque。
+
+### Verification
+
+- `python -m pytest -q`：`66 passed`
+- `ruff check .`：通过
+- `python -m compileall app tests`：通过
+- `npm --prefix frontend run build`：通过
+
 ## v0.4
 
 v0.4 不新增后端 API，重点把前端从单页 monolithic 测试工作台重构为 TypeScript 化、组件化的 WeKnora-style 浅色 Dashboard。后端 Quick Q&A、knowledge-search、模型管理、检索配置、文档处理等能力保持原有端点和响应形态。

@@ -5,15 +5,19 @@ from app.core.config import Settings
 
 
 class QdrantVectorStore:
-    def __init__(self, settings: Settings) -> None:
-        self.base_collection = settings.qdrant_collection
+    def __init__(self, settings: Settings, config: dict | None = None) -> None:
+        config = config or {}
+        self.base_collection = str(config.get("collection") or settings.qdrant_collection)
         self.client = QdrantClient(
-            host=settings.qdrant_host,
-            port=settings.qdrant_port,
-            api_key=settings.qdrant_api_key or None,
-            https=settings.qdrant_use_tls,
+            host=str(config.get("host") or settings.qdrant_host),
+            port=int(config.get("port") or settings.qdrant_port),
+            api_key=config.get("api_key") or settings.qdrant_api_key or None,
+            https=bool(config.get("use_tls", settings.qdrant_use_tls)),
             check_compatibility=False,
         )
+
+    def test_connection(self) -> None:
+        self.client.get_collections()
 
     def collection_name(self, dimension: int) -> str:
         return f"{self.base_collection}_{dimension}"

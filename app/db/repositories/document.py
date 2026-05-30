@@ -1,6 +1,6 @@
 from datetime import UTC, datetime
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from app.db.models import Chunk, Knowledge
@@ -19,13 +19,25 @@ class DocumentRepository:
     def get(self, document_id: str) -> Knowledge | None:
         return self.db.scalar(select(Knowledge).where(Knowledge.id == document_id, Knowledge.deleted_at.is_(None)))
 
-    def list_by_knowledge_base(self, kb_id: str) -> list[Knowledge]:
+    def list_by_knowledge_base(
+        self,
+        kb_id: str,
+        *,
+        status: str | None = None,
+        file_type: str | None = None,
+        keyword: str | None = None,
+    ) -> list[Knowledge]:
+        query = select(Knowledge).where(Knowledge.knowledge_base_id == kb_id, Knowledge.deleted_at.is_(None))
+        if status:
+            query = query.where(Knowledge.parse_status == status)
+        if file_type:
+            query = query.where(Knowledge.file_type == file_type.lower().lstrip("."))
+        if keyword:
+            pattern = f"%{keyword}%"
+            query = query.where(or_(Knowledge.title.ilike(pattern), Knowledge.file_name.ilike(pattern)))
+        query = query.order_by(Knowledge.created_at.desc(), Knowledge.id.desc())
         return list(
-            self.db.scalars(
-                select(Knowledge)
-                .where(Knowledge.knowledge_base_id == kb_id, Knowledge.deleted_at.is_(None))
-                .order_by(Knowledge.created_at.desc(), Knowledge.id.desc())
-            ).all()
+            self.db.scalars(query).all()
         )
 
     def save(self, document: Knowledge) -> Knowledge:

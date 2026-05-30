@@ -60,6 +60,15 @@ export interface ChunkingConfig {
   child_chunk_size: number;
 }
 
+export interface IndexingStrategy {
+  enable_vector: boolean;
+  enable_keyword: boolean;
+  enable_parent_child: boolean;
+  enable_rerank: boolean;
+  enable_wiki: boolean;
+  enable_knowledge_graph: boolean;
+}
+
 export interface ParserEngineRule {
   file_types: string[];
   engine: string;
@@ -78,8 +87,11 @@ export interface KnowledgeBaseRead {
   tenant_id: number;
   name: string;
   description?: string | null;
+  kb_type: "document" | "faq" | string;
   chunking_config: ChunkingConfig | Record<string, unknown>;
   parser_engine_rules?: ParserEngineRule[] | null;
+  indexing_strategy: IndexingStrategy | Record<string, unknown>;
+  vector_store_id?: string | null;
   embedding_model_id: string;
   summary_model_id: string;
   document_count: number;
@@ -92,10 +104,13 @@ export interface KnowledgeBaseRead {
 export interface KnowledgeBasePayload {
   name: string;
   description?: string | null;
+  kb_type?: "document" | "faq" | string;
   embedding_model_id?: string | null;
   summary_model_id?: string | null;
   chunking_config: ChunkingConfig;
   parser_engine_rules: ParserEngineRule[];
+  indexing_strategy?: IndexingStrategy;
+  vector_store_id?: string | null;
 }
 
 export interface DocumentRead {
@@ -103,6 +118,7 @@ export interface DocumentRead {
   tenant_id: number;
   knowledge_base_id: string;
   type: string;
+  source_type: string;
   title: string;
   source: string;
   parse_status: "pending" | "processing" | "completed" | "failed" | string;
@@ -111,8 +127,59 @@ export interface DocumentRead {
   file_type?: string | null;
   file_size: number;
   storage_size: number;
+  embedding_model_id?: string | null;
+  chunk_count: number;
+  task_status?: string | null;
   processed_at?: string | null;
   error_message?: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ProcessingTaskRead {
+  id: string;
+  tenant_id: number;
+  knowledge_base_id?: string | null;
+  document_id?: string | null;
+  task_type: string;
+  status: string;
+  progress: number;
+  error_message?: string | null;
+  started_at?: string | null;
+  finished_at?: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface VectorStoreRead {
+  id: string;
+  tenant_id: number;
+  name: string;
+  provider: string;
+  config_json: Record<string, unknown>;
+  status: string;
+  is_default: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface VectorStorePayload {
+  name: string;
+  provider: string;
+  config_json: Record<string, unknown>;
+  status?: string;
+  is_default?: boolean;
+}
+
+export interface FAQEntryRead {
+  id: string;
+  tenant_id: number;
+  knowledge_base_id: string;
+  knowledge_id: string;
+  question: string;
+  answer: string;
+  metadata?: Record<string, unknown> | null;
+  enabled: boolean;
   created_at: string;
   updated_at: string;
 }

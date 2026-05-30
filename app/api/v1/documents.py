@@ -5,13 +5,15 @@ from sqlalchemy.orm import Session
 
 from app.api.v1.deps import get_db, get_embedder, get_settings
 from app.core.config import Settings
+from app.db.models import Chunk
 from app.db.repositories.chunk import ChunkRepository
 from app.db.repositories.document import DocumentRepository
 from app.db.repositories.knowledge_base import KnowledgeBaseRepository
-from app.schemas.document import ChunkRead, DocumentRead
+from app.db.repositories.task import ProcessingTaskRepository
+from app.schemas.document import ChunkRead, DocumentRead, ManualTextImportRequest, URLImportRequest
 from app.services.document import DocumentService
-from app.services.document_processing import DocumentProcessingService
 from app.services.model_config import MODEL_CONFIG_REQUIRED_MESSAGE, ModelConfigService
+from app.services.task import TASK_DOCUMENT_REPROCESS, TASK_DOCUMENT_UPLOAD_PROCESS, ProcessingTaskService
 from app.workers import tasks
 
 router = APIRouter()
@@ -27,7 +29,7 @@ def get_document(document_id: str, db: DBSession):
     document = DocumentRepository(db).get(document_id)
     if document is None:
         raise HTTPException(status_code=404, detail="document not found")
-    return document
+    return to_document_read(document, db)
 
 
 @router.delete("/{document_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -53,21 +55,18 @@ def list_document_chunks(document_id: str, db: DBSession):
 
 
 @router.post("/{document_id}/reprocess", response_model=DocumentRead, status_code=status.HTTP_202_ACCEPTED)
-def reprocess_document(document_id: str, db: DBSession, settings: AppSettings, request: Request):
+def reprocess_document(document_id: str, db: DBSession, settings: AppSettings):
     document = DocumentRepository(db).get(document_id)
     if document is None:
         raise HTTPException(status_code=404, detail="document not found")
-    try:
-        DocumentProcessingService(
-            db=db,
-            upload_dir=settings.upload_dir,
-            settings=settings,
-            embedder=request.app.state.embedder,
-            vector_store=request.app.state.vector_store,
-        ).process(document_id)
-    except (RuntimeError, ValueError) as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return DocumentRepository(db).get(document_id)
+    ProcessingTaskService(ProcessingTaskRepository(db), settings).create_for_document(
+        document,
+        TASK_DOCUMENT_REPROCESS,
+    )
+    document.parse_status = "pending"
+    DocumentRepository(db).save(document)
+    tasks.enqueue_document_processing(document_id)
+    return to_document_read(DocumentRepository(db).get(document_id), db)
 
 
 def create_document_from_file(
@@ -91,6 +90,82 @@ def create_document_from_file(
         settings,
         settings.upload_dir,
     ).create_from_upload(kb_id, file)
-    response = DocumentRead.model_validate(document)
+    ProcessingTaskService(ProcessingTaskRepository(db), settings).create_for_document(
+        document,
+        TASK_DOCUMENT_UPLOAD_PROCESS,
+    )
+    response = to_document_read(document, db)
     tasks.enqueue_document_processing(document.id)
     return response
+
+
+def create_document_from_text(
+    kb_id: str,
+    payload: ManualTextImportRequest,
+    db: DBSession,
+    settings: AppSettings,
+):
+    file_type = "md" if payload.format in {"markdown", "md"} else "txt"
+    try:
+        document = DocumentService(
+            DocumentRepository(db),
+            KnowledgeBaseRepository(db),
+            settings,
+            settings.upload_dir,
+        ).create_from_text(
+            kb_id,
+            title=payload.title,
+            content=payload.content,
+            source_type="manual_text",
+            file_type=file_type,
+            source="manual_text",
+            metadata={"format": payload.format},
+        )
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    ProcessingTaskService(ProcessingTaskRepository(db), settings).create_for_document(
+        document,
+        TASK_DOCUMENT_UPLOAD_PROCESS,
+    )
+    tasks.enqueue_document_processing(document.id)
+    return to_document_read(document, db)
+
+
+def create_document_from_url(
+    kb_id: str,
+    payload: URLImportRequest,
+    db: DBSession,
+    settings: AppSettings,
+):
+    try:
+        document = DocumentService(
+            DocumentRepository(db),
+            KnowledgeBaseRepository(db),
+            settings,
+            settings.upload_dir,
+        ).create_from_url(kb_id, payload.url)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    ProcessingTaskService(ProcessingTaskRepository(db), settings).create_for_document(
+        document,
+        TASK_DOCUMENT_UPLOAD_PROCESS,
+    )
+    tasks.enqueue_document_processing(document.id)
+    return to_document_read(document, db)
+
+
+def to_document_read(document, db: Session) -> dict:
+    if document is None:
+        return {}
+    chunk_count = db.query(Chunk).filter_by(
+        knowledge_id=document.id,
+        deleted_at=None,
+    ).count()
+    latest_task = next(iter(ProcessingTaskRepository(db).list(document.tenant_id, document_id=document.id)), None)
+    return {
+        **document.__dict__,
+        "chunk_count": chunk_count,
+        "task_status": latest_task.status if latest_task else None,
+    }

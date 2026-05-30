@@ -4,13 +4,17 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.orm import Session
 
 from app.api.v1.deps import get_db, get_settings
+from app.api.v1.documents import to_document_read
 from app.core.config import Settings
 from app.db.repositories.document import DocumentRepository
 from app.db.repositories.knowledge_base import KnowledgeBaseRepository
-from app.schemas.document import DocumentRead
+from app.db.repositories.task import ProcessingTaskRepository
+from app.schemas.document import BatchDocumentRequest, BatchDocumentResponse, DocumentRead
 from app.schemas.knowledge_base import KnowledgeBaseCreate, KnowledgeBaseRead, KnowledgeBaseUpdate
-from app.services.document_processing import DocumentProcessingService
-from app.services.knowledge_base import KnowledgeBaseService, normalize_chunking_config
+from app.services.document import DocumentService
+from app.services.knowledge_base import KnowledgeBaseService, normalize_chunking_config, normalize_indexing_strategy
+from app.services.task import TASK_DOCUMENT_REPROCESS, TASK_KNOWLEDGE_BASE_REBUILD, ProcessingTaskService
+from app.workers import tasks
 
 router = APIRouter()
 
@@ -24,6 +28,7 @@ def to_read(kb, repo: KnowledgeBaseRepository, settings: Settings) -> KnowledgeB
         {
             **kb.__dict__,
             "chunking_config": normalize_chunking_config(kb.chunking_config, settings),
+            "indexing_strategy": normalize_indexing_strategy(kb.indexing_strategy),
             "document_count": document_count,
             "chunk_count": chunk_count,
             "processing_count": processing_count,
@@ -96,11 +101,71 @@ def delete_knowledge_base(kb_id: str, db: DBSession, settings: AppSettings, requ
 
 
 @router.get("/{kb_id}/documents", response_model=list[DocumentRead])
-def list_knowledge_base_documents(kb_id: str, db: DBSession, settings: AppSettings):
+def list_knowledge_base_documents(
+    kb_id: str,
+    db: DBSession,
+    settings: AppSettings,
+    status: str | None = None,
+    file_type: str | None = None,
+    keyword: str | None = None,
+):
     repo = KnowledgeBaseRepository(db)
     if repo.get(kb_id, settings.default_tenant_id) is None:
         raise HTTPException(status_code=404, detail="knowledge base not found")
-    return DocumentRepository(db).list_by_knowledge_base(kb_id)
+    documents = DocumentRepository(db).list_by_knowledge_base(
+        kb_id,
+        status=status,
+        file_type=file_type,
+        keyword=keyword,
+    )
+    return [to_document_read(document, db) for document in documents]
+
+
+@router.post("/{kb_id}/documents/batch-delete", response_model=BatchDocumentResponse)
+def batch_delete_documents(
+    kb_id: str,
+    payload: BatchDocumentRequest,
+    db: DBSession,
+    settings: AppSettings,
+    request: Request,
+):
+    if KnowledgeBaseRepository(db).get(kb_id, settings.default_tenant_id) is None:
+        raise HTTPException(status_code=404, detail="knowledge base not found")
+    doc_repo = DocumentRepository(db)
+    service = DocumentService(doc_repo, KnowledgeBaseRepository(db), settings, settings.upload_dir)
+    deleted = 0
+    for document_id in payload.document_ids:
+        document = doc_repo.get(document_id)
+        if document is None or document.knowledge_base_id != kb_id:
+            continue
+        service.soft_delete(document, vector_store=request.app.state.vector_store)
+        deleted += 1
+    return BatchDocumentResponse(deleted=deleted)
+
+
+@router.post(
+    "/{kb_id}/documents/batch-reprocess",
+    response_model=BatchDocumentResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+def batch_reprocess_documents(kb_id: str, payload: BatchDocumentRequest, db: DBSession, settings: AppSettings):
+    if KnowledgeBaseRepository(db).get(kb_id, settings.default_tenant_id) is None:
+        raise HTTPException(status_code=404, detail="knowledge base not found")
+    doc_repo = DocumentRepository(db)
+    task_service = ProcessingTaskService(ProcessingTaskRepository(db), settings)
+    queued = 0
+    task_ids = []
+    for document_id in payload.document_ids:
+        document = doc_repo.get(document_id)
+        if document is None or document.knowledge_base_id != kb_id:
+            continue
+        task = task_service.create_for_document(document, TASK_DOCUMENT_REPROCESS)
+        task_ids.append(task.id)
+        document.parse_status = "pending"
+        doc_repo.save(document)
+        tasks.enqueue_document_processing(document.id)
+        queued += 1
+    return BatchDocumentResponse(queued=queued, task_ids=task_ids)
 
 
 @router.post("/{kb_id}/reprocess", status_code=status.HTTP_202_ACCEPTED)
@@ -110,13 +175,12 @@ def reprocess_knowledge_base(kb_id: str, db: DBSession, settings: AppSettings, r
     if kb is None:
         raise HTTPException(status_code=404, detail="knowledge base not found")
     documents = DocumentRepository(db).list_by_knowledge_base(kb_id)
-    processor = DocumentProcessingService(
-        db=db,
-        upload_dir=settings.upload_dir,
-        settings=settings,
-        embedder=request.app.state.embedder,
-        vector_store=request.app.state.vector_store,
-    )
+    task_service = ProcessingTaskService(ProcessingTaskRepository(db), settings)
+    task_ids = []
     for document in documents:
-        processor.process(document.id)
-    return {"queued": len(documents)}
+        task = task_service.create_for_document(document, TASK_KNOWLEDGE_BASE_REBUILD)
+        task_ids.append(task.id)
+        document.parse_status = "pending"
+        DocumentRepository(db).save(document)
+        tasks.enqueue_document_processing(document.id)
+    return {"queued": len(documents), "task_ids": task_ids}

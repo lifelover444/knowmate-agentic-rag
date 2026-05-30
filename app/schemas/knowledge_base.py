@@ -20,22 +20,37 @@ class ParserEngineRuleSchema(BaseModel):
     engine: str
 
 
+class IndexingStrategySchema(BaseModel):
+    enable_vector: bool = True
+    enable_keyword: bool = True
+    enable_parent_child: bool = False
+    enable_rerank: bool = False
+    enable_wiki: bool = False
+    enable_knowledge_graph: bool = False
+
+
 class KnowledgeBaseCreate(BaseModel):
     name: str = Field(min_length=1, max_length=255)
     description: str | None = None
+    kb_type: str = Field(default="document")
     embedding_model_id: str | None = Field(default=None, max_length=128)
     summary_model_id: str | None = Field(default=None, max_length=128)
     chunking_config: ChunkingConfigSchema | None = None
     parser_engine_rules: list[ParserEngineRuleSchema] | None = None
+    indexing_strategy: IndexingStrategySchema | None = None
+    vector_store_id: str | None = Field(default=None, max_length=36)
 
 
 class KnowledgeBaseUpdate(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=255)
     description: str | None = None
+    kb_type: str | None = Field(default=None)
     embedding_model_id: str | None = Field(default=None, max_length=128)
     summary_model_id: str | None = Field(default=None, max_length=128)
     chunking_config: ChunkingConfigSchema | None = None
     parser_engine_rules: list[ParserEngineRuleSchema] | None = None
+    indexing_strategy: IndexingStrategySchema | None = None
+    vector_store_id: str | None = Field(default=None, max_length=36)
 
 
 class KnowledgeBaseRead(BaseModel):
@@ -43,8 +58,11 @@ class KnowledgeBaseRead(BaseModel):
     tenant_id: int
     name: str
     description: str | None
+    kb_type: str = "document"
     chunking_config: dict
     parser_engine_rules: list | None = None
+    indexing_strategy: dict
+    vector_store_id: str | None = None
     embedding_model_id: str
     summary_model_id: str
     document_count: int = 0

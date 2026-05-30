@@ -2,7 +2,7 @@
 
 knowmate 知友是一个参考 [Tencent/WeKnora](https://github.com/Tencent/WeKnora) 核心思路实现的知识库 RAG 项目。后端技术栈从 WeKnora 的 Go 实现改为 Python / FastAPI；项目不是 Tencent/WeKnora 官方项目。
 
-当前版本为 v0.4，主线仍聚焦 WeKnora-style Quick Q&A。v0.3 补齐 WeKnora 方向的 hybrid retrieval / knowledge search / rerank 边界；v0.3.1 做质量补齐；v0.4 不新增后端 API，重点把前端从单页测试工作台重构为 TypeScript 化、组件化的浅色企业 Dashboard：
+当前版本为 v0.5，主线仍聚焦 WeKnora-style Quick Q&A。v0.5 在 v0.4 Dashboard 基础上补齐 WeKnora-style Knowledge Base Platform Foundation：任务中心、FAQ 知识库、per-KB indexing strategy、VectorStore 管理与绑定、文档批量管理，以及 manual text / URL 在线导入边界：
 
 ```text
 模型管理
@@ -82,8 +82,17 @@ knowmate 知友是一个参考 [Tencent/WeKnora](https://github.com/Tencent/WeKn
   - 页面覆盖快速问答、知识搜索、知识库列表、文档管理、模型配置、检索配置和切分预览。
   - 保持 WeKnora 风格浅色界面：近白页面背景、绿色品牌主色、低饱和边框、中文企业软件观感。
   - quick-answer 回答使用 `markdown-it` 渲染，禁用 HTML 直通，sources 使用复用 `SourceCard` 展示完整检索 metadata。
+- v0.5 Knowledge Base Platform Foundation：
+  - 新增 `processing_tasks` 任务中心，统一记录上传处理、单文档重处理、知识库重建任务。
+  - 单文档重处理和知识库重建改为创建任务并投递 Celery，不再在 API 请求内同步处理。
+  - 新增 `document / faq` 两类知识库，FAQ 条目写入 `faq_entries`、`knowledges`、`chunks` 和 Qdrant payload，复用 quick-answer / knowledge-search 检索管线。
+  - 新增 per-KB `indexing_strategy`，支持 vector、keyword、parent-child、rerank 能力开关，Wiki / Knowledge Graph 仅保存并展示为不可用边界。
+  - 新增 `vector_stores` 表、Qdrant VectorStore registry/factory 和 VectorStore CRUD / test API；敏感配置读取时脱敏。
+  - 文档列表支持状态、文件类型、关键字筛选，并返回 `chunk_count`、`task_status`、`embedding_model_id`、`processed_at` 和失败原因。
+  - 新增批量删除、批量重处理、manual text / markdown 导入、轻量 URL HTML title + readable text 导入。
+  - 前端新增 VectorStore 管理页、FAQ 管理页、知识库类型/索引策略/VectorStore 选择、任务状态和批量操作入口。
 - 自动化测试：覆盖多模型 CRUD、凭据加密、知识库模型校验、重处理、检索配置、hybrid/RRF/rerank/parent-child retrieval、knowledge-search API、前端关键逻辑、API 和文档处理 payload。
-- v0.4 质量验证当前为 `51 passed`，详见下方“验证命令”和 [CHANGELOG.md](CHANGELOG.md)。
+- v0.5 质量验证当前为 `66 passed`，详见下方“验证命令”和 [CHANGELOG.md](CHANGELOG.md)。
 
 暂未实现：
 
@@ -236,14 +245,62 @@ Vite 会把 `/api` 和 `/health` 代理到 `http://127.0.0.1:8000`。
 | `PUT` | `/api/v1/knowledge-bases/{kb_id}` | 更新知识库基础信息和配置 |
 | `DELETE` | `/api/v1/knowledge-bases/{kb_id}` | 软删除知识库 |
 | `GET` | `/api/v1/knowledge-bases/{kb_id}/documents` | 查询知识库下文档列表 |
+| `POST` | `/api/v1/knowledge-bases/{kb_id}/documents/text` | manual text / markdown 在线导入 |
+| `POST` | `/api/v1/knowledge-bases/{kb_id}/documents/url` | URL 在线导入 |
+| `POST` | `/api/v1/knowledge-bases/{kb_id}/documents/batch-delete` | 批量删除文档 |
+| `POST` | `/api/v1/knowledge-bases/{kb_id}/documents/batch-reprocess` | 批量重处理文档 |
 | `POST` | `/api/v1/knowledge-bases/{kb_id}/reprocess` | 批量重处理知识库文档 |
 | `POST` | `/api/v1/knowledge-bases/{kb_id}/documents/file` | 上传文档 |
+| `GET` | `/api/v1/knowledge-bases/{kb_id}/faqs` | 查询 FAQ 条目 |
+| `POST` | `/api/v1/knowledge-bases/{kb_id}/faqs` | 新增 FAQ 条目并写入索引 |
+| `PUT` | `/api/v1/knowledge-bases/{kb_id}/faqs/{faq_id}` | 更新、启用或停用 FAQ 条目 |
+| `DELETE` | `/api/v1/knowledge-bases/{kb_id}/faqs/{faq_id}` | 删除 FAQ 条目 |
+| `POST` | `/api/v1/knowledge-bases/{kb_id}/faqs/{faq_id}/rebuild-index` | 重建 FAQ 索引 |
 | `GET` | `/api/v1/documents/{document_id}` | 查询文档处理状态 |
 | `DELETE` | `/api/v1/documents/{document_id}` | 软删除文档 |
 | `GET` | `/api/v1/documents/{document_id}/chunks` | 查询文档切片 |
 | `POST` | `/api/v1/documents/{document_id}/reprocess` | 重处理单个文档 |
 | `POST` | `/api/v1/knowledge-search` | 知识搜索，只返回检索 hits，不调用 LLM |
 | `POST` | `/api/v1/quick-answer` | 快速问答 |
+| `GET` | `/api/v1/tasks` | 查询任务中心 |
+| `GET` | `/api/v1/tasks/{task_id}` | 查询单个任务 |
+| `POST` | `/api/v1/tasks/{task_id}/retry` | 重试失败任务 |
+| `GET` | `/api/v1/vector-stores` | 查询 VectorStore |
+| `POST` | `/api/v1/vector-stores` | 创建 VectorStore |
+| `GET` | `/api/v1/vector-stores/{id}` | 查询 VectorStore |
+| `PUT` | `/api/v1/vector-stores/{id}` | 更新 VectorStore |
+| `DELETE` | `/api/v1/vector-stores/{id}` | 删除 VectorStore |
+| `POST` | `/api/v1/vector-stores/test` | 测试 VectorStore 配置 |
+
+## v0.5 Schema 变化
+
+`KnowledgeBaseCreate` / `KnowledgeBaseRead` 新增：
+
+```json
+{
+  "kb_type": "document",
+  "vector_store_id": null,
+  "indexing_strategy": {
+    "enable_vector": true,
+    "enable_keyword": true,
+    "enable_parent_child": false,
+    "enable_rerank": false,
+    "enable_wiki": false,
+    "enable_knowledge_graph": false
+  }
+}
+```
+
+`DocumentRead` 新增：
+
+```json
+{
+  "source_type": "file",
+  "embedding_model_id": "embedding model id",
+  "chunk_count": 0,
+  "task_status": "queued"
+}
+```
 
 ## v0.3 / v0.3.1 Schema 变化
 
@@ -349,9 +406,10 @@ npm --prefix frontend run build
 
 最近一次本地验证结果：
 
-- `python -m pytest -q`：`51 passed`
+- `python -m pytest -q`：`66 passed`
 - `ruff check .`：通过
 - `python -m compileall app tests`：通过
+- `npm --prefix frontend run build`：通过
 - v0.4 前端构建和本地启动自测：
   - `npm --prefix frontend run build`：通过。
   - Docker Compose `postgres / redis / qdrant` healthy。

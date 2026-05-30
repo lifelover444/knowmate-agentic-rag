@@ -1,5 +1,10 @@
 import hashlib
+import re
+import uuid
+from html.parser import HTMLParser
 from pathlib import Path
+from urllib.parse import urlparse
+from urllib.request import Request, urlopen
 
 from fastapi import UploadFile
 
@@ -40,6 +45,7 @@ class DocumentService:
             tenant_id=self.settings.default_tenant_id,
             knowledge_base_id=kb_id,
             type="file",
+            source_type="file",
             title=file.filename or target_path.name,
             source="upload",
             parse_status="pending",
@@ -55,8 +61,136 @@ class DocumentService:
         )
         return self.document_repo.create(document)
 
+    def create_from_text(
+        self,
+        kb_id: str,
+        *,
+        title: str,
+        content: str,
+        source_type: str,
+        file_type: str,
+        source: str,
+        metadata: dict | None = None,
+    ) -> Knowledge:
+        kb = self.kb_repo.get(kb_id, self.settings.default_tenant_id)
+        if kb is None:
+            raise LookupError("knowledge base not found")
+        data = content.encode("utf-8")
+        document_id = str(uuid.uuid4())
+        target_dir = self.upload_dir / kb_id
+        target_dir.mkdir(parents=True, exist_ok=True)
+        safe_title = re.sub(r"[^0-9A-Za-z._-]+", "_", title).strip("_") or document_id
+        target_path = target_dir / f"{document_id}_{safe_title}.{file_type}"
+        target_path.write_bytes(data)
+        return self.document_repo.create(
+            Knowledge(
+                id=document_id,
+                tenant_id=self.settings.default_tenant_id,
+                knowledge_base_id=kb_id,
+                type=source_type,
+                source_type=source_type,
+                title=title,
+                source=source,
+                parse_status="pending",
+                enable_status="enabled",
+                embedding_model_id=kb.embedding_model_id,
+                file_name=target_path.name,
+                file_type=file_type,
+                file_size=len(data),
+                file_path=str(target_path),
+                file_hash=hashlib.sha256(data).hexdigest(),
+                storage_size=len(data),
+                doc_metadata=metadata or {},
+            )
+        )
+
+    def create_from_url(self, kb_id: str, url: str) -> Knowledge:
+        html = fetch_url_html(url)
+        title, text = html_to_readable_text(html)
+        if not text.strip():
+            raise ValueError("URL 内容为空，无法导入")
+        return self.create_from_text(
+            kb_id,
+            title=title or url,
+            content=f"# {title or url}\n\n{text}",
+            source_type="url",
+            file_type="md",
+            source=url,
+            metadata={"url": url},
+        )
+
     def soft_delete(self, document: Knowledge, vector_store=None) -> Knowledge:
         deleted = self.document_repo.soft_delete(document)
         if vector_store is not None and hasattr(vector_store, "delete_by_knowledge_id"):
             vector_store.delete_by_knowledge_id(document.id)
         return deleted
+
+
+def fetch_url_html(url: str) -> str:
+    parsed = urlparse(url)
+    if parsed.scheme not in {"http", "https"}:
+        raise ValueError("仅支持 http/https URL 导入")
+    host = parsed.hostname or ""
+    if _is_blocked_host(host):
+        raise ValueError("不支持导入本地或内网地址")
+    request = Request(url, headers={"User-Agent": "knowmate-url-import/0.5"})
+    try:
+        with urlopen(request, timeout=10) as response:
+            content_type = response.headers.get("content-type", "")
+            if "html" not in content_type:
+                raise ValueError("URL 响应不是 HTML 内容")
+            data = response.read(2_000_000)
+    except ValueError:
+        raise
+    except Exception as exc:
+        raise ValueError(f"URL 导入失败：{exc}") from exc
+    return data.decode("utf-8", errors="replace")
+
+
+def _is_blocked_host(host: str) -> bool:
+    lowered = host.lower()
+    if lowered in {"localhost", "0.0.0.0"} or lowered.endswith(".localhost"):
+        return True
+    if lowered.startswith("127.") or lowered.startswith("10.") or lowered.startswith("192.168."):
+        return True
+    if lowered.startswith("172."):
+        parts = lowered.split(".")
+        if len(parts) > 1 and parts[1].isdigit() and 16 <= int(parts[1]) <= 31:
+            return True
+    return False
+
+
+class _ReadableHTMLParser(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__()
+        self.title = ""
+        self._in_title = False
+        self._skip_depth = 0
+        self.parts: list[str] = []
+
+    def handle_starttag(self, tag: str, attrs) -> None:
+        if tag == "title":
+            self._in_title = True
+        if tag in {"script", "style", "noscript"}:
+            self._skip_depth += 1
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag == "title":
+            self._in_title = False
+        if tag in {"script", "style", "noscript"} and self._skip_depth:
+            self._skip_depth -= 1
+
+    def handle_data(self, data: str) -> None:
+        text = " ".join(data.split())
+        if not text:
+            return
+        if self._in_title:
+            self.title = f"{self.title} {text}".strip()
+        elif self._skip_depth == 0:
+            self.parts.append(text)
+
+
+def html_to_readable_text(html: str) -> tuple[str, str]:
+    parser = _ReadableHTMLParser()
+    parser.feed(html)
+    return parser.title, "\n".join(parser.parts)

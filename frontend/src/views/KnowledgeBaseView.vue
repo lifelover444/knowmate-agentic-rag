@@ -5,27 +5,41 @@ import { useRouter } from "vue-router";
 import { useKnowledgeBaseStore } from "../stores/knowledgeBase";
 import { useModelsStore } from "../stores/models";
 import { useRetrievalStore } from "../stores/retrieval";
+import { useVectorStoresStore } from "../stores/vectorStores";
 import { formatApiError } from "../utils/api";
 
 const router = useRouter();
 const kbStore = useKnowledgeBaseStore();
 const modelStore = useModelsStore();
 const retrieval = useRetrievalStore();
+const vectorStore = useVectorStoresStore();
 const createVisible = ref(false);
 const creating = ref(false);
 
 const createForm = reactive({
   name: "",
   description: "",
+  kb_type: "document",
   embedding_model_id: "",
   summary_model_id: "",
+  vector_store_id: "",
+  enable_vector: true,
+  enable_keyword: true,
+  enable_parent_child: false,
+  enable_rerank: false,
 });
 
 function openCreateModal() {
   createForm.name = `知友知识库-${new Date().toLocaleTimeString("zh-CN", { hour12: false })}`;
   createForm.description = "";
+  createForm.kb_type = "document";
   createForm.embedding_model_id = modelStore.selectedEmbeddingModelId;
   createForm.summary_model_id = modelStore.selectedChatModelId;
+  createForm.vector_store_id = vectorStore.vectorStores.find((store) => store.is_default)?.id || "";
+  createForm.enable_vector = true;
+  createForm.enable_keyword = true;
+  createForm.enable_parent_child = false;
+  createForm.enable_rerank = false;
   createVisible.value = true;
 }
 
@@ -35,14 +49,24 @@ async function submitCreate() {
     const created = await kbStore.createKnowledgeBase({
       name: createForm.name,
       description: createForm.description,
+      kb_type: createForm.kb_type,
       embedding_model_id: createForm.embedding_model_id,
       summary_model_id: createForm.summary_model_id,
+      vector_store_id: createForm.vector_store_id || null,
       chunking_config: retrieval.chunkingPayload(),
       parser_engine_rules: retrieval.parserEngineRulesPayload(),
+      indexing_strategy: {
+        enable_vector: createForm.enable_vector,
+        enable_keyword: createForm.enable_keyword,
+        enable_parent_child: createForm.enable_parent_child,
+        enable_rerank: createForm.enable_rerank,
+        enable_wiki: false,
+        enable_knowledge_graph: false,
+      },
     });
     createVisible.value = false;
     Message.success("知识库已创建");
-    router.push(`/knowledge-bases/${created.id}/documents`);
+    router.push(created.kb_type === "faq" ? `/knowledge-bases/${created.id}/faqs` : `/knowledge-bases/${created.id}/documents`);
   } catch (error) {
     Message.error(formatApiError(error instanceof Error ? error.message : error));
   } finally {
@@ -63,6 +87,7 @@ onMounted(() => {
   Promise.all([
     kbStore.loadKnowledgeBases(),
     modelStore.loadModels(),
+    vectorStore.loadVectorStores(),
     retrieval.loadParserEngines(),
   ]).catch((error) => {
     Message.error(formatApiError(error instanceof Error ? error.message : error));
@@ -86,6 +111,13 @@ onMounted(() => {
           <a-table-column title="文档">
             <template #cell="{ record }">{{ record.document_count }} / {{ record.chunk_count }} chunks</template>
           </a-table-column>
+          <a-table-column title="类型">
+            <template #cell="{ record }">
+              <a-tag :color="record.kb_type === 'faq' ? 'purple' : 'green'">
+                {{ record.kb_type === "faq" ? "FAQ 知识库" : "文档知识库" }}
+              </a-tag>
+            </template>
+          </a-table-column>
           <a-table-column title="模型">
             <template #cell="{ record }">
               <div class="table-stack">
@@ -99,6 +131,9 @@ onMounted(() => {
               <a-space>
                 <a-button size="mini" type="primary" @click="router.push(`/knowledge-bases/${record.id}/documents`)">
                   文档管理
+                </a-button>
+                <a-button size="mini" @click="router.push(`/knowledge-bases/${record.id}/faqs`)">
+                  FAQ
                 </a-button>
                 <a-popconfirm content="确认删除这个知识库？" type="warning" @ok="deleteKb(record.id)">
                   <a-button size="mini" status="danger">删除</a-button>
@@ -119,6 +154,12 @@ onMounted(() => {
         <a-form-item label="描述">
           <a-textarea v-model="createForm.description" data-testid="kb-description" :auto-size="{ minRows: 3, maxRows: 5 }" />
         </a-form-item>
+        <a-form-item label="知识库类型">
+          <a-radio-group v-model="createForm.kb_type" type="button">
+            <a-radio value="document">文档知识库</a-radio>
+            <a-radio value="faq">FAQ 知识库</a-radio>
+          </a-radio-group>
+        </a-form-item>
         <a-form-item label="Embedding 模型">
           <a-select v-model="createForm.embedding_model_id" data-testid="embedding-model-select">
             <a-option v-for="model in modelStore.embeddingModels" :key="model.id" :value="model.id">
@@ -133,6 +174,34 @@ onMounted(() => {
             </a-option>
           </a-select>
         </a-form-item>
+        <a-form-item label="VectorStore">
+          <a-select v-model="createForm.vector_store_id" allow-clear placeholder="使用默认 Qdrant">
+            <a-option v-for="store in vectorStore.vectorStores" :key="store.id" :value="store.id">
+              {{ store.name }} · {{ store.provider }}{{ store.is_default ? " · 默认" : "" }}
+            </a-option>
+          </a-select>
+        </a-form-item>
+        <a-divider>索引策略</a-divider>
+        <div class="form-grid form-grid--compact">
+          <a-form-item label="vector">
+            <a-switch v-model="createForm.enable_vector" />
+          </a-form-item>
+          <a-form-item label="keyword">
+            <a-switch v-model="createForm.enable_keyword" />
+          </a-form-item>
+          <a-form-item label="parent-child">
+            <a-switch v-model="createForm.enable_parent_child" />
+          </a-form-item>
+          <a-form-item label="rerank">
+            <a-switch v-model="createForm.enable_rerank" />
+          </a-form-item>
+          <a-form-item label="Wiki">
+            <a-switch :model-value="false" disabled />
+          </a-form-item>
+          <a-form-item label="Knowledge Graph">
+            <a-switch :model-value="false" disabled />
+          </a-form-item>
+        </div>
         <a-divider>切分配置</a-divider>
         <div class="form-grid form-grid--compact">
           <a-form-item label="策略">

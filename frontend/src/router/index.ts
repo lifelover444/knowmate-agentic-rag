@@ -10,7 +10,17 @@ export const routes: RouteRecordRaw[] = [
     component: () => import("../views/DocumentsView.vue"),
     meta: { title: "文档管理" },
   },
+  {
+    path: "/knowledge-bases/:kbId/faqs",
+    component: () => import("../views/FAQView.vue"),
+    meta: { title: "FAQ 管理" },
+  },
   { path: "/settings/models", component: () => import("../views/ModelSettingsView.vue"), meta: { title: "模型配置" } },
+  {
+    path: "/settings/vector-stores",
+    component: () => import("../views/VectorStoreSettingsView.vue"),
+    meta: { title: "VectorStore" },
+  },
   {
     path: "/settings/retrieval",
     component: () => import("../views/RetrievalSettingsView.vue"),
