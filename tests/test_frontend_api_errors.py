@@ -35,6 +35,19 @@ def test_frontend_formats_fastapi_validation_errors_without_object_object():
         if (!message.includes('Input should be greater than or equal to 50')) {
           throw new Error(message);
         }
+
+        const importMessage = formatApiError({
+          detail: {
+            failures: [{ row: 2, question: '缺少答案', error: '答案不能为空' }],
+          },
+        });
+
+        if (importMessage.includes('[object Object]')) {
+          throw new Error(importMessage);
+        }
+        if (!importMessage.includes('答案不能为空')) {
+          throw new Error(importMessage);
+        }
     """
     subprocess.run(
         ["node", "--input-type=module", "-e", script],

@@ -10,8 +10,9 @@ from app.db.repositories.chunk import ChunkRepository
 from app.db.repositories.document import DocumentRepository
 from app.db.repositories.knowledge_base import KnowledgeBaseRepository
 from app.db.repositories.task import ProcessingTaskRepository
-from app.schemas.document import ChunkRead, DocumentRead, ManualTextImportRequest, URLImportRequest
+from app.schemas.document import ChunkRead, DocumentPreviewRead, DocumentRead, ManualTextImportRequest, URLImportRequest
 from app.services.document import DocumentService
+from app.services.document_preview import DocumentPreviewService
 from app.services.model_config import MODEL_CONFIG_REQUIRED_MESSAGE, ModelConfigService
 from app.services.task import TASK_DOCUMENT_REPROCESS, TASK_DOCUMENT_UPLOAD_PROCESS, ProcessingTaskService
 from app.workers import tasks
@@ -54,6 +55,14 @@ def list_document_chunks(document_id: str, db: DBSession):
     return ChunkRepository(db).list_by_document(document_id)
 
 
+@router.get("/{document_id}/preview", response_model=DocumentPreviewRead)
+def get_document_preview(document_id: str, db: DBSession):
+    try:
+        return DocumentPreviewService(db).build_preview(document_id)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
 @router.post("/{document_id}/reprocess", response_model=DocumentRead, status_code=status.HTTP_202_ACCEPTED)
 def reprocess_document(document_id: str, db: DBSession, settings: AppSettings):
     document = DocumentRepository(db).get(document_id)
@@ -75,6 +84,7 @@ def create_document_from_file(
     db: DBSession,
     settings: AppSettings,
     embedder: EmbedderDep,
+    tag_id: str | None = None,
 ):
     kb = KnowledgeBaseRepository(db).get(kb_id, settings.default_tenant_id)
     if kb is None:
@@ -89,7 +99,7 @@ def create_document_from_file(
         KnowledgeBaseRepository(db),
         settings,
         settings.upload_dir,
-    ).create_from_upload(kb_id, file)
+    ).create_from_upload(kb_id, file, tag_id=tag_id)
     ProcessingTaskService(ProcessingTaskRepository(db), settings).create_for_document(
         document,
         TASK_DOCUMENT_UPLOAD_PROCESS,
@@ -120,6 +130,7 @@ def create_document_from_text(
             file_type=file_type,
             source="manual_text",
             metadata={"format": payload.format},
+            tag_id=payload.tag_id,
         )
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -143,7 +154,7 @@ def create_document_from_url(
             KnowledgeBaseRepository(db),
             settings,
             settings.upload_dir,
-        ).create_from_url(kb_id, payload.url)
+        ).create_from_url(kb_id, payload.url, tag_id=payload.tag_id)
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:

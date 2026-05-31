@@ -27,6 +27,36 @@ class ChatSessionUpdate(BaseModel):
     settings: ChatSettings | None = None
 
 
+class ChatSessionBatchDeleteRequest(BaseModel):
+    session_ids: list[str] = Field(min_length=1, max_length=100)
+
+
+class ChatSessionBatchDeleteFailure(BaseModel):
+    session_id: str
+    reason: str
+
+
+class ChatSessionBatchDeleteResponse(BaseModel):
+    requested: int
+    deleted: int
+    failed: int
+    failures: list[ChatSessionBatchDeleteFailure] = Field(default_factory=list)
+
+
+class RecommendedQuestionRead(BaseModel):
+    question: str
+    source_type: str
+    knowledge_base_id: str
+    knowledge_id: str | None = None
+    chunk_id: str | None = None
+    faq_id: str | None = None
+    title: str | None = None
+
+
+class RecommendedQuestionListResponse(BaseModel):
+    items: list[RecommendedQuestionRead]
+
+
 class ChatMessageRead(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 

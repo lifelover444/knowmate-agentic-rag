@@ -1,12 +1,19 @@
 import { ref } from "vue";
 import { defineStore } from "pinia";
-import { deleteRequest, getJson, postForm, postJson, putJson } from "../utils/api";
+import { deleteRequest, downloadRequest, getJson, postForm, postJson, putJson } from "../utils/api";
 import type {
+  BatchDocumentResponse,
   ChunkRead,
+  DocumentPreviewRead,
   DocumentRead,
+  FAQExportFormat,
   FAQEntryRead,
+  FAQImportResult,
+  FAQSearchTestResult,
   KnowledgeBasePayload,
   KnowledgeBaseRead,
+  KnowledgeTagPayload,
+  KnowledgeTagRead,
   ProcessingTaskRead,
 } from "../types/api";
 
@@ -18,8 +25,13 @@ export const useKnowledgeBaseStore = defineStore("knowledgeBase", () => {
   const documents = ref<DocumentRead[]>([]);
   const chunks = ref<ChunkRead[]>([]);
   const currentDocument = ref<DocumentRead | null>(null);
+  const currentDocumentPreview = ref<DocumentPreviewRead | null>(null);
   const selectedDocumentIds = ref<string[]>([]);
   const faqs = ref<FAQEntryRead[]>([]);
+  const batchOperationResult = ref<BatchDocumentResponse | null>(null);
+  const latestFaqImportResult = ref<FAQImportResult | null>(null);
+  const faqSearchHits = ref<FAQSearchTestResult[]>([]);
+  const tags = ref<KnowledgeTagRead[]>([]);
   const tasks = ref<ProcessingTaskRead[]>([]);
   const uploading = ref(false);
   const polling = ref(false);
@@ -71,6 +83,44 @@ export const useKnowledgeBaseStore = defineStore("knowledgeBase", () => {
     return documents.value;
   }
 
+  async function loadTags(kbId: string, keyword = "") {
+    const params = new URLSearchParams();
+    if (keyword) params.set("keyword", keyword);
+    const suffix = params.toString() ? `?${params.toString()}` : "";
+    tags.value = await getJson<KnowledgeTagRead[]>(`/knowledge-bases/${kbId}/tags${suffix}`);
+    return tags.value;
+  }
+
+  async function createTag(kbId: string, payload: KnowledgeTagPayload) {
+    const tag = await postJson<KnowledgeTagRead, KnowledgeTagPayload>(`/knowledge-bases/${kbId}/tags`, payload);
+    await loadTags(kbId);
+    return tag;
+  }
+
+  async function updateTag(kbId: string, tagId: string, payload: Partial<KnowledgeTagPayload>) {
+    const tag = await putJson<KnowledgeTagRead, Partial<KnowledgeTagPayload>>(`/knowledge-bases/${kbId}/tags/${tagId}`, payload);
+    await loadTags(kbId);
+    return tag;
+  }
+
+  async function deleteTag(kbId: string, tagId: string) {
+    await deleteRequest(`/knowledge-bases/${kbId}/tags/${tagId}`);
+    await loadTags(kbId);
+  }
+
+  async function assignDocumentTags(kbId: string, updates: Record<string, string | null>) {
+    const result = await putJson<{ updated: number }, { updates: Record<string, string | null> }>(`/knowledge-bases/${kbId}/documents/tags`, { updates });
+    await Promise.all([loadDocuments(kbId), loadTags(kbId)]);
+    selectedDocumentIds.value = [];
+    return result;
+  }
+
+  async function assignFaqTags(kbId: string, updates: Record<string, string | null>) {
+    const result = await putJson<{ updated: number }, { updates: Record<string, string | null> }>(`/knowledge-bases/${kbId}/faqs/tags`, { updates });
+    await Promise.all([loadFaqs(kbId), loadTags(kbId)]);
+    return result;
+  }
+
   async function uploadDocument(kbId: string, file: File) {
     uploading.value = true;
     try {
@@ -116,11 +166,17 @@ export const useKnowledgeBaseStore = defineStore("knowledgeBase", () => {
     return chunks.value;
   }
 
+  async function loadDocumentPreview(documentId: string) {
+    currentDocumentPreview.value = await getJson<DocumentPreviewRead>(`/documents/${documentId}/preview`);
+    return currentDocumentPreview.value;
+  }
+
   async function deleteDocument(documentId: string) {
     const kbId = currentDocument.value?.knowledge_base_id || currentKb.value?.id;
     await deleteRequest(`/documents/${documentId}`);
     if (currentDocument.value?.id === documentId) {
       currentDocument.value = null;
+      currentDocumentPreview.value = null;
       chunks.value = [];
     }
     if (kbId) await loadDocuments(kbId);
@@ -149,23 +205,26 @@ export const useKnowledgeBaseStore = defineStore("knowledgeBase", () => {
   }
 
   async function batchDeleteDocuments(kbId: string, documentIds: string[]) {
-    await postJson(`/knowledge-bases/${kbId}/documents/batch-delete`, { document_ids: documentIds });
+    batchOperationResult.value = await postJson<BatchDocumentResponse>(`/knowledge-bases/${kbId}/documents/batch-delete`, { document_ids: documentIds });
     await loadDocuments(kbId);
     selectedDocumentIds.value = [];
+    return batchOperationResult.value;
   }
 
   async function batchReprocessDocuments(kbId: string, documentIds: string[]) {
-    await postJson(`/knowledge-bases/${kbId}/documents/batch-reprocess`, { document_ids: documentIds });
-    await loadDocuments(kbId);
+    batchOperationResult.value = await postJson<BatchDocumentResponse>(`/knowledge-bases/${kbId}/documents/batch-reprocess`, { document_ids: documentIds });
+    await Promise.all([loadDocuments(kbId), loadTasks({ knowledge_base_id: kbId })]);
+    selectedDocumentIds.value = [];
+    return batchOperationResult.value;
   }
 
-  async function importText(kbId: string, payload: { title: string; content: string; format: string }) {
+  async function importText(kbId: string, payload: { title: string; content: string; format: string; tag_id?: string | null }) {
     const document = await postJson<DocumentRead>(`/knowledge-bases/${kbId}/documents/text`, payload);
     await loadDocuments(kbId);
     return document;
   }
 
-  async function importUrl(kbId: string, payload: { url: string }) {
+  async function importUrl(kbId: string, payload: { url: string; tag_id?: string | null }) {
     const document = await postJson<DocumentRead>(`/knowledge-bases/${kbId}/documents/url`, payload);
     await loadDocuments(kbId);
     return document;
@@ -187,8 +246,13 @@ export const useKnowledgeBaseStore = defineStore("knowledgeBase", () => {
     return task;
   }
 
-  async function loadFaqs(kbId: string) {
-    faqs.value = await getJson<FAQEntryRead[]>(`/knowledge-bases/${kbId}/faqs`);
+  async function loadFaqs(kbId: string, filters: Record<string, string> = {}) {
+    const params = new URLSearchParams();
+    Object.entries(filters).forEach(([key, value]) => {
+      if (value) params.set(key, value);
+    });
+    const suffix = params.toString() ? `?${params.toString()}` : "";
+    faqs.value = await getJson<FAQEntryRead[]>(`/knowledge-bases/${kbId}/faqs${suffix}`);
     return faqs.value;
   }
 
@@ -215,14 +279,55 @@ export const useKnowledgeBaseStore = defineStore("knowledgeBase", () => {
     return faq;
   }
 
+  async function importFaqs(kbId: string, file: File, mode: "append" | "replace") {
+    const form = new FormData();
+    form.append("file", file);
+    form.append("mode", mode);
+    const result = await postForm<{ imported: number; failed: number; errors?: Array<{ row: number; error: string }> }>(`/knowledge-bases/${kbId}/faqs/import`, form);
+    latestFaqImportResult.value = {
+      total: Number(result.imported || 0) + Number(result.failed || 0),
+      imported: Number(result.imported || 0),
+      failed: Number(result.failed || 0),
+      mode,
+      failures: (result.errors || []).map((error) => ({
+        row: error.row,
+        question: null,
+        error: error.error,
+      })),
+    };
+    await Promise.all([loadFaqs(kbId), loadTags(kbId)]);
+    return latestFaqImportResult.value;
+  }
+
+  async function exportFaqs(kbId: string, format: FAQExportFormat) {
+    return downloadRequest(`/knowledge-bases/${kbId}/faqs/export?format=${format}`);
+  }
+
+  async function searchFaqKnowledge(kbId: string, query: string, topK: number, enableRerank: boolean) {
+    const response = await postJson<{ hits: FAQSearchTestResult[] }>("/knowledge-search", {
+      knowledge_base_id: kbId,
+      query,
+      mode: "hybrid",
+      top_k: topK,
+      enable_rerank: enableRerank,
+    });
+    faqSearchHits.value = response.hits;
+    return response.hits;
+  }
+
   return {
     knowledgeBases,
     currentKb,
     documents,
     chunks,
     currentDocument,
+    currentDocumentPreview,
     selectedDocumentIds,
     faqs,
+    batchOperationResult,
+    latestFaqImportResult,
+    faqSearchHits,
+    tags,
     tasks,
     uploading,
     polling,
@@ -233,10 +338,17 @@ export const useKnowledgeBaseStore = defineStore("knowledgeBase", () => {
     createKnowledgeBase,
     updateKnowledgeBase,
     deleteKnowledgeBase,
+    loadTags,
+    createTag,
+    updateTag,
+    deleteTag,
+    assignDocumentTags,
+    assignFaqTags,
     loadDocuments,
     uploadDocument,
     pollDocument,
     loadChunks,
+    loadDocumentPreview,
     deleteDocument,
     reprocessDocument,
     reprocessKnowledgeBase,
@@ -251,5 +363,8 @@ export const useKnowledgeBaseStore = defineStore("knowledgeBase", () => {
     updateFaq,
     deleteFaq,
     rebuildFaq,
+    importFaqs,
+    exportFaqs,
+    searchFaqKnowledge,
   };
 });

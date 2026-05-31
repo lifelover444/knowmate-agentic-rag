@@ -1,10 +1,18 @@
 from datetime import UTC, datetime
 
 from app.core.config import Settings
-from app.db.models import ChatMessage, ChatSession
+from app.db.models import ChatMessage, ChatSession, Chunk, FAQEntry, Knowledge
 from app.db.repositories.chat import ChatRepository
 from app.db.repositories.knowledge_base import KnowledgeBaseRepository
-from app.schemas.chat import ChatMessageRead, ChatSessionCreate, ChatSessionRead, ChatSessionUpdate
+from app.schemas.chat import (
+    ChatMessageRead,
+    ChatSessionBatchDeleteFailure,
+    ChatSessionBatchDeleteResponse,
+    ChatSessionCreate,
+    ChatSessionRead,
+    ChatSessionUpdate,
+    RecommendedQuestionRead,
+)
 from app.schemas.quick_answer import SourceRead
 
 
@@ -72,6 +80,61 @@ class ChatService:
         session.updated_at = datetime.now(UTC)
         return self.repo.save_session(session)
 
+    def batch_delete_sessions(self, session_ids: list[str]) -> ChatSessionBatchDeleteResponse:
+        tenant_id = self.settings.default_tenant_id
+        seen: set[str] = set()
+        sessions: list[ChatSession] = []
+        failures: list[ChatSessionBatchDeleteFailure] = []
+        for session_id in session_ids:
+            if session_id in seen:
+                continue
+            seen.add(session_id)
+            session = self.repo.get_session(session_id, tenant_id)
+            if session is None:
+                failures.append(
+                    ChatSessionBatchDeleteFailure(session_id=session_id, reason="chat session not found")
+                )
+                continue
+            sessions.append(session)
+
+        if sessions:
+            self.repo.soft_delete_sessions(sessions)
+
+        return ChatSessionBatchDeleteResponse(
+            requested=len(session_ids),
+            deleted=len(sessions),
+            failed=len(failures),
+            failures=failures,
+        )
+
+    def recommended_questions(self, knowledge_base_id: str, limit: int = 6) -> list[RecommendedQuestionRead]:
+        tenant_id = self.settings.default_tenant_id
+        if KnowledgeBaseRepository(self.repo.db).get(knowledge_base_id, tenant_id) is None:
+            raise LookupError("knowledge base not found")
+
+        questions: list[RecommendedQuestionRead] = []
+        seen: set[str] = set()
+
+        def add(item: RecommendedQuestionRead) -> None:
+            key = item.question.strip()
+            if not key or key in seen or len(questions) >= limit:
+                return
+            seen.add(key)
+            questions.append(item)
+
+        for faq in self.repo.list_recommended_faqs(knowledge_base_id, tenant_id, limit):
+            add(self._question_from_faq(faq))
+
+        for chunk, knowledge in self.repo.list_recommended_chunks(knowledge_base_id, tenant_id, limit * 3):
+            for item in self._questions_from_chunk(chunk, knowledge):
+                add(item)
+                if len(questions) >= limit:
+                    break
+            if len(questions) >= limit:
+                break
+
+        return questions
+
     def create_user_message(self, session: ChatSession, content: str) -> ChatMessage:
         now = datetime.now(UTC)
         session.last_message_at = now
@@ -88,6 +151,54 @@ class ChatService:
                 created_at=now,
             )
         )
+
+    def _question_from_faq(self, faq: FAQEntry) -> RecommendedQuestionRead:
+        return RecommendedQuestionRead(
+            question=faq.question.strip(),
+            source_type="faq",
+            knowledge_base_id=faq.knowledge_base_id,
+            knowledge_id=faq.knowledge_id,
+            faq_id=faq.id,
+            title="FAQ",
+        )
+
+    def _questions_from_chunk(self, chunk: Chunk, knowledge: Knowledge) -> list[RecommendedQuestionRead]:
+        generated = self._extract_generated_questions(chunk.chunk_metadata or {})
+        if not generated:
+            generated = [self._fallback_question(chunk, knowledge)]
+        return [
+            RecommendedQuestionRead(
+                question=question,
+                source_type="chunk",
+                knowledge_base_id=chunk.knowledge_base_id,
+                knowledge_id=chunk.knowledge_id,
+                chunk_id=chunk.id,
+                title=knowledge.title,
+            )
+            for question in generated
+            if question
+        ]
+
+    def _extract_generated_questions(self, metadata: dict) -> list[str]:
+        raw_questions = metadata.get("generated_questions") if isinstance(metadata, dict) else None
+        if not isinstance(raw_questions, list):
+            return []
+        questions: list[str] = []
+        for raw in raw_questions:
+            if isinstance(raw, str):
+                question = raw.strip()
+            elif isinstance(raw, dict):
+                question = str(raw.get("question") or raw.get("content") or "").strip()
+            else:
+                question = ""
+            if question:
+                questions.append(question[:180])
+        return questions
+
+    def _fallback_question(self, chunk: Chunk, knowledge: Knowledge) -> str:
+        topic = (chunk.context_header or knowledge.title or chunk.content[:30]).strip()
+        topic = " ".join(topic.split())[:48]
+        return f"关于{topic}，有哪些要点？" if topic else ""
 
     def create_assistant_message(
         self,

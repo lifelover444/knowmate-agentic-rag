@@ -36,6 +36,7 @@ class QdrantVectorStore:
                 "knowledge_base_id": models.PayloadSchemaType.KEYWORD,
                 "source_id": models.PayloadSchemaType.KEYWORD,
                 "parent_chunk_id": models.PayloadSchemaType.KEYWORD,
+                "tag_id": models.PayloadSchemaType.KEYWORD,
                 "chunk_type": models.PayloadSchemaType.KEYWORD,
                 "is_enabled": models.PayloadSchemaType.BOOL,
                 "content": models.PayloadSchemaType.TEXT,
@@ -69,6 +70,25 @@ class QdrantVectorStore:
                             )
                         ]
                     )
+                ),
+            )
+
+    def set_tag_for_knowledge_ids(self, *, knowledge_ids: list[str], tag_id: str | None) -> None:
+        if not knowledge_ids:
+            return
+        for collection in self.client.get_collections().collections:
+            if not collection.name.startswith(f"{self.base_collection}_"):
+                continue
+            self.client.set_payload(
+                collection_name=collection.name,
+                payload={"tag_id": tag_id},
+                points=models.Filter(
+                    must=[
+                        models.FieldCondition(
+                            key="knowledge_id",
+                            match=models.MatchAny(any=knowledge_ids),
+                        )
+                    ]
                 ),
             )
 
@@ -120,6 +140,7 @@ class QdrantVectorStore:
                 "content": str(hit.payload.get("content")),
                 "context_header": hit.payload.get("context_header"),
                 "parent_chunk_id": hit.payload.get("parent_chunk_id"),
+                "tag_id": hit.payload.get("tag_id"),
                 "chunk_type": hit.payload.get("chunk_type"),
                 "metadata": hit.payload.get("metadata") or {},
                 "title": hit.payload.get("title"),

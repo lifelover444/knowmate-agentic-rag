@@ -205,6 +205,237 @@ h3 {
   white-space: pre-wrap;
 }
 
+.preview-layout {
+  display: grid;
+  grid-template-columns: 220px minmax(0, 1fr);
+  gap: 16px;
+}
+
+.preview-outline {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: calc(100vh - 160px);
+  overflow: auto;
+}
+
+.preview-outline h3 {
+  margin: 0;
+  font-size: 15px;
+}
+
+.preview-content {
+  max-height: calc(100vh - 160px);
+  overflow: auto;
+}
+
+.preview-content pre {
+  margin: 0;
+  color: var(--km-text-primary);
+  line-height: 1.65;
+  white-space: pre-wrap;
+}
+
+.tag-delete {
+  margin-left: 6px;
+  cursor: pointer;
+}
+
+.muted-text {
+  color: var(--km-text-secondary);
+  font-size: 13px;
+}
+
+.compact-select {
+  width: 220px;
+}
+
+.faq-import-summary,
+.faq-search-test-panel {
+  margin-bottom: 16px;
+}
+
+.faq-import-failures,
+.faq-search-results {
+  display: grid;
+  gap: 10px;
+}
+
+.faq-import-failure,
+.faq-search-hit {
+  border: 1px solid #e5e6eb;
+  border-radius: var(--km-radius);
+  padding: 12px;
+  background: #f7fbfa;
+}
+
+.faq-import-failure {
+  display: grid;
+  gap: 4px;
+}
+
+.faq-search-hit header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.faq-search-hit p {
+  margin: 8px 0;
+  line-height: 1.6;
+  white-space: pre-wrap;
+}
+
+.batch-progress-panel {
+  display: grid;
+  gap: 14px;
+}
+
+.batch-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.batch-summary-grid span,
+.batch-failure-row,
+.task-list-item {
+  border: 1px solid #e5e6eb;
+  border-radius: var(--km-radius);
+  padding: 10px 12px;
+  background: #f7fbfa;
+}
+
+.batch-failure-list,
+.task-list {
+  display: grid;
+  gap: 10px;
+}
+
+.batch-failure-row {
+  display: grid;
+  grid-template-columns: minmax(140px, 1fr) 2fr;
+  gap: 10px;
+}
+
+.settings-hero h1 {
+  color: var(--km-text-primary);
+  font-size: 24px;
+  font-weight: 700;
+}
+
+.settings-hero p {
+  margin-top: 6px;
+  color: var(--km-text-secondary);
+  font-size: 13px;
+}
+
+.settings-layout {
+  display: grid;
+  grid-template-columns: minmax(220px, 280px) minmax(0, 1fr);
+  gap: 16px;
+  align-items: start;
+}
+
+.settings-nav {
+  display: grid;
+  gap: 18px;
+  position: sticky;
+  top: 18px;
+}
+
+.settings-nav__group {
+  display: grid;
+  gap: 8px;
+}
+
+.settings-nav__group strong {
+  color: var(--km-text-secondary);
+  font-size: 12px;
+}
+
+.settings-nav__group button {
+  display: grid;
+  gap: 3px;
+  width: 100%;
+  border: 1px solid transparent;
+  border-radius: var(--km-radius);
+  padding: 10px 12px;
+  color: var(--km-text-primary);
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+}
+
+.settings-nav__group button:hover,
+.settings-nav__group button.active {
+  border-color: var(--km-border);
+  background: var(--km-bg-hover);
+}
+
+.settings-nav__group button.active {
+  border-color: rgba(22, 199, 132, 0.35);
+  background: var(--km-bg-deep);
+}
+
+.settings-nav__group small {
+  color: var(--km-text-secondary);
+  line-height: 1.45;
+}
+
+.settings-content {
+  min-width: 0;
+}
+
+.settings-content > .page-shell {
+  padding: 0;
+}
+
+.settings-status-panel {
+  display: grid;
+  gap: 12px;
+}
+
+.settings-status-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.settings-status-card {
+  display: grid;
+  gap: 10px;
+  border: 1px solid #e5e6eb;
+  border-radius: var(--km-radius);
+  padding: 14px;
+  background: #f7fbfa;
+}
+
+.settings-status-card header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.settings-status-card p {
+  color: var(--km-text-secondary);
+  line-height: 1.6;
+}
+
+.task-list-item {
+  display: grid;
+  gap: 8px;
+}
+
+.task-list-item header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
 .file-picker {
   display: block;
   position: relative;
@@ -298,7 +529,10 @@ h3 {
 
   .form-grid,
   .form-grid--compact,
-  .qa-layout {
+  .preview-layout,
+  .qa-layout,
+  .settings-layout,
+  .settings-status-grid {
     grid-template-columns: 1fr;
   }
 

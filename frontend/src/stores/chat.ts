@@ -3,12 +3,15 @@ import { defineStore } from "pinia";
 import { deleteRequest, getJson, patchJson, postJson, postSse } from "../utils/api";
 import type {
   ChatMessageRead,
+  ChatSessionBatchDeleteResponse,
   ChatSessionDetail,
   ChatSessionListResponse,
   ChatSessionRead,
   ChatSettings,
   KnowledgeSearchResponse,
   QuickAnswerResponse,
+  RecommendedQuestionListResponse,
+  RecommendedQuestionRead,
 } from "../types/api";
 
 interface AskParams {
@@ -44,20 +47,27 @@ export const useChatStore = defineStore("chat", () => {
   const knowledgeSearchQuery = ref("混合检索");
   const knowledgeSearchResult = ref<KnowledgeSearchResponse | null>(null);
   const sessions = ref<ChatSessionRead[]>([]);
+  const sessionSearchKeyword = ref("");
+  const selectedSessionIds = ref<string[]>([]);
   const currentSession = ref<ChatSessionDetail | null>(null);
   const messages = ref<ChatMessageRead[]>([]);
+  const recommendedQuestions = ref<RecommendedQuestionRead[]>([]);
   const answering = ref(false);
   const loadingSessions = ref(false);
+  const deletingSessions = ref(false);
   const searchingKnowledge = ref(false);
   const streamError = ref("");
 
   const currentAssistant = computed(() => [...messages.value].reverse().find((item) => item.role === "assistant"));
+  const filteredSessions = computed(() => sessions.value);
 
-  async function loadSessions() {
+  async function loadSessions(keyword = sessionSearchKeyword.value) {
     loadingSessions.value = true;
     try {
-      const response = await getJson<ChatSessionListResponse>("/chat-sessions");
+      const query = keyword.trim() ? `?keyword=${encodeURIComponent(keyword.trim())}` : "";
+      const response = await getJson<ChatSessionListResponse>(`/chat-sessions${query}`);
       sessions.value = response.items;
+      selectedSessionIds.value = selectedSessionIds.value.filter((id) => response.items.some((item) => item.id === id));
       return response.items;
     } finally {
       loadingSessions.value = false;
@@ -107,6 +117,40 @@ export const useChatStore = defineStore("chat", () => {
     await loadSessions();
   }
 
+  async function batchDeleteSessions() {
+    deletingSessions.value = true;
+    try {
+      const response = await postJson<ChatSessionBatchDeleteResponse>("/chat-sessions/batch-delete", {
+        session_ids: selectedSessionIds.value,
+      });
+      if (currentSession.value && selectedSessionIds.value.includes(currentSession.value.id)) {
+        currentSession.value = null;
+        messages.value = [];
+      }
+      selectedSessionIds.value = [];
+      await loadSessions();
+      return response;
+    } finally {
+      deletingSessions.value = false;
+    }
+  }
+
+  async function loadRecommendedQuestions(knowledgeBaseId: string) {
+    if (!knowledgeBaseId) {
+      recommendedQuestions.value = [];
+      return [];
+    }
+    const response = await getJson<RecommendedQuestionListResponse>(
+      `/chat-sessions/recommended-questions?knowledge_base_id=${encodeURIComponent(knowledgeBaseId)}&limit=6`,
+    );
+    recommendedQuestions.value = response.items;
+    return response.items;
+  }
+
+  function useRecommendedQuestion(questionText: string) {
+    question.value = questionText;
+  }
+
   async function askQuestion(params: AskParams) {
     answering.value = true;
     streamError.value = "";
@@ -154,6 +198,7 @@ export const useChatStore = defineStore("chat", () => {
         }
       });
       question.value = "";
+      recommendedQuestions.value = [];
       await loadSessions();
       if (currentSession.value?.id) await loadSession(currentSession.value.id);
       return quickAnswer.value;
@@ -184,10 +229,15 @@ export const useChatStore = defineStore("chat", () => {
     knowledgeSearchQuery,
     knowledgeSearchResult,
     sessions,
+    sessionSearchKeyword,
+    selectedSessionIds,
+    filteredSessions,
     currentSession,
     messages,
+    recommendedQuestions,
     answering,
     loadingSessions,
+    deletingSessions,
     searchingKnowledge,
     streamError,
     loadSessions,
@@ -196,6 +246,9 @@ export const useChatStore = defineStore("chat", () => {
     renameSession,
     togglePin,
     deleteSession,
+    batchDeleteSessions,
+    loadRecommendedQuestions,
+    useRecommendedQuestion,
     askQuestion,
     searchKnowledge,
   };

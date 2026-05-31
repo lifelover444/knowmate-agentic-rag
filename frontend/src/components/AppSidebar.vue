@@ -10,9 +10,7 @@ const healthOk = ref(false);
 
 const selectedKeys = computed(() => {
   if (route.path.startsWith("/knowledge-bases")) return ["/knowledge-bases"];
-  if (route.path.startsWith("/settings/models")) return ["/settings/models"];
-  if (route.path.startsWith("/settings/vector-stores")) return ["/settings/vector-stores"];
-  if (route.path.startsWith("/settings/retrieval")) return ["/settings/retrieval"];
+  if (route.path.startsWith("/settings")) return ["/settings"];
   return ["/chat"];
 });
 
@@ -46,9 +44,7 @@ onMounted(loadHealth);
     <a-menu class="sidebar-menu" :selected-keys="selectedKeys" @menu-item-click="navigate">
       <a-menu-item key="/chat">快速问答</a-menu-item>
       <a-menu-item key="/knowledge-bases">知识库</a-menu-item>
-      <a-menu-item key="/settings/models">模型配置</a-menu-item>
-      <a-menu-item key="/settings/vector-stores">VectorStore</a-menu-item>
-      <a-menu-item key="/settings/retrieval">检索配置</a-menu-item>
+      <a-menu-item key="/settings">设置中心</a-menu-item>
     </a-menu>
     <div class="sidebar-health" :class="{ healthy: healthOk }">
       <span class="sidebar-health__dot"></span>

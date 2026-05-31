@@ -80,6 +80,7 @@ class DocumentProcessingService:
                     "title": document.title,
                     "is_enabled": chunk.is_enabled,
                     "parent_chunk_id": chunk.parent_chunk_id,
+                    "tag_id": chunk.tag_id,
                     "chunk_type": chunk.chunk_type,
                     "metadata": chunk.chunk_metadata or {},
                 }
@@ -160,6 +161,7 @@ def _to_db_chunk(document, item: ParsedChunk, index: int, chunk_type: str) -> Ch
         end_at=item.end,
         chunk_type=chunk_type,
         context_header=item.context_header or None,
+        tag_id=document.tag_id,
         chunk_metadata=metadata,
         images=item.images or [],
     )

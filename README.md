@@ -2,17 +2,20 @@
 
 knowmate 知友是一个参考 [Tencent/WeKnora](https://github.com/Tencent/WeKnora) 核心思路实现的知识库 RAG 项目。后端技术栈从 WeKnora 的 Go 实现改为 Python / FastAPI；项目不是 Tencent/WeKnora 官方项目。
 
-当前版本为 v0.6，主线仍聚焦 WeKnora-style Quick Q&A。v0.6 在 v0.5 Knowledge Base Platform Foundation 基础上，把单轮 RAG 调试台升级为会话化知识库聊天体验：会话列表、多轮消息、流式回答、query rewrite、每轮 sources 和 retrieval trace：
+当前版本为 v0.61，主线仍聚焦 WeKnora-style Quick Q&A。v0.61 在 v0.6 会话化知识库聊天体验基础上，补齐标签、文档预览、FAQ 导入导出、批处理反馈、设置中心和会话侧栏增强：
 
 ```text
 模型管理
   -> 知识库绑定 QA / Embedding 模型
+  -> 标签组织
   -> 文档上传
   -> Celery Worker 解析文档
   -> Adaptive Chunking 切片
+  -> 文档预览 / chunk outline
   -> 生成 embedding
   -> chunk 元数据写 PostgreSQL
   -> 向量写 Qdrant
+  -> FAQ 导入导出 / FAQ 检索测试
   -> quick-answer / knowledge-search
   -> vector + keyword 召回
   -> RRF hybrid merge
@@ -22,6 +25,7 @@ knowmate 知友是一个参考 [Tencent/WeKnora](https://github.com/Tencent/WeKn
   -> chat model 生成 answer
   -> 返回 answer + sources + retrieval trace
   -> 保存 chat session / messages
+  -> 会话搜索 / 批量删除 / 推荐问题
 ```
 
 ## 当前进度
@@ -79,9 +83,9 @@ knowmate 知友是一个参考 [Tencent/WeKnora](https://github.com/Tencent/WeKn
 - Chunking preview/debug API：可预览命中策略、profile、chunk 统计和切片内容。
 - v0.4 Vue / TypeScript Dashboard：
   - 使用 Vue 3、Vite、TypeScript、Arco Design Vue、Pinia、vue-router、markdown-it 和 highlight.js。
-  - 使用 hash router，生产路径形态为 `/#/chat`、`/#/knowledge-bases`、`/#/knowledge-bases/:kbId/documents`、`/#/settings/models`、`/#/settings/retrieval`。
-  - 从旧单文件 `App.vue` 拆分为布局、复用组件、Pinia stores、API utils、类型定义和 5 个业务视图。
-  - 页面覆盖快速问答、知识搜索、知识库列表、文档管理、模型配置、检索配置和切分预览。
+  - 使用 hash router，生产路径形态为 `/#/chat`、`/#/knowledge-bases`、`/#/knowledge-bases/:kbId/documents`、`/#/knowledge-bases/:kbId/faqs`、`/#/settings`。
+  - 从旧单文件 `App.vue` 拆分为布局、复用组件、Pinia stores、API utils、类型定义和多个业务视图。
+  - 页面覆盖快速问答、知识搜索、知识库列表、文档管理、FAQ 管理、设置中心、模型配置、VectorStore、检索配置和切分预览。
   - 保持 WeKnora 风格浅色界面：近白页面背景、绿色品牌主色、低饱和边框、中文企业软件观感。
   - quick-answer 回答使用 `markdown-it` 渲染，禁用 HTML 直通，sources 使用复用 `SourceCard` 展示完整检索 metadata。
 - v0.5 Knowledge Base Platform Foundation：
@@ -101,8 +105,16 @@ knowmate 知友是一个参考 [Tencent/WeKnora](https://github.com/Tencent/WeKn
   - assistant message 保存 `sources_json`、`retrieval_trace_json` 和非敏感 `model_config_json`。
   - query rewrite 作为可选能力：有历史消息且开启时复用 KB 绑定 QA 模型改写追问，trace 展示 original / rewritten query 和失败/跳过状态。
   - 前端 `/#/chat` 升级为会话化聊天工作台：左侧会话栏、流式消息、每条 assistant 消息 sources/trace 折叠面板、基础会话设置和保留的检索调试入口。
+- v0.61 WeKnora 对齐补强：
+  - 新增知识库标签体系：标签 CRUD、文档/FAQ 标签筛选、批量设置标签，并把 `tag_id` 写入 Knowledge、FAQEntry、Chunk 和 Qdrant payload。
+  - 新增文档预览 API 和前端预览抽屉，展示摘要、正文预览、chunk outline 和 chunk 内容导航。
+  - 新增 FAQ CSV/XLSX 导入导出，支持 append/replace、逐行失败摘要、metadata、enabled 和 tag_id。
+  - FAQ 管理页新增导入结果卡片、导出按钮和 FAQ 检索测试抽屉。
+  - 批量删除/重处理响应新增 requested/succeeded/failed/failures，任务列表新增 batch_summary，文档页展示批处理进度和失败任务重试。
+  - 新增 `/#/settings` 设置中心外壳，整合模型、VectorStore、检索、解析器和存储状态；parser/storage provider 未接入项以禁用占位展示。
+  - 会话列表支持搜索、批量删除；新会话空态展示来自 FAQ 和 chunk generated_questions 的推荐问题。
 - 自动化测试：覆盖多模型 CRUD、凭据加密、知识库模型校验、重处理、检索配置、hybrid/RRF/rerank/parent-child retrieval、knowledge-search API、前端关键逻辑、API 和文档处理 payload。
-- v0.6 质量验证详见下方“验证命令”和 [CHANGELOG.md](CHANGELOG.md)。
+- v0.61 质量验证详见下方“验证命令”和 [CHANGELOG.md](CHANGELOG.md)。
 
 暂未实现：
 
@@ -217,18 +229,19 @@ Vite 会把 `/api` 和 `/health` 代理到 `http://127.0.0.1:8000`。
 
 ## 页面使用流程
 
-1. 进入 `/#/settings/models`，在“模型配置”里分别配置 QA、Embedding 和可选 Rerank 模型。
+1. 进入 `/#/settings`，在“模型配置”分区分别配置 QA、Embedding 和可选 Rerank 模型。
 2. QA 模型可选择 Qwen / DashScope、DeepSeek 或 OpenAI-compatible；Embedding 模型当前主要使用 Qwen / DashScope。
 3. 填入 API Key 后点击“测试模型”。
 4. 保存模型后，API Key 输入框会清空；再次测试会使用后端已加密保存的 Key。
-5. 进入 `/#/settings/retrieval`，配置 `hybrid / vector_only / keyword_only`、keyword 阈值、RRF 权重、rerank 开关、parser engine 和 chunking strategy，可先点“切分预览”。
+5. 在 `/#/settings` 的“检索与分块”分区配置 `hybrid / vector_only / keyword_only`、keyword 阈值、RRF 权重、rerank 开关、parser engine 和 chunking strategy，可先点“切分预览”。
 6. 进入 `/#/knowledge-bases` 创建知识库，知识库会绑定选择的 QA 和 Embedding 模型，并保存切分配置与解析规则。
-7. 进入知识库的文档管理页，上传 `.txt/.md/.pdf/.docx/.csv/.json/.xlsx` 文档。
-8. 等待 Worker 处理到“解析完成”，页面可在 drawer 中查看 chunks。
-9. 切换向量模型、维度或切分参数后，点击“重新处理”或“重建知识库”重建向量。
-10. 进入 `/#/chat`，选择知识库后新建会话，或从左侧会话列表继续历史会话。
-11. 在输入区提问，页面会流式追加 assistant 消息；每条回答可展开来源依据和 retrieval trace。
-12. 需要调试召回时，展开“检索调试”，只返回 sources，不调用 LLM。
+7. 进入知识库的文档管理页，上传 `.txt/.md/.pdf/.docx/.csv/.json/.xlsx` 文档，可按标签组织文档。
+8. 等待 Worker 处理到“解析完成”，页面可在预览抽屉中查看摘要、outline 和 chunks。
+9. FAQ 知识库可进入 `/#/knowledge-bases/:kbId/faqs`，手动维护 FAQ，或使用 CSV/XLSX append/replace 导入并导出。
+10. 切换向量模型、维度或切分参数后，点击“重新处理”或“重建知识库”重建向量；批量操作结果会显示成功/失败摘要。
+11. 进入 `/#/chat`，选择知识库后新建会话，或从左侧会话列表继续历史会话；可搜索会话、批量删除会话，空会话会显示推荐问题。
+12. 在输入区提问，页面会流式追加 assistant 消息；每条回答可展开来源依据和 retrieval trace。
+13. 需要调试召回时，展开“检索调试”，只返回 sources，不调用 LLM。
 
 ## 核心 API
 
@@ -255,6 +268,12 @@ Vite 会把 `/api` 和 `/health` 代理到 `http://127.0.0.1:8000`。
 | `GET` | `/api/v1/knowledge-bases/{kb_id}` | 查询知识库 |
 | `PUT` | `/api/v1/knowledge-bases/{kb_id}` | 更新知识库基础信息和配置 |
 | `DELETE` | `/api/v1/knowledge-bases/{kb_id}` | 软删除知识库 |
+| `GET` | `/api/v1/knowledge-bases/{kb_id}/tags` | 查询知识库标签，可按关键字过滤 |
+| `POST` | `/api/v1/knowledge-bases/{kb_id}/tags` | 创建标签 |
+| `PUT` | `/api/v1/knowledge-bases/{kb_id}/tags/{tag_id}` | 更新标签 |
+| `DELETE` | `/api/v1/knowledge-bases/{kb_id}/tags/{tag_id}` | 删除标签 |
+| `PUT` | `/api/v1/knowledge-bases/{kb_id}/documents/tags` | 批量设置文档标签 |
+| `PUT` | `/api/v1/knowledge-bases/{kb_id}/faqs/tags` | 批量设置 FAQ 标签 |
 | `GET` | `/api/v1/knowledge-bases/{kb_id}/documents` | 查询知识库下文档列表 |
 | `POST` | `/api/v1/knowledge-bases/{kb_id}/documents/text` | manual text / markdown 在线导入 |
 | `POST` | `/api/v1/knowledge-bases/{kb_id}/documents/url` | URL 在线导入 |
@@ -267,15 +286,21 @@ Vite 会把 `/api` 和 `/health` 代理到 `http://127.0.0.1:8000`。
 | `PUT` | `/api/v1/knowledge-bases/{kb_id}/faqs/{faq_id}` | 更新、启用或停用 FAQ 条目 |
 | `DELETE` | `/api/v1/knowledge-bases/{kb_id}/faqs/{faq_id}` | 删除 FAQ 条目 |
 | `POST` | `/api/v1/knowledge-bases/{kb_id}/faqs/{faq_id}/rebuild-index` | 重建 FAQ 索引 |
+| `POST` | `/api/v1/knowledge-bases/{kb_id}/faqs/import` | CSV/XLSX 导入 FAQ，支持 append/replace |
+| `GET` | `/api/v1/knowledge-bases/{kb_id}/faqs/export?format=csv` | 导出 FAQ CSV |
+| `GET` | `/api/v1/knowledge-bases/{kb_id}/faqs/export?format=xlsx` | 导出 FAQ XLSX |
 | `GET` | `/api/v1/documents/{document_id}` | 查询文档处理状态 |
 | `DELETE` | `/api/v1/documents/{document_id}` | 软删除文档 |
 | `GET` | `/api/v1/documents/{document_id}/chunks` | 查询文档切片 |
+| `GET` | `/api/v1/documents/{document_id}/preview` | 查询文档摘要、正文预览和 chunk outline |
 | `POST` | `/api/v1/documents/{document_id}/reprocess` | 重处理单个文档 |
 | `POST` | `/api/v1/knowledge-search` | 知识搜索，只返回检索 hits，不调用 LLM |
 | `POST` | `/api/v1/quick-answer` | 快速问答 |
 | `POST` | `/api/v1/quick-answer/stream` | 流式快速问答，返回 SSE events 并保存会话消息 |
-| `GET` | `/api/v1/chat-sessions` | 查询会话列表 |
+| `GET` | `/api/v1/chat-sessions?keyword=` | 查询会话列表，可按标题和消息内容搜索 |
 | `POST` | `/api/v1/chat-sessions` | 创建会话 |
+| `POST` | `/api/v1/chat-sessions/batch-delete` | 批量软删除会话 |
+| `GET` | `/api/v1/chat-sessions/recommended-questions` | 查询当前知识库推荐问题 |
 | `GET` | `/api/v1/chat-sessions/{session_id}` | 查询会话详情和消息 |
 | `PATCH` | `/api/v1/chat-sessions/{session_id}` | 更新会话标题、置顶状态和设置 |
 | `DELETE` | `/api/v1/chat-sessions/{session_id}` | 软删除会话 |
@@ -317,6 +342,123 @@ Vite 会把 `/api` 和 `/health` 代理到 `http://127.0.0.1:8000`。
   "embedding_model_id": "embedding model id",
   "chunk_count": 0,
   "task_status": "queued"
+}
+```
+
+## v0.61 Schema 变化
+
+新增 `KnowledgeTagRead`：
+
+```json
+{
+  "id": "tag id",
+  "knowledge_base_id": "KB ID",
+  "name": "产品文档",
+  "color": "#16c784",
+  "sort_order": 0,
+  "knowledge_count": 3,
+  "chunk_count": 18
+}
+```
+
+`DocumentRead` / `FAQEntryRead` / `ChunkRead` 新增可选 `tag_id`，Qdrant payload 同步写入 `tag_id` 以便来源展示和筛选。
+
+批量文档操作响应新增部分失败摘要：
+
+```json
+{
+  "requested": 3,
+  "succeeded": 2,
+  "failed": 1,
+  "deleted": 2,
+  "queued": 0,
+  "task_ids": [],
+  "failures": [
+    {
+      "document_id": "missing-doc",
+      "reason": "document not found"
+    }
+  ]
+}
+```
+
+任务响应新增 `batch_summary`：
+
+```json
+{
+  "batch_summary": {
+    "total": 3,
+    "queued": 1,
+    "processing": 0,
+    "completed": 1,
+    "failed": 1,
+    "failures": [
+      {
+        "task_id": "task id",
+        "document_id": "document id",
+        "error_message": "解析失败"
+      }
+    ]
+  }
+}
+```
+
+文档预览响应：
+
+```json
+{
+  "id": "document id",
+  "title": "文档标题",
+  "status": "completed",
+  "summary": "文档摘要",
+  "content_preview": "正文预览",
+  "chunks": [
+    {
+      "id": "chunk id",
+      "chunk_index": 0,
+      "chunk_type": "text",
+      "context_header": "章节标题",
+      "content_preview": "chunk 内容预览"
+    }
+  ]
+}
+```
+
+会话批量删除响应：
+
+```json
+{
+  "requested": 3,
+  "deleted": 2,
+  "failed": 1,
+  "failures": [
+    {
+      "session_id": "missing-session",
+      "reason": "chat session not found"
+    }
+  ]
+}
+```
+
+推荐问题响应：
+
+```json
+{
+  "items": [
+    {
+      "question": "如何申请退款？",
+      "source_type": "faq",
+      "knowledge_base_id": "KB ID",
+      "faq_id": "FAQ ID"
+    },
+    {
+      "question": "上传文档后会发生什么？",
+      "source_type": "chunk",
+      "knowledge_base_id": "KB ID",
+      "chunk_id": "chunk id",
+      "title": "入门手册"
+    }
+  ]
 }
 ```
 
@@ -471,19 +613,16 @@ npm --prefix frontend run build
 
 最近一次本地验证结果：
 
-- `python -m pytest -q`：`76 passed`
+- `python -m pytest tests/test_v07_chat_experience.py tests/test_v06_chat_sessions.py tests/test_v06_quick_answer_stream.py -q`：`9 passed`
+- `python -m pytest (rg --files tests | rg 'test_frontend_.*\\.py$') -q`：`18 passed`
 - `ruff check .`：通过
 - `python -m compileall app tests`：通过
-- `npm --prefix frontend run build`：通过
-- v0.6 前端构建和本地启动烟测：
-  - `npm --prefix frontend run build`：通过。
-  - Vite dev server `http://127.0.0.1:5174/#/chat` 可渲染 Chat 页面。
-  - 浏览器烟测确认“新建会话 / Query rewrite / 发送 / 检索调试”等关键控件可见。
-  - 本次烟测未启动后端服务，页面显示“后端未连接”属于预期状态。
+- `npm --prefix frontend run build`：通过，仍有 Vite 大 chunk 提示。
+- v0.61 分项验收详见 [CHANGELOG.md](CHANGELOG.md) 的 v0.61 Verification。
 
 ## 开发备注
 
-- v0.3 默认单租户，`DEFAULT_TENANT_ID=10000`。
+- v0.61 仍默认单租户，`DEFAULT_TENANT_ID=10000`。
 - Docker Compose 当前只提供 `postgres / redis / qdrant`，API、worker、前端 dev server 需要本地命令启动。
 - 文档上传后必须启动 Celery Worker，否则文档会停留在 `pending` 或 `processing`。
 - 切换 embedding 模型、维度、切分参数或 keyword 检索文本策略后，需要重处理文档或重建知识库来刷新 Qdrant 向量和 `chunks.search_text`。

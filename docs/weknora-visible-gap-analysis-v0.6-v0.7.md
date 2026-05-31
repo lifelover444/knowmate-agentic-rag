@@ -2,7 +2,7 @@
 
 Date: 2026-05-30
 
-Scope: non-click analysis based on Tencent/WeKnora public README, changelog, DeepWiki source index, and local knowmate v0.5 README / CHANGELOG / frontend routes. This is not a live UI test report because Chrome automation is blocked by policy on the WeKnora production domain.
+Scope: non-click analysis based on Tencent/WeKnora public README, changelog, DeepWiki source index, and the local knowmate README / CHANGELOG / frontend routes. The first draft used the v0.5 baseline; the current baseline was updated to knowmate v0.61 on 2026-05-31. This is not a live UI test report because Chrome automation is blocked by policy on the WeKnora production domain.
 
 Primary sources:
 
@@ -17,7 +17,20 @@ Primary sources:
 
 ## Executive Summary
 
-knowmate v0.5 already covers the core Quick Q&A foundation: model management, knowledge base creation, document upload, async parsing, adaptive chunking, Qdrant indexing, hybrid retrieval, rerank boundary, FAQ knowledge bases, task records, VectorStore configuration, and a Vue dashboard.
+knowmate v0.61 covers the core Quick Q&A foundation plus conversation-ready chat, tags, document preview, FAQ import/export, batch feedback, and a settings-center shell. The largest remaining gaps are no longer basic RAG ingestion, but WeKnora's broader Agent, Wiki, workspace/RBAC, advanced parsing, external import, multi-client, and enterprise observability surfaces.
+
+## v0.61 Update
+
+As of 2026-05-31, TASK-001 through TASK-009 are consolidated as knowmate `v0.61`. v0.61 does not start the larger Agent/Wiki/RBAC scope. It strengthens the v0.6 conversation-ready Quick Q&A path with the nearest WeKnora-like knowledge-management and chat UX gaps:
+
+- Tags/categories: KB-scoped tags, document/FAQ tag filtering and batch assignment, with `tag_id` persisted in PostgreSQL and Qdrant payloads.
+- Document preview: document preview API, summary/content preview, chunk outline, and frontend preview drawer.
+- FAQ import/export/search test: CSV/XLSX append/replace import, row-level import failure summary, CSV/XLSX export, and FAQ search-test drawer.
+- Batch UX: requested/succeeded/failed/failures summaries for batch delete/reprocess, task `batch_summary`, and retry entry for failed tasks.
+- Settings center: `/#/settings` WeKnora-like shell for models, VectorStore, retrieval, parser status, and storage status; advanced parser/storage providers remain disabled placeholders.
+- Chat UX: session search, batch session deletion, and recommended questions generated from FAQ entries and chunk `generated_questions`.
+
+Therefore, items originally recommended for v0.7 around tags, document preview, FAQ import/export/search test, batch feedback, settings center consolidation, session search/batch delete, and suggested questions are now delivered in v0.61. Remaining major gaps are RBAC-lite/workspace, Agent Mode, Wiki Mode, advanced parsing/OCR/MinerU, real object-storage providers, external data-source sync, and deeper observability.
 
 The largest visible gaps against current WeKnora are no longer basic RAG ingestion. They are:
 
@@ -30,17 +43,15 @@ The largest visible gaps against current WeKnora are no longer basic RAG ingesti
 
 Recommendation: v0.6 should not chase all WeKnora v0.6 enterprise scope at once. It should focus on the visible Quick Q&A experience: multi-turn sessions, streaming answer, conversation settings, and a better chat sidebar. v0.7 should add knowledge base organization and workspace-lite/RBAC-lite.
 
-## Local knowmate v0.5 Baseline
+## Local knowmate v0.61 Baseline
 
 Visible pages/routes:
 
-- `/#/chat`: quick-answer and knowledge-search debug.
+- `/#/chat`: conversation-ready Quick Q&A, streaming answer, sources/trace, session search/batch delete, recommended questions, and knowledge-search debug.
 - `/#/knowledge-bases`: KB list/create/delete, type selection, model binding, VectorStore selection, indexing strategy.
-- `/#/knowledge-bases/:kbId/documents`: document management, filtering, upload/import, batch operations, chunk inspection.
-- `/#/knowledge-bases/:kbId/faqs`: FAQ management.
-- `/#/settings/models`: model CRUD/test.
-- `/#/settings/vector-stores`: Qdrant VectorStore CRUD/test.
-- `/#/settings/retrieval`: retrieval/chunking/parser settings and preview.
+- `/#/knowledge-bases/:kbId/documents`: document management, tag filtering, upload/import, batch operations, progress feedback, preview drawer, and chunk inspection.
+- `/#/knowledge-bases/:kbId/faqs`: FAQ management, tag filtering, CSV/XLSX import/export, and FAQ search test.
+- `/#/settings`: settings center for model CRUD/test, Qdrant VectorStore, retrieval/chunking, parser status, and storage status.
 
 Implemented visible functions:
 
@@ -49,10 +60,14 @@ Implemented visible functions:
 - Per-KB indexing strategy toggles for vector, keyword, parent-child, rerank, plus disabled Wiki/KG boundary.
 - Async task records for upload/reprocess/rebuild.
 - Manual text/Markdown import and lightweight URL import.
-- Document status, chunk count, failure reason, batch delete/reprocess.
+- KB-scoped tags, document/FAQ tag filtering, and batch tag assignment.
+- Document status, chunk count, failure reason, batch delete/reprocess, and partial failure summaries.
+- Document preview drawer with summary, content preview, chunk outline, and chunk content navigation.
+- FAQ CSV/XLSX append/replace import, export, and search test.
 - Hybrid retrieval with source cards and score metadata.
 - Centralized model settings with masked credentials.
 - Qdrant VectorStore management.
+- Streaming chat sessions with query rewrite, per-message sources/trace, session search, batch delete, pin/unpin, and recommended questions.
 
 Known not implemented from local README:
 
@@ -62,6 +77,7 @@ Known not implemented from local README:
 - GraphRAG, multi-dimensional index, query rewrite, multi-turn sessions, streaming answer.
 - WeKnoraCloud, Ollama pull, VLM, ASR.
 - Agent Mode, Wiki Mode, MCP tools, IM channels, Mini Program, complex external source sync.
+- Real object-storage providers and advanced OCR/MinerU provider integration.
 
 ## Visible Feature Gap Matrix
 
@@ -75,16 +91,17 @@ WeKnora visible surface:
 - Tenant selector for users with multi-tenant access.
 - Route guards for login, initialization, and tenant/user state.
 
-knowmate v0.5:
+knowmate v0.61:
 
-- Sidebar has Chat, Knowledge Bases, model settings, VectorStore settings, retrieval settings.
-- No session timeline, global command palette, tenant selector, organizations, or agent entry.
+- Sidebar has Chat, Knowledge Bases, and Settings Center.
+- Chat has a session list with search, pin/unpin, and batch deletion.
+- No global command palette, tenant selector, organizations, or agent entry.
 - No auth/initialization route guard.
 
 Gap:
 
-- High: chat session navigation.
-- Medium: settings grouping and command palette.
+- Done: chat session navigation and settings grouping.
+- Medium: command palette.
 - Later: organizations and tenant selector after auth/RBAC exists.
 
 ### 2. Chat / Quick Q&A Experience
@@ -101,25 +118,30 @@ WeKnora visible surface:
 - Markdown, code highlighting, Mermaid rendering, sanitized HTML.
 - Historical reconstruction of agent steps.
 
-knowmate v0.5:
+knowmate v0.61:
 
-- Single-turn quick-answer form.
-- Separate knowledge-search debug tab.
+- Conversation-ready Quick Q&A workbench.
+- Session sidebar supports create/select/search/rename/delete/batch delete and pin/unpin.
+- Streaming quick-answer endpoint and frontend streaming rendering.
+- Knowledge-search remains available as a debug panel.
 - Markdown answer rendering and source cards.
-- No persisted session, no streaming, no suggested questions, no attachments, no mention selector, no chat history operations.
+- Per-message assistant sources and retrieval trace are persisted and displayed.
+- Optional follow-up query rewrite shows original and rewritten query in trace.
+- Empty new-session state shows recommended questions from FAQ entries and chunk `generated_questions`.
+- No attachments, mention selector, Mermaid rendering, or agent-step reconstruction.
 
 Gap:
 
-- Critical for v0.6:
+- Delivered in v0.6/v0.61:
   - `chat_sessions` and `chat_messages`.
   - Session sidebar/list.
   - Streaming quick-answer endpoint.
   - Save sources/retrieval trace with assistant messages.
   - Basic query rewrite for follow-up questions.
-- Important after v0.6:
   - Suggested questions.
-  - Knowledge/file mention selector.
   - Chat search/pin/batch delete.
+- Important after v0.61:
+  - Knowledge/file mention selector.
   - Mermaid rendering parity.
 - Later:
   - Agent step reconstruction and tool-call visualization, once Agent Mode exists.
@@ -135,7 +157,7 @@ WeKnora visible surface:
 - Shared/mine/all organization spaces in newer UI.
 - KB pinning/user-scoped organization improvements appear in changelog.
 
-knowmate v0.5:
+knowmate v0.61:
 
 - KB list/create/delete.
 - Document/FAQ types only.
@@ -163,21 +185,21 @@ WeKnora visible surface:
 - Batch upload progress and partial-failure summaries.
 - Dynamic page size and infinite scroll.
 
-knowmate v0.5:
+knowmate v0.61:
 
 - Upload file, manual text/Markdown import, lightweight URL import.
 - Formats: txt/md/pdf/docx/csv/json/xlsx.
 - No folder upload.
 - No image, PPT, HTML-as-first-class, OCR, MinerU, VLM parsing.
 - Document list has status/filter/chunk count/task status/error.
-- Chunk drawer exists, but no rich original document preview.
-- Batch delete/reprocess exists; upload progress and partial failure summaries are much simpler.
+- Document preview drawer shows summary, content preview, chunk outline, and chunk content navigation.
+- Batch delete/reprocess exists with requested/succeeded/failed/failures summaries; upload progress is still simpler than WeKnora.
 - Pagination/infinite scroll not WeKnora-level.
 
 Gap:
 
-- v0.6: document preview and richer processing result display.
-- v0.7: tags/categories, folder upload, better batch upload progress.
+- Done: document preview, richer processing result display, tags/categories.
+- Later: folder upload, better batch upload progress.
 - Later: image/OCR/MinerU, PPT, advanced HTML/document reconstruction.
 
 ### 5. FAQ Management
@@ -189,18 +211,18 @@ WeKnora visible surface:
 - Batch import with progress tracking and persistent result statistics: total, success, failed, skipped, mode, failed entries URL, imported time.
 - Tags/categories apply to FAQ entries too.
 
-knowmate v0.5:
+knowmate v0.61:
 
 - FAQ KB type and FAQ CRUD path exist.
 - FAQ entries are indexed into chunks and Qdrant and reused in quick-answer.
 - Frontend FAQ management page exists.
-- Import/export/search-test/batch-result sophistication is unclear or absent compared with WeKnora.
-- No FAQ tags/categories.
+- CSV/XLSX import/export, row-level import failure summary, and FAQ search test exist.
+- FAQ tag filtering and batch assignment exist.
 
 Gap:
 
-- v0.6/v0.7: FAQ import/export and search-test panel.
-- v0.7: FAQ tags and batch operations parity.
+- Done: FAQ import/export, search-test panel, tags, and basic batch operations.
+- Later: persistent import task history, failed-entry download URL, and finer-grained batch operations.
 
 ### 6. Retrieval and Search Debug
 
@@ -212,7 +234,7 @@ WeKnora visible surface:
 - E2E testing with recall hit rate and BLEU/ROUGE evaluation.
 - Full-pipeline visualization appears in public feature overview.
 
-knowmate v0.5:
+knowmate v0.61:
 
 - Dense Qdrant, app-level jieba + PostgreSQL FTS keyword retrieval, RRF hybrid, optional rerank, parent-child expansion.
 - Knowledge-search debug endpoint and UI.
@@ -236,7 +258,7 @@ WeKnora visible surface:
 - Agent settings for max iterations, temperature, system prompt with dynamic placeholders.
 - Data Analyst agent and agent skills/sandboxed execution appear in version history.
 
-knowmate v0.5:
+knowmate v0.61:
 
 - No Agent page, no agent model, no tool calling, no MCP, no web search, no agent stream UI.
 - Chat is Quick Q&A only.
@@ -255,7 +277,7 @@ WeKnora visible surface:
 - Wiki ingest scales to large KBs with task queue and DLQ.
 - Knowledge graph settings for entity extraction and relation mapping.
 
-knowmate v0.5:
+knowmate v0.61:
 
 - `enable_wiki` and `enable_knowledge_graph` are saved/displayed as unavailable boundaries.
 - No wiki page model, wiki browser, graph visualization, graph database, graph extraction, graph retrieval.
@@ -279,18 +301,17 @@ WeKnora visible surface:
 - System info shows version, edition, commit, build time, Go version, keyword/vector/graph engines, MinIO status, DB migration version.
 - General settings include language, theme, font.
 
-knowmate v0.5:
+knowmate v0.61:
 
-- Separate model, vector-store, retrieval settings pages.
-- No single settings center.
+- Model, VectorStore, and retrieval settings are grouped under `/#/settings`.
 - Model providers are narrower.
-- No Ollama page, Agent settings, storage engine settings, system info page, language/theme/font preferences.
-- Parser is mostly surfaced through retrieval/chunking settings and preview.
+- Parser/storage have visible status sections; advanced providers remain disabled placeholders.
+- No Ollama page, Agent settings, system info page, language/theme/font preferences.
 
 Gap:
 
-- v0.6: system info page and consolidated settings shell.
-- v0.7: parser/storage settings split.
+- Done: consolidated settings shell and parser/storage visible status.
+- Medium: system info page or status cards.
 - Later: Ollama/WeKnoraCloud/provider marketplace-level UX.
 
 ### 10. Model Provider Coverage
@@ -302,7 +323,7 @@ WeKnora visible surface:
 - VLM and ASR appear in version history and settings.
 - Built-in/hosted model sharing for multi-tenant setups.
 
-knowmate v0.5:
+knowmate v0.61:
 
 - Qwen/DashScope, DeepSeek, OpenAI-compatible chat/embedding/rerank.
 - VLLM/ASR types are enum placeholders.
@@ -323,7 +344,7 @@ WeKnora visible surface:
 - Data-source import: Feishu, Notion, Yuque with sync.
 - Chrome Extension capture and ClawHub skill import paths.
 
-knowmate v0.5:
+knowmate v0.61:
 
 - Qdrant registry/factory and CRUD/test.
 - Local file storage only in practice.
@@ -348,7 +369,7 @@ WeKnora visible surface:
 - UI hides mutation controls for Viewer/non-creator.
 - OIDC and API key auth appear in version history.
 
-knowmate v0.5:
+knowmate v0.61:
 
 - Single-tenant `DEFAULT_TENANT_ID=10000`.
 - No login, users, members, roles, ownership, audit logs, or permission-aware UI.
@@ -373,7 +394,7 @@ WeKnora visible surface:
 - Task queue/DLQ for wiki ingest at scale.
 - Automatic database migration on version upgrade.
 
-knowmate v0.5:
+knowmate v0.61:
 
 - Processing task table and status.
 - No Langfuse/trace UI, no token usage display, no system info page, no DLQ, no automatic migration UI.
@@ -392,7 +413,7 @@ WeKnora visible surface:
 - IM channels: WeCom, Feishu, Slack, Telegram, DingTalk, Mattermost, WeChat.
 - CLI command surface: auth, kb, doc, search, chat, etc.
 
-knowmate v0.5:
+knowmate v0.61:
 
 - Web UI and REST API only.
 - No CLI, extension, Mini Program, IM integrations.

@@ -111,6 +111,15 @@ export function postForm<T>(path: string, form: FormData): Promise<T> {
   });
 }
 
+export async function downloadRequest(path: string): Promise<Blob> {
+  const response = await fetch(apiUrl(path));
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(formatApiError(parseResponsePayload(text), text || `HTTP ${response.status}`));
+  }
+  return response.blob();
+}
+
 export interface SseEvent {
   event: string;
   data: Record<string, unknown>;

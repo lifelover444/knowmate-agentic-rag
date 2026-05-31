@@ -2,7 +2,7 @@
 
 日期：2026-05-30
 
-范围：本报告是非点击版差距分析，依据 Tencent/WeKnora 公开 README、CHANGELOG、DeepWiki 源码索引，以及本地 knowmate v0.5 的 README、CHANGELOG 和前端路由/页面结构整理。由于 Chrome 插件安全策略阻止对 WeKnora 线上生产域名进行自动化点击，本报告不包含线上页面真实点击验证结果。
+范围：本报告是非点击版差距分析，初版依据 Tencent/WeKnora 公开 README、CHANGELOG、DeepWiki 源码索引，以及本地 knowmate v0.5 的 README、CHANGELOG 和前端路由/页面结构整理；2026-05-31 已按 knowmate v0.61 更新当前基线。由于 Chrome 插件安全策略阻止对 WeKnora 线上生产域名进行自动化点击，本报告不包含线上页面真实点击验证结果。
 
 主要参考来源：
 
@@ -17,7 +17,20 @@
 
 ## 一句话结论
 
-knowmate v0.5 已经把 Quick Q&A 的核心 RAG 主链路搭起来了，当前最大的差距不再是“能不能上传文档并问答”，而是 WeKnora 已经产品化出来的一整套可见功能：会话、流式输出、会话历史、Agent、Wiki、工作区/RBAC、标签、预览、设置中心、外部导入和多端入口。
+knowmate v0.61 已经把 Quick Q&A 的核心 RAG 主链路、会话化问答、标签、文档预览、FAQ 导入导出、批处理反馈和设置中心外壳搭起来了，当前最大的差距不再是“能不能上传文档并问答”，而是 WeKnora 更完整的 Agent、Wiki、工作区/RBAC、高级解析、外部导入、多端入口和企业级可观测性。
+
+## v0.61 更新说明
+
+截至 2026-05-31，TASK-001 到 TASK-009 已作为 knowmate `v0.61` 归档完成。v0.61 没有进入 Agent/Wiki/RBAC 大范围，而是集中补齐 v0.6 之后最靠近 WeKnora Quick Q&A 产品体验的知识管理和会话体验：
+
+- 标签/分类：已实现知识库级标签、文档/FAQ 标签筛选和批量分配，`tag_id` 写入 PostgreSQL 和 Qdrant payload。
+- 文档预览：已实现文档预览 API、摘要/正文预览、chunk outline 和前端预览抽屉。
+- FAQ 导入导出/搜索测试：已实现 CSV/XLSX append/replace 导入、导入失败摘要、CSV/XLSX 导出和 FAQ 检索测试抽屉。
+- 批处理体验：已实现批量删除/重处理的 requested/succeeded/failed/failures 摘要、任务 `batch_summary` 和失败任务重试入口。
+- 设置中心：已实现 `/#/settings` WeKnora-like 设置中心外壳，整合模型、VectorStore、检索、解析器和存储状态；高级 parser/storage provider 仍为禁用占位。
+- 会话体验：已实现会话搜索、批量删除和基于 FAQ/chunk generated_questions 的推荐问题入口。
+
+因此，本文中原建议放到 v0.7 的“标签/分类、文档预览、FAQ 导入导出/搜索测试、批处理反馈、设置中心整合、会话搜索/批量删除/推荐问题”已经前移并落地为 v0.61。仍未完成的主要差距是 RBAC-lite/workspace、Agent Mode、Wiki Mode、高级解析/OCR/MinerU、对象存储真实 provider、外部数据源同步和更完整的系统可观测性。
 
 建议 v0.6 不要直接追完整 WeKnora v0.6 的企业级 RBAC/MCP/CLI 范围，而是优先把现有 Quick Q&A 做成真正可用的聊天产品：
 
@@ -39,17 +52,15 @@ v0.7 再补知识管理体验和 workspace-lite：
 
 Agent Mode、Wiki Mode、MCP、IM、小程序、Chrome Extension、复杂外部数据源同步建议放到 v0.8 以后。
 
-## knowmate v0.5 当前基线
+## knowmate v0.61 当前基线
 
 当前可见页面：
 
 - `/#/chat`：会话化 Quick Q&A、流式回答、来源/trace 展示和知识搜索调试。
 - `/#/knowledge-bases`：知识库列表、创建、删除、类型选择、模型绑定、VectorStore 选择、索引策略。
-- `/#/knowledge-bases/:kbId/documents`：文档管理、筛选、上传/导入、批量操作、chunk 查看。
-- `/#/knowledge-bases/:kbId/faqs`：FAQ 管理。
-- `/#/settings/models`：模型配置、测试、增删改。
-- `/#/settings/vector-stores`：Qdrant VectorStore 配置和测试。
-- `/#/settings/retrieval`：检索配置、切分配置、解析器规则和预览。
+- `/#/knowledge-bases/:kbId/documents`：文档管理、标签筛选、上传/导入、批量操作、处理进度、预览抽屉和 chunk 查看。
+- `/#/knowledge-bases/:kbId/faqs`：FAQ 管理、标签筛选、CSV/XLSX 导入导出和 FAQ 检索测试。
+- `/#/settings`：设置中心，组织模型配置、Qdrant VectorStore、检索/切分配置、解析器状态和存储状态。
 
 已完成的可见能力：
 
@@ -58,12 +69,16 @@ Agent Mode、Wiki Mode、MCP、IM、小程序、Chrome Extension、复杂外部�
 - 知识库级 indexing strategy：vector、keyword、parent-child、rerank；Wiki/KG 目前作为不可用边界展示。
 - 上传、重处理、重建任务记录。
 - 文档上传、手写文本/Markdown 导入、轻量 URL 导入。
-- 文档状态、chunk 数、任务状态、失败原因、批量删除、批量重处理。
+- 知识库级标签、文档/FAQ 标签筛选和批量分配。
+- 文档状态、chunk 数、任务状态、失败原因、批量删除、批量重处理、批处理部分失败摘要。
+- 文档预览抽屉，展示摘要、正文预览、chunk outline 和 chunk 内容。
+- FAQ CSV/XLSX append/replace 导入、导出和检索测试。
 - Qdrant 向量索引和 VectorStore 管理。
 - vector + keyword + RRF hybrid retrieval。
 - 可选 rerank 边界。
 - sources 展示分数、chunk、metadata 等检索解释字段。
 - 会话列表、多轮消息、SSE 流式 quick-answer。
+- 会话搜索、批量删除、pin/unpin 和推荐问题。
 - 每条 assistant 消息保存 sources、retrieval trace 和非敏感 model config。
 - 可选 query rewrite，展示 original query / rewritten query / rewrite 状态。
 - 模型 API Key 加密保存，前端只显示配置状态和尾号。
@@ -76,6 +91,7 @@ Agent Mode、Wiki Mode、MCP、IM、小程序、Chrome Extension、复杂外部�
 - GraphRAG、多维索引、Agent Mode、Wiki Mode。
 - WeKnoraCloud、Ollama 拉取、ASR。
 - Agent Mode、Wiki Mode、MCP 工具、IM 渠道、小程序、复杂外部数据源同步。
+- 真实对象存储 provider 和高级 OCR/MinerU provider 接入。
 
 ## 可见功能差距矩阵
 
@@ -89,16 +105,17 @@ WeKnora 已有的可见能力：
 - 多租户用户可见 tenant/workspace 切换器。
 - 登录、初始化、租户状态相关路由守卫。
 
-knowmate v0.5 状态：
+knowmate v0.61 状态：
 
-- 只有 Chat、知识库、模型设置、VectorStore 设置、检索设置。
-- 没有会话列表、命令面板、tenant 切换、组织入口、Agent 入口。
+- 侧边栏包含 Chat、知识库和设置中心。
+- Chat 已有会话列表、搜索、pin/unpin 和批量删除。
+- 没有命令面板、tenant 切换、组织入口、Agent 入口。
 - 没有登录态和初始化路由守卫。
 
 差距判断：
 
-- 高优先级：Chat 会话导航。
-- 中优先级：设置入口分组、命令面板。
+- 已完成：Chat 会话导航和设置入口分组。
+- 中优先级：命令面板。
 - 后续再做：组织入口和 tenant 切换，需要等登录/RBAC 基础存在后再补。
 
 ### 2. Chat / Quick Q&A 体验
@@ -116,19 +133,20 @@ WeKnora 已有的可见能力：
 - Markdown、代码高亮、Mermaid、安全 HTML 清洗。
 - 历史消息可重建 Agent 思考步骤。
 
-knowmate v0.6 状态：
+knowmate v0.61 状态：
 
 - 会话化 Quick Q&A 工作台。
-- 左侧会话列表，支持创建、选择、重命名、删除和 pin/unpin。
+- 左侧会话列表，支持创建、选择、搜索、重命名、删除、批量删除和 pin/unpin。
 - 新增 quick-answer SSE 流式接口和前端流式渲染。
 - knowledge-search 作为折叠调试入口保留。
 - 回答支持 Markdown 渲染。
 - sources 使用 SourceCard 展示。
 - 每条 assistant 消息保存并展示 sources / retrieval trace。
 - 支持追问 query rewrite，trace 中展示 original query / rewritten query。
-- 没有推荐问题、附件、提及选择器、会话搜索、批量删除、Mermaid 渲染。
+- 新会话空态展示来自 FAQ 和 chunk generated_questions 的推荐问题。
+- 没有附件、提及选择器、Mermaid 渲染。
 
-v0.6 已补齐：
+v0.6/v0.61 已补齐：
 
 - 新增 `chat_sessions`。
 - 新增 `chat_messages`。
@@ -136,12 +154,11 @@ v0.6 已补齐：
 - 新增 quick-answer SSE 流式接口。
 - 每条 assistant 消息保存 answer、sources、retrieval trace。
 - 支持追问场景的 query rewrite。
+- 支持会话搜索、批量删除和推荐问题。
 
-v0.6 后继续补：
+v0.61 后继续补：
 
-- 推荐问题。
 - 知识库/文件提及选择器。
-- 会话搜索、pin、批量删除。
 - Mermaid 渲染。
 
 更后续：
@@ -159,7 +176,7 @@ WeKnora 已有的可见能力：
 - newer UI 中有 Mine、Shared、All 等组织空间视图。
 - 有用户级 KB pinning 和共享/组织能力。
 
-knowmate v0.5 状态：
+knowmate v0.61 状态：
 
 - 知识库列表、创建、删除。
 - 支持 document / faq 两类。
@@ -187,20 +204,20 @@ WeKnora 已有的可见能力：
 - 批量上传有进度和部分失败摘要。
 - 动态分页和无限滚动。
 
-knowmate v0.5 状态：
+knowmate v0.61 状态：
 
 - 文件上传、手写文本/Markdown 导入、轻量 URL 导入。
 - 支持 txt、md、pdf、docx、csv、json、xlsx。
 - 没有文件夹上传。
 - 没有图片、PPT、HTML 一等格式、OCR、MinerU、VLM。
 - 文档列表有状态、筛选、chunk 数、task 状态、错误信息。
-- 有 chunk drawer，但没有富文档预览。
-- 批量删除/重处理已支持，但上传进度和部分失败摘要较弱。
+- 有文档预览抽屉，展示摘要、正文预览、chunk outline 和 chunk 内容。
+- 批量删除/重处理已支持，并返回 requested/succeeded/failed/failures 摘要；上传进度仍较弱。
 
 差距建议：
 
-- v0.6：补文档预览和更清楚的处理结果展示。
-- v0.7：补标签/分类、文件夹上传、批量上传进度。
+- 已完成：文档预览、更清楚的处理结果展示、标签/分类。
+- 后续：文件夹上传、批量上传进度。
 - 后续：图片/OCR/MinerU/PPT/高级 HTML 抽取和全文重建。
 
 ### 5. FAQ 管理
@@ -213,18 +230,18 @@ WeKnora 已有的可见能力：
 - 导入完成后展示总数、成功数、失败数、跳过数、导入模式、失败条目下载地址、导入时间。
 - FAQ 条目也支持标签/分类。
 
-knowmate v0.5 状态：
+knowmate v0.61 状态：
 
 - 有 FAQ 知识库类型和 FAQ CRUD。
 - FAQ 会写入 chunks 和 Qdrant，复用 quick-answer/knowledge-search。
 - 有 FAQ 管理页。
-- FAQ 导入/导出/搜索测试/批量结果展示尚未达到 WeKnora 级别。
-- 没有 FAQ 标签/分类。
+- 已有 FAQ CSV/XLSX 导入导出、导入失败摘要和 FAQ 检索测试。
+- 已有 FAQ 标签筛选和批量分配。
 
 差距建议：
 
-- v0.6/v0.7：补 FAQ 导入、导出、搜索测试面板。
-- v0.7：补 FAQ 标签和批量操作。
+- 已完成：FAQ 导入、导出、搜索测试面板、标签和基础批量操作。
+- 后续：更接近 WeKnora 的持久导入任务历史、失败条目下载地址和更细粒度批量操作。
 
 ### 6. 检索和搜索调试
 
@@ -235,7 +252,7 @@ WeKnora 已有的可见能力：
 - 每个来源可有 parser/storage engine 配置。
 - E2E 测试和全链路可视化，包含召回命中率、BLEU/ROUGE 等评估。
 
-knowmate v0.5 状态：
+knowmate v0.61 状态：
 
 - Qdrant dense retrieval。
 - 应用层 jieba + PostgreSQL FTS keyword retrieval。
@@ -263,7 +280,7 @@ WeKnora 已有的可见能力：
 - Agent 设置：最大迭代次数、temperature、system prompt、动态占位符。
 - Data Analyst agent、Agent skills、沙箱执行等扩展能力。
 
-knowmate v0.5 状态：
+knowmate v0.61 状态：
 
 - 没有 Agent 页面。
 - 没有 agent 数据模型。
@@ -285,7 +302,7 @@ WeKnora 已有的可见能力：
 - 大规模 Wiki ingest 使用任务队列和 DLQ。
 - 图谱设置包含实体抽取和关系映射。
 
-knowmate v0.5 状态：
+knowmate v0.61 状态：
 
 - `enable_wiki` 和 `enable_knowledge_graph` 只是保存/展示为不可用边界。
 - 没有 wiki page 数据模型。
@@ -312,18 +329,17 @@ WeKnora 已有的可见能力：
 - System Info 展示版本、edition、commit、build time、Go version、keyword/vector/graph 引擎、MinIO 状态、DB migration 版本。
 - General 设置包含语言、主题、字体。
 
-knowmate v0.5 状态：
+knowmate v0.61 状态：
 
-- 模型、VectorStore、检索配置是独立页面。
-- 没有统一设置中心。
+- 模型、VectorStore、检索配置已收敛到 `/#/settings` 设置中心外壳。
 - 模型供应商更少。
-- 没有 Ollama 页面、Agent 设置、存储设置、系统信息页、语言/主题/字体偏好。
-- Parser 主要在检索/切分设置中体现。
+- Parser/storage 已有可见状态分区，高级 provider 仍为禁用占位。
+- 没有 Ollama 页面、Agent 设置、系统信息页、语言/主题/字体偏好。
 
 差距建议：
 
-- v0.6：加系统信息页或状态卡片，并开始整合设置外壳。
-- v0.7：拆出 parser/storage 设置。
+- 已完成：设置外壳、parser/storage 可见状态。
+- 中优先级：系统信息页或状态卡片。
 - 后续：Ollama、WeKnoraCloud、更多 provider 预设。
 
 ### 10. 模型供应商覆盖
@@ -335,7 +351,7 @@ WeKnora 已有的可见能力：
 - VLM 和 ASR 在设置/版本历史中出现。
 - 多租户内置/托管模型共享。
 
-knowmate v0.5 状态：
+knowmate v0.61 状态：
 
 - Qwen/DashScope、DeepSeek、OpenAI-compatible chat/embedding/rerank。
 - VLLM/ASR 是枚举占位。
@@ -356,7 +372,7 @@ WeKnora 已有的可见能力：
 - 数据源导入：飞书、Notion、语雀，支持同步。
 - Chrome Extension 和 ClawHub Skill 作为导入入口。
 
-knowmate v0.5 状态：
+knowmate v0.61 状态：
 
 - Qdrant registry/factory 和 CRUD/test。
 - 实际主要是本地文件存储。
@@ -381,7 +397,7 @@ WeKnora 已有的可见能力：
 - Viewer 或非创建者看不到/不能使用修改类按钮。
 - OIDC 和 API Key auth 出现在版本历史中。
 
-knowmate v0.5 状态：
+knowmate v0.61 状态：
 
 - 单租户 `DEFAULT_TENANT_ID=10000`。
 - 没有登录、用户、成员、角色、ownership、audit log、权限感知 UI。
@@ -407,7 +423,7 @@ WeKnora 已有的可见能力：
 - Wiki ingest 任务队列和 DLQ。
 - 版本升级时自动数据库迁移。
 
-knowmate v0.5 状态：
+knowmate v0.61 状态：
 
 - 有 processing_tasks 和状态。
 - 没有 Langfuse/trace UI。
@@ -430,7 +446,7 @@ WeKnora 已有的可见能力：
 - IM 渠道：企业微信、飞书、Slack、Telegram、钉钉、Mattermost、微信。
 - CLI 命令覆盖 auth、kb、doc、search、chat 等。
 
-knowmate v0.5 状态：
+knowmate v0.61 状态：
 
 - 只有 Web UI 和 REST API。
 - 没有 CLI、浏览器插件、小程序、IM 集成。

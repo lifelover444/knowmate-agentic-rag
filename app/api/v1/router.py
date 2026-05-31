@@ -12,6 +12,7 @@ from app.api.v1 import (
     parser_engines,
     quick_answer,
     retrieval_config,
+    tags,
     tasks,
     vector_stores,
 )
@@ -19,6 +20,7 @@ from app.api.v1 import (
 api_router = APIRouter()
 api_router.include_router(chat_sessions.router, prefix="/chat-sessions", tags=["chat-sessions"])
 api_router.include_router(knowledge_bases.router, prefix="/knowledge-bases", tags=["knowledge-bases"])
+api_router.include_router(tags.router, prefix="/knowledge-bases", tags=["tags"])
 api_router.include_router(faqs.router, prefix="/knowledge-bases/{kb_id}/faqs", tags=["faqs"])
 api_router.include_router(knowledge_search.router, prefix="/knowledge-search", tags=["knowledge-search"])
 api_router.include_router(documents.router, prefix="/documents", tags=["documents"])

@@ -22,12 +22,13 @@ class FAQEntryRepository:
             query = query.where(FAQEntry.tenant_id == tenant_id)
         return self.db.scalar(query)
 
-    def list_by_knowledge_base(self, kb_id: str) -> list[FAQEntry]:
+    def list_by_knowledge_base(self, kb_id: str, *, tag_id: str | None = None) -> list[FAQEntry]:
+        query = select(FAQEntry).where(FAQEntry.knowledge_base_id == kb_id, FAQEntry.deleted_at.is_(None))
+        if tag_id:
+            query = query.where(FAQEntry.tag_id == tag_id)
         return list(
             self.db.scalars(
-                select(FAQEntry)
-                .where(FAQEntry.knowledge_base_id == kb_id, FAQEntry.deleted_at.is_(None))
-                .order_by(FAQEntry.created_at.desc(), FAQEntry.id.desc())
+                query.order_by(FAQEntry.created_at.desc(), FAQEntry.id.desc())
             ).all()
         )
 

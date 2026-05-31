@@ -1,5 +1,69 @@
 # Changelog
 
+## v0.61
+
+v0.61 是在 v0.6 会话化 Quick Q&A 基础上的 WeKnora 对齐补强版本，聚合 TASK-001 到 TASK-009。本版本不扩大到 Agent/Wiki/RBAC 主线，而是把知识库管理、FAQ、文档预览、批处理反馈、设置中心和会话侧栏体验补到更接近 WeKnora 的产品化状态。
+
+### Added
+
+- 新增知识库级标签体系：
+  - 新增 `knowledge_tags` 表和 Alembic migration `0010_v07_tags`。
+  - 新增 `/api/v1/knowledge-bases/{kb_id}/tags` 标签 CRUD。
+  - 文档、FAQ、chunks 和 Qdrant payload 记录 `tag_id`。
+  - 文档和 FAQ 列表支持按标签筛选，支持批量分配/清除标签。
+- 新增文档预览能力：
+  - 新增 `/api/v1/documents/{document_id}/preview`。
+  - 从已解析 chunks 生成文档摘要、正文预览和 chunk outline。
+  - 前端文档页把原 chunk drawer 升级为预览抽屉，支持从 outline 跳转 chunk 内容。
+- 新增 FAQ CSV/XLSX 导入导出：
+  - 新增 FAQ 导入服务，支持 append/replace、逐行失败摘要、metadata JSON、enabled、tag_id。
+  - 新增 CSV/XLSX 导出。
+  - 前端 FAQ 页新增导入弹窗、导入结果卡片、CSV/XLSX 导出按钮。
+- 新增 FAQ 检索测试面板：
+  - 前端复用 `/api/v1/knowledge-search`，限定当前知识库执行 FAQ 搜索测试。
+- 新增批处理进度和部分失败摘要：
+  - 文档批量删除/重处理响应新增 `requested`、`succeeded`、`failed`、`failures` 和 `task_ids`。
+  - 任务列表和详情新增 `batch_summary`，汇总同知识库同任务类型的 queued/processing/completed/failed 数量和失败原因。
+  - 文档页新增批处理进度面板、失败原因展示和失败任务重试入口。
+- 新增 WeKnora-like 设置中心外壳：
+  - 新增 `/#/settings`，集中组织模型、VectorStore、检索、解析器和存储状态。
+  - 旧 `/#/settings/models`、`/#/settings/vector-stores`、`/#/settings/retrieval` 保留为重定向入口。
+  - 解析器区展示 `Builtin Parser`、`Local Parser Registry`、`MinerU OCR` 状态。
+  - 存储区展示 `Local Storage` 以及 MinIO、S3、OSS、COS、OBS 等暂未启用 provider 占位。
+- 新增会话体验增强：
+  - `GET /api/v1/chat-sessions?keyword=` 支持按会话标题和消息内容搜索。
+  - 新增 `POST /api/v1/chat-sessions/batch-delete` 批量软删除会话，并返回部分失败摘要。
+  - 新增 `GET /api/v1/chat-sessions/recommended-questions`，从 FAQ 和 chunk `generated_questions` 生成推荐问题。
+  - 前端 Chat 侧边栏新增搜索框、批量选择和批量删除；空会话区展示可点击推荐问题。
+
+### Changed
+
+- 前端侧边栏把分散的模型、VectorStore、检索配置入口收敛为“设置中心”。
+- 文档和 FAQ 页面增加标签筛选/分配后的操作状态可见性。
+- FAQ 导入错误、批处理失败、会话批量删除失败均以中文可读摘要展示，不渲染原始对象。
+- 推荐问题第一阶段不调用 LLM，优先使用 FAQ 问题和已有 chunk metadata，避免引入新的外部模型依赖。
+
+### Not Included
+
+- 不实现完整 RBAC、登录、多 workspace、审计日志。
+- 不实现 Agent Mode、Wiki Mode、MCP、IM、小程序或外部数据源同步。
+- 不接入真实 MinerU/OCR、MinIO/S3/OSS 等 provider；v0.61 只做可见状态和占位。
+- 不引入新的 BM25/GraphRAG/多维索引引擎。
+
+### Verification
+
+- `python -m pytest tests/test_v07_tags.py -q`：`4 passed`
+- `python -m pytest tests/test_v07_document_preview.py -q`：`3 passed`
+- `python -m pytest tests/test_v07_faq_import_export.py -q`：`3 passed`
+- `python -m pytest tests/test_v07_batch_progress.py tests/test_frontend_v07_batch_progress.py -q`：`3 passed`
+- `python -m pytest tests/test_frontend_v07_settings_shell.py -q`：`1 passed`
+- `python -m pytest tests/test_v07_chat_experience.py tests/test_frontend_v07_chat_experience.py -q`：`4 passed`
+- `python -m pytest tests/test_v07_chat_experience.py tests/test_v06_chat_sessions.py tests/test_v06_quick_answer_stream.py -q`：`9 passed`
+- `python -m pytest (rg --files tests | rg 'test_frontend_.*\\.py$') -q`：`18 passed`
+- `ruff check .`：通过
+- `python -m compileall app tests`：通过
+- `npm --prefix frontend run build`：通过，仍有 Vite 大 chunk 提示。
+
 ## v0.6
 
 v0.6 开发 “会话化 Quick Q&A”，参考 WeKnora 的 session/chat/streaming 方向，但不追 Tencent/WeKnora 官方 v0.6.0 的 RBAC、多工作区、CLI 和 fan-out 全量范围。主线是把 knowmate v0.5 的单轮 Quick Q&A 调试台升级为可持续使用的知识库聊天体验。

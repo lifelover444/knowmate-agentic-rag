@@ -15,16 +15,15 @@ export const routes: RouteRecordRaw[] = [
     component: () => import("../views/FAQView.vue"),
     meta: { title: "FAQ 管理" },
   },
-  { path: "/settings/models", component: () => import("../views/ModelSettingsView.vue"), meta: { title: "模型配置" } },
+  { path: "/settings", component: () => import("../views/SettingsView.vue"), meta: { title: "设置中心" } },
+  { path: "/settings/models", redirect: { path: "/settings", query: { section: "models" } } },
   {
     path: "/settings/vector-stores",
-    component: () => import("../views/VectorStoreSettingsView.vue"),
-    meta: { title: "VectorStore" },
+    redirect: { path: "/settings", query: { section: "vector-stores" } },
   },
   {
     path: "/settings/retrieval",
-    component: () => import("../views/RetrievalSettingsView.vue"),
-    meta: { title: "检索配置" },
+    redirect: { path: "/settings", query: { section: "retrieval" } },
   },
 ];
 

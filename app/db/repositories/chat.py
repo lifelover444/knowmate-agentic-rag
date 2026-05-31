@@ -1,9 +1,9 @@
 from datetime import UTC, datetime
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
-from app.db.models import ChatMessage, ChatSession
+from app.db.models import ChatMessage, ChatSession, Chunk, FAQEntry, Knowledge
 
 
 class ChatRepository:
@@ -16,12 +16,24 @@ class ChatRepository:
         self.db.refresh(session)
         return session
 
-    def list_sessions(self, tenant_id: int) -> list[ChatSession]:
+    def list_sessions(self, tenant_id: int, keyword: str | None = None) -> list[ChatSession]:
+        stmt = select(ChatSession).where(ChatSession.tenant_id == tenant_id, ChatSession.deleted_at.is_(None))
+        if keyword:
+            pattern = f"%{keyword.strip()}%"
+            message_match = (
+                select(ChatMessage.id)
+                .where(
+                    ChatMessage.tenant_id == tenant_id,
+                    ChatMessage.session_id == ChatSession.id,
+                    ChatMessage.content.ilike(pattern),
+                )
+                .exists()
+            )
+            stmt = stmt.where(or_(ChatSession.title.ilike(pattern), message_match))
+
         return list(
             self.db.scalars(
-                select(ChatSession)
-                .where(ChatSession.tenant_id == tenant_id, ChatSession.deleted_at.is_(None))
-                .order_by(
+                stmt.order_by(
                     ChatSession.is_pinned.desc(),
                     ChatSession.last_message_at.desc(),
                     ChatSession.created_at.desc(),
@@ -49,6 +61,13 @@ class ChatRepository:
         self.db.add(session)
         self.db.commit()
 
+    def soft_delete_sessions(self, sessions: list[ChatSession]) -> None:
+        now = datetime.now(UTC)
+        for session in sessions:
+            session.deleted_at = now
+            self.db.add(session)
+        self.db.commit()
+
     def list_messages(self, session_id: str, tenant_id: int) -> list[ChatMessage]:
         return list(
             self.db.scalars(
@@ -69,3 +88,37 @@ class ChatRepository:
         self.db.commit()
         self.db.refresh(message)
         return message
+
+    def list_recommended_faqs(self, knowledge_base_id: str, tenant_id: int, limit: int) -> list[FAQEntry]:
+        return list(
+            self.db.scalars(
+                select(FAQEntry)
+                .where(
+                    FAQEntry.tenant_id == tenant_id,
+                    FAQEntry.knowledge_base_id == knowledge_base_id,
+                    FAQEntry.enabled.is_(True),
+                    FAQEntry.deleted_at.is_(None),
+                )
+                .order_by(FAQEntry.updated_at.desc(), FAQEntry.created_at.desc())
+                .limit(limit)
+            ).all()
+        )
+
+    def list_recommended_chunks(
+        self, knowledge_base_id: str, tenant_id: int, limit: int
+    ) -> list[tuple[Chunk, Knowledge]]:
+        return list(
+            self.db.execute(
+                select(Chunk, Knowledge)
+                .join(Knowledge, Knowledge.id == Chunk.knowledge_id)
+                .where(
+                    Chunk.tenant_id == tenant_id,
+                    Chunk.knowledge_base_id == knowledge_base_id,
+                    Chunk.is_enabled.is_(True),
+                    Chunk.deleted_at.is_(None),
+                    Knowledge.deleted_at.is_(None),
+                )
+                .order_by(Chunk.created_at.desc(), Chunk.chunk_index.asc())
+                .limit(limit)
+            ).all()
+        )

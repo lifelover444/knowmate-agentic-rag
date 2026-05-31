@@ -8,11 +8,14 @@ from app.core.config import Settings
 from app.db.repositories.chat import ChatRepository
 from app.schemas.chat import (
     ChatMessageListResponse,
+    ChatSessionBatchDeleteRequest,
+    ChatSessionBatchDeleteResponse,
     ChatSessionCreate,
     ChatSessionDetail,
     ChatSessionListResponse,
     ChatSessionRead,
     ChatSessionUpdate,
+    RecommendedQuestionListResponse,
 )
 from app.services.chat import ChatService, to_chat_message_read, to_chat_session_read
 
@@ -23,10 +26,10 @@ AppSettings = Annotated[Settings, Depends(get_settings)]
 
 
 @router.get("", response_model=ChatSessionListResponse)
-def list_chat_sessions(db: DBSession, settings: AppSettings):
+def list_chat_sessions(db: DBSession, settings: AppSettings, keyword: str | None = None):
     repo = ChatRepository(db)
     return ChatSessionListResponse(
-        items=[to_chat_session_read(session) for session in repo.list_sessions(settings.default_tenant_id)]
+        items=[to_chat_session_read(session) for session in repo.list_sessions(settings.default_tenant_id, keyword)]
     )
 
 
@@ -37,6 +40,23 @@ def create_chat_session(payload: ChatSessionCreate, db: DBSession, settings: App
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     return to_chat_session_read(session)
+
+
+@router.post("/batch-delete", response_model=ChatSessionBatchDeleteResponse)
+def batch_delete_chat_sessions(payload: ChatSessionBatchDeleteRequest, db: DBSession, settings: AppSettings):
+    return ChatService(ChatRepository(db), settings).batch_delete_sessions(payload.session_ids)
+
+
+@router.get("/recommended-questions", response_model=RecommendedQuestionListResponse)
+def list_recommended_questions(knowledge_base_id: str, db: DBSession, settings: AppSettings, limit: int = 6):
+    try:
+        items = ChatService(ChatRepository(db), settings).recommended_questions(
+            knowledge_base_id=knowledge_base_id,
+            limit=max(1, min(limit, 12)),
+        )
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return RecommendedQuestionListResponse(items=items)
 
 
 @router.get("/{session_id}", response_model=ChatSessionDetail)

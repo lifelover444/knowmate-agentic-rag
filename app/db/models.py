@@ -1,7 +1,7 @@
 import uuid
 from datetime import UTC, datetime
 
-from sqlalchemy import JSON, Boolean, DateTime, ForeignKey, Index, Integer, String, Text
+from sqlalchemy import JSON, Boolean, DateTime, ForeignKey, Index, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
@@ -44,6 +44,23 @@ class KnowledgeBase(Base):
 
     documents: Mapped[list["Knowledge"]] = relationship(back_populates="knowledge_base")
     chunks: Mapped[list["Chunk"]] = relationship(back_populates="knowledge_base")
+
+
+class KnowledgeTag(Base):
+    __tablename__ = "knowledge_tags"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "knowledge_base_id", "name", name="uq_knowledge_tags_tenant_kb_name"),
+        Index("ix_knowledge_tags_tenant_kb_sort", "tenant_id", "knowledge_base_id", "sort_order", "created_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    tenant_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    knowledge_base_id: Mapped[str] = mapped_column(ForeignKey("knowledge_bases.id"), nullable=False, index=True)
+    name: Mapped[str] = mapped_column(String(128), nullable=False)
+    color: Mapped[str | None] = mapped_column(String(32))
+    sort_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
 
 
 class ModelConfig(Base):
@@ -144,6 +161,7 @@ class Knowledge(Base):
     file_path: Mapped[str | None] = mapped_column(Text)
     file_hash: Mapped[str | None] = mapped_column(String(64))
     storage_size: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    tag_id: Mapped[str | None] = mapped_column(String(36), index=True)
     doc_metadata: Mapped[dict | None] = mapped_column("metadata", JSON)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
@@ -182,6 +200,7 @@ class FAQEntry(Base):
     question: Mapped[str] = mapped_column(Text, nullable=False)
     answer: Mapped[str] = mapped_column(Text, nullable=False)
     faq_metadata: Mapped[dict | None] = mapped_column("metadata", JSON)
+    tag_id: Mapped[str | None] = mapped_column(String(36), index=True)
     enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
@@ -205,6 +224,7 @@ class Chunk(Base):
     next_chunk_id: Mapped[str | None] = mapped_column(String(36))
     chunk_type: Mapped[str] = mapped_column(String(20), nullable=False, default="text")
     parent_chunk_id: Mapped[str | None] = mapped_column(String(36))
+    tag_id: Mapped[str | None] = mapped_column(String(36), index=True)
     context_header: Mapped[str | None] = mapped_column(Text)
     chunk_metadata: Mapped[dict | None] = mapped_column("metadata", JSON)
     images: Mapped[list | None] = mapped_column(JSON)

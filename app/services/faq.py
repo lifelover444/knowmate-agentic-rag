@@ -34,6 +34,7 @@ class FAQEntryService:
                 question=payload.question,
                 answer=payload.answer,
                 faq_metadata=payload.metadata or {},
+                tag_id=payload.tag_id,
                 enabled=payload.enabled,
             )
         )
@@ -48,6 +49,8 @@ class FAQEntryService:
             entry.answer = data["answer"]
         if "metadata" in data:
             entry.faq_metadata = data["metadata"] or {}
+        if "tag_id" in data:
+            entry.tag_id = data["tag_id"]
         if "enabled" in data and data["enabled"] is not None:
             entry.enabled = data["enabled"]
         entry = self.repo.save(entry)
@@ -80,6 +83,7 @@ class FAQEntryService:
         knowledge.title = entry.question
         knowledge.source_type = "faq"
         knowledge.type = "faq"
+        knowledge.tag_id = entry.tag_id
         knowledge.parse_status = "completed"
         knowledge.enable_status = "enabled" if entry.enabled else "disabled"
         knowledge.error_message = None
@@ -102,6 +106,7 @@ class FAQEntryService:
             end_at=len(content),
             chunk_type="faq",
             context_header="FAQ",
+            tag_id=entry.tag_id,
             chunk_metadata={
                 **(entry.faq_metadata or {}),
                 "title": entry.question,
@@ -127,6 +132,7 @@ class FAQEntryService:
                     "title": entry.question,
                     "is_enabled": True,
                     "parent_chunk_id": None,
+                    "tag_id": entry.tag_id,
                     "chunk_type": "faq",
                     "metadata": chunk.chunk_metadata or {},
                 }

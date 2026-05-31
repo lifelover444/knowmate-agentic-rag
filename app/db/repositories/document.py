@@ -26,6 +26,7 @@ class DocumentRepository:
         status: str | None = None,
         file_type: str | None = None,
         keyword: str | None = None,
+        tag_id: str | None = None,
     ) -> list[Knowledge]:
         query = select(Knowledge).where(Knowledge.knowledge_base_id == kb_id, Knowledge.deleted_at.is_(None))
         if status:
@@ -35,6 +36,8 @@ class DocumentRepository:
         if keyword:
             pattern = f"%{keyword}%"
             query = query.where(or_(Knowledge.title.ilike(pattern), Knowledge.file_name.ilike(pattern)))
+        if tag_id:
+            query = query.where(Knowledge.tag_id == tag_id)
         query = query.order_by(Knowledge.created_at.desc(), Knowledge.id.desc())
         return list(
             self.db.scalars(query).all()

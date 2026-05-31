@@ -27,7 +27,7 @@ class DocumentService:
         self.settings = settings
         self.upload_dir = upload_dir or settings.upload_dir
 
-    def create_from_upload(self, kb_id: str, file: UploadFile) -> Knowledge:
+    def create_from_upload(self, kb_id: str, file: UploadFile, *, tag_id: str | None = None) -> Knowledge:
         kb = self.kb_repo.get(kb_id, self.settings.default_tenant_id)
         if kb is None:
             raise LookupError("knowledge base not found")
@@ -57,6 +57,7 @@ class DocumentService:
             file_path=str(target_path),
             file_hash=file_hash,
             storage_size=len(data),
+            tag_id=tag_id,
             doc_metadata={},
         )
         return self.document_repo.create(document)
@@ -71,6 +72,7 @@ class DocumentService:
         file_type: str,
         source: str,
         metadata: dict | None = None,
+        tag_id: str | None = None,
     ) -> Knowledge:
         kb = self.kb_repo.get(kb_id, self.settings.default_tenant_id)
         if kb is None:
@@ -100,11 +102,12 @@ class DocumentService:
                 file_path=str(target_path),
                 file_hash=hashlib.sha256(data).hexdigest(),
                 storage_size=len(data),
+                tag_id=tag_id,
                 doc_metadata=metadata or {},
             )
         )
 
-    def create_from_url(self, kb_id: str, url: str) -> Knowledge:
+    def create_from_url(self, kb_id: str, url: str, *, tag_id: str | None = None) -> Knowledge:
         html = fetch_url_html(url)
         title, text = html_to_readable_text(html)
         if not text.strip():
@@ -117,6 +120,7 @@ class DocumentService:
             file_type="md",
             source=url,
             metadata={"url": url},
+            tag_id=tag_id,
         )
 
     def soft_delete(self, document: Knowledge, vector_store=None) -> Knowledge:

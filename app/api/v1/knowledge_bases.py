@@ -9,7 +9,7 @@ from app.core.config import Settings
 from app.db.repositories.document import DocumentRepository
 from app.db.repositories.knowledge_base import KnowledgeBaseRepository
 from app.db.repositories.task import ProcessingTaskRepository
-from app.schemas.document import BatchDocumentRequest, BatchDocumentResponse, DocumentRead
+from app.schemas.document import BatchDocumentFailure, BatchDocumentRequest, BatchDocumentResponse, DocumentRead
 from app.schemas.knowledge_base import KnowledgeBaseCreate, KnowledgeBaseRead, KnowledgeBaseUpdate
 from app.services.document import DocumentService
 from app.services.knowledge_base import KnowledgeBaseService, normalize_chunking_config, normalize_indexing_strategy
@@ -108,6 +108,7 @@ def list_knowledge_base_documents(
     status: str | None = None,
     file_type: str | None = None,
     keyword: str | None = None,
+    tag_id: str | None = None,
 ):
     repo = KnowledgeBaseRepository(db)
     if repo.get(kb_id, settings.default_tenant_id) is None:
@@ -117,6 +118,7 @@ def list_knowledge_base_documents(
         status=status,
         file_type=file_type,
         keyword=keyword,
+        tag_id=tag_id,
     )
     return [to_document_read(document, db) for document in documents]
 
@@ -134,13 +136,23 @@ def batch_delete_documents(
     doc_repo = DocumentRepository(db)
     service = DocumentService(doc_repo, KnowledgeBaseRepository(db), settings, settings.upload_dir)
     deleted = 0
+    failures: list[BatchDocumentFailure] = []
     for document_id in payload.document_ids:
         document = doc_repo.get(document_id)
         if document is None or document.knowledge_base_id != kb_id:
+            failures.append(
+                BatchDocumentFailure(document_id=document_id, reason="文档不存在或不属于当前知识库")
+            )
             continue
         service.soft_delete(document, vector_store=request.app.state.vector_store)
         deleted += 1
-    return BatchDocumentResponse(deleted=deleted)
+    return BatchDocumentResponse(
+        requested=len(payload.document_ids),
+        deleted=deleted,
+        succeeded=deleted,
+        failed=len(failures),
+        failures=failures,
+    )
 
 
 @router.post(
@@ -155,9 +167,13 @@ def batch_reprocess_documents(kb_id: str, payload: BatchDocumentRequest, db: DBS
     task_service = ProcessingTaskService(ProcessingTaskRepository(db), settings)
     queued = 0
     task_ids = []
+    failures: list[BatchDocumentFailure] = []
     for document_id in payload.document_ids:
         document = doc_repo.get(document_id)
         if document is None or document.knowledge_base_id != kb_id:
+            failures.append(
+                BatchDocumentFailure(document_id=document_id, reason="文档不存在或不属于当前知识库")
+            )
             continue
         task = task_service.create_for_document(document, TASK_DOCUMENT_REPROCESS)
         task_ids.append(task.id)
@@ -165,7 +181,14 @@ def batch_reprocess_documents(kb_id: str, payload: BatchDocumentRequest, db: DBS
         doc_repo.save(document)
         tasks.enqueue_document_processing(document.id)
         queued += 1
-    return BatchDocumentResponse(queued=queued, task_ids=task_ids)
+    return BatchDocumentResponse(
+        requested=len(payload.document_ids),
+        queued=queued,
+        succeeded=queued,
+        failed=len(failures),
+        failures=failures,
+        task_ids=task_ids,
+    )
 
 
 @router.post("/{kb_id}/reprocess", status_code=status.HTTP_202_ACCEPTED)

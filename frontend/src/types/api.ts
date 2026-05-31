@@ -113,6 +113,29 @@ export interface KnowledgeBasePayload {
   vector_store_id?: string | null;
 }
 
+export interface KnowledgeTagRead {
+  id: string;
+  tenant_id: number;
+  knowledge_base_id: string;
+  name: string;
+  color?: string | null;
+  sort_order: number;
+  knowledge_count: number;
+  chunk_count: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface KnowledgeTagPayload {
+  name: string;
+  color?: string | null;
+  sort_order?: number;
+}
+
+export interface BatchTagAssignmentResponse {
+  updated: number;
+}
+
 export interface DocumentRead {
   id: string;
   tenant_id: number;
@@ -127,6 +150,7 @@ export interface DocumentRead {
   file_type?: string | null;
   file_size: number;
   storage_size: number;
+  tag_id?: string | null;
   embedding_model_id?: string | null;
   chunk_count: number;
   task_status?: string | null;
@@ -145,10 +169,41 @@ export interface ProcessingTaskRead {
   status: string;
   progress: number;
   error_message?: string | null;
+  batch_summary?: TaskBatchSummary | null;
   started_at?: string | null;
   finished_at?: string | null;
   created_at: string;
   updated_at: string;
+}
+
+export interface TaskFailure {
+  task_id: string;
+  document_id?: string | null;
+  error_message: string;
+}
+
+export interface TaskBatchSummary {
+  total: number;
+  queued: number;
+  processing: number;
+  completed: number;
+  failed: number;
+  failures: TaskFailure[];
+}
+
+export interface BatchDocumentFailure {
+  document_id: string;
+  reason: string;
+}
+
+export interface BatchDocumentResponse {
+  deleted: number;
+  queued: number;
+  requested: number;
+  succeeded: number;
+  failed: number;
+  failures: BatchDocumentFailure[];
+  task_ids: string[];
 }
 
 export interface VectorStoreRead {
@@ -179,9 +234,26 @@ export interface FAQEntryRead {
   question: string;
   answer: string;
   metadata?: Record<string, unknown> | null;
+  tag_id?: string | null;
   enabled: boolean;
   created_at: string;
   updated_at: string;
+}
+
+export type FAQExportFormat = "csv" | "xlsx";
+
+export interface FAQImportFailure {
+  row: number;
+  question?: string | null;
+  error: string;
+}
+
+export interface FAQImportResult {
+  total: number;
+  imported: number;
+  failed: number;
+  mode: "append" | "replace";
+  failures: FAQImportFailure[];
 }
 
 export interface ChunkRead {
@@ -198,10 +270,36 @@ export interface ChunkRead {
   next_chunk_id?: string | null;
   chunk_type: string;
   parent_chunk_id?: string | null;
+  tag_id?: string | null;
   context_header?: string | null;
   metadata?: Record<string, unknown> | null;
   images?: unknown[] | null;
   created_at: string;
+}
+
+export interface DocumentPreviewChunk {
+  id: string;
+  chunk_index: number;
+  chunk_type: string;
+  start_at: number;
+  end_at: number;
+  context_header?: string | null;
+  content_preview: string;
+}
+
+export interface DocumentPreviewRead {
+  id: string;
+  tenant_id: number;
+  knowledge_base_id: string;
+  title: string;
+  file_name?: string | null;
+  file_type?: string | null;
+  status: string;
+  summary?: string | null;
+  content_preview: string;
+  chunks: DocumentPreviewChunk[];
+  error_message?: string | null;
+  metadata?: Record<string, unknown> | null;
 }
 
 export interface SourceRead {
@@ -269,8 +367,34 @@ export interface ChatSessionListResponse {
   items: ChatSessionRead[];
 }
 
+export interface ChatSessionBatchDeleteFailure {
+  session_id: string;
+  reason: string;
+}
+
+export interface ChatSessionBatchDeleteResponse {
+  requested: number;
+  deleted: number;
+  failed: number;
+  failures: ChatSessionBatchDeleteFailure[];
+}
+
 export interface ChatMessageListResponse {
   items: ChatMessageRead[];
+}
+
+export interface RecommendedQuestionRead {
+  question: string;
+  source_type: string;
+  knowledge_base_id: string;
+  knowledge_id?: string | null;
+  chunk_id?: string | null;
+  faq_id?: string | null;
+  title?: string | null;
+}
+
+export interface RecommendedQuestionListResponse {
+  items: RecommendedQuestionRead[];
 }
 
 export interface QuickAnswerResponse {
@@ -280,6 +404,10 @@ export interface QuickAnswerResponse {
 
 export interface KnowledgeSearchResponse {
   hits: SourceRead[];
+}
+
+export interface FAQSearchTestResult extends SourceRead {
+  tag_id?: string | null;
 }
 
 export interface PreviewChunk {
