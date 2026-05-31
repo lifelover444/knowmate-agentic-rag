@@ -15,6 +15,7 @@ from app.main import create_app
 class FakeModelTester:
     def __init__(self, *, embedding_dimension: int | None = None) -> None:
         self.embedding_dimension = embedding_dimension
+        self.rerank_configs = []
 
     def test(self, config):
         detected_dimension = self.embedding_dimension or config.embedding_dimension
@@ -23,6 +24,15 @@ class FakeModelTester:
             "embedding_ok": detected_dimension == config.embedding_dimension,
             "detected_dimension": detected_dimension,
             "message": "连接测试通过" if detected_dimension == config.embedding_dimension else "向量维度不匹配",
+        }
+
+    def test_rerank(self, config):
+        self.rerank_configs.append(config)
+        return {
+            "rerank_ok": True,
+            "message": "重排模型连接测试通过",
+            "top_index": 0,
+            "top_score": 0.99,
         }
 
 
@@ -133,3 +143,23 @@ def test_model_config_test_reports_dimension_mismatch(tmp_path: Path):
     assert payload["chat_ok"] is True
     assert payload["embedding_ok"] is False
     assert payload["detected_dimension"] == 512
+
+
+def test_rerank_model_test_uses_rerank_endpoint_not_embedding(model_client: TestClient):
+    response = model_client.post(
+        "/api/v1/models/test",
+        json={
+            "name": "阿里云百炼 Rerank",
+            "type": "Rerank",
+            "provider": "qwen",
+            "source": "remote",
+            "base_url": "https://dashscope.aliyuncs.com/compatible-api/v1/reranks",
+            "api_key": "sk-test",
+            "model_name": "qwen3-rerank",
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["rerank_ok"] is True
+    assert payload["message"] == "重排模型连接测试通过"

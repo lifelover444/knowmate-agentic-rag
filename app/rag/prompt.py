@@ -1,9 +1,14 @@
-def build_quick_answer_messages(query: str, contexts: list[str]) -> list[dict[str, str]]:
+def build_quick_answer_messages(
+    query: str,
+    contexts: list[str],
+    system_prompt: str | None = None,
+) -> list[dict[str, str]]:
     context_text = "\n\n---\n\n".join(contexts)
     return [
         {
             "role": "system",
-            "content": (
+            "content": system_prompt
+            or (
                 "You are knowmate知友, a precise RAG assistant. Answer only from the provided context. "
                 "If the context is insufficient, say that the knowledge base does not contain enough information."
             ),

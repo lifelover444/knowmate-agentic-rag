@@ -183,6 +183,8 @@ class ModelConfigService:
             return self.tester.test_chat(runtime_config)
         if model_type == "Embedding" and hasattr(self.tester, "test_embedding"):
             return self.tester.test_embedding(runtime_config)
+        if model_type == "Rerank" and hasattr(self.tester, "test_rerank"):
+            return self.tester.test_rerank(runtime_config)
         return self.tester.test(runtime_config)
 
     def build_runtime_config(self, payload: ModelConfigPayload | None = None) -> OpenAICompatibleConfig:

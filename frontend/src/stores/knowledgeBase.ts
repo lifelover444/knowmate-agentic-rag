@@ -48,6 +48,13 @@ export const useKnowledgeBaseStore = defineStore("knowledgeBase", () => {
     return created;
   }
 
+  async function updateKnowledgeBase(kbId: string, payload: Partial<KnowledgeBasePayload>) {
+    const updated = await putJson<KnowledgeBaseRead, Partial<KnowledgeBasePayload>>(`/knowledge-bases/${kbId}`, payload);
+    currentKb.value = updated;
+    await loadKnowledgeBases();
+    return updated;
+  }
+
   async function deleteKnowledgeBase(kbId: string) {
     await deleteRequest(`/knowledge-bases/${kbId}`);
     if (currentKb.value?.id === kbId) currentKb.value = null;
@@ -224,6 +231,7 @@ export const useKnowledgeBaseStore = defineStore("knowledgeBase", () => {
     loadKnowledgeBases,
     loadKnowledgeBase,
     createKnowledgeBase,
+    updateKnowledgeBase,
     deleteKnowledgeBase,
     loadDocuments,
     uploadDocument,

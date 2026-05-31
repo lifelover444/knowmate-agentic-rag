@@ -92,6 +92,14 @@ export function putJson<T, P = unknown>(path: string, payload?: P): Promise<T> {
   });
 }
 
+export function patchJson<T, P = unknown>(path: string, payload?: P): Promise<T> {
+  return request<T>(apiUrl(path), {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload ?? {}),
+  });
+}
+
 export function deleteRequest<T = unknown>(path: string): Promise<T> {
   return request<T>(apiUrl(path), { method: "DELETE" });
 }
@@ -101,4 +109,58 @@ export function postForm<T>(path: string, form: FormData): Promise<T> {
     method: "POST",
     body: form,
   });
+}
+
+export interface SseEvent {
+  event: string;
+  data: Record<string, unknown>;
+}
+
+export async function postSse<P = unknown>(
+  path: string,
+  payload: P,
+  onEvent: (event: SseEvent) => void,
+): Promise<void> {
+  const response = await fetch(apiUrl(path), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload ?? {}),
+  });
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(formatApiError(parseResponsePayload(text), text || `HTTP ${response.status}`));
+  }
+  if (!response.body) return;
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const blocks = buffer.split("\n\n");
+    buffer = blocks.pop() || "";
+    for (const block of blocks) {
+      const parsed = parseSseBlock(block);
+      if (parsed) onEvent(parsed);
+    }
+  }
+  const tail = parseSseBlock(buffer.trim());
+  if (tail) onEvent(tail);
+}
+
+function parseSseBlock(block: string): SseEvent | null {
+  if (!block) return null;
+  let event = "message";
+  let data = "{}";
+  for (const line of block.split("\n")) {
+    if (line.startsWith("event:")) event = line.slice(6).trim();
+    if (line.startsWith("data:")) data = line.slice(5).trim();
+  }
+  try {
+    return { event, data: JSON.parse(data) as Record<string, unknown> };
+  } catch {
+    return { event, data: { error: data } };
+  }
 }

@@ -54,3 +54,24 @@ def test_search_rejects_hybrid_when_one_side_is_disabled(client: TestClient):
 
     assert response.status_code == 400
     assert "混合检索需要同时启用向量检索和关键词检索" in response.text
+
+
+def test_knowledge_base_update_can_enable_rerank_strategy(client: TestClient):
+    kb_id = _create_kb(client)
+
+    update_response = client.put(
+        f"/api/v1/knowledge-bases/{kb_id}",
+        json={
+            "indexing_strategy": {
+                "enable_vector": True,
+                "enable_keyword": True,
+                "enable_parent_child": False,
+                "enable_rerank": True,
+                "enable_wiki": False,
+                "enable_knowledge_graph": False,
+            }
+        },
+    )
+
+    assert update_response.status_code == 200, update_response.text
+    assert update_response.json()["indexing_strategy"]["enable_rerank"] is True

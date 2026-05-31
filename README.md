@@ -2,7 +2,7 @@
 
 knowmate 知友是一个参考 [Tencent/WeKnora](https://github.com/Tencent/WeKnora) 核心思路实现的知识库 RAG 项目。后端技术栈从 WeKnora 的 Go 实现改为 Python / FastAPI；项目不是 Tencent/WeKnora 官方项目。
 
-当前版本为 v0.5，主线仍聚焦 WeKnora-style Quick Q&A。v0.5 在 v0.4 Dashboard 基础上补齐 WeKnora-style Knowledge Base Platform Foundation：任务中心、FAQ 知识库、per-KB indexing strategy、VectorStore 管理与绑定、文档批量管理，以及 manual text / URL 在线导入边界：
+当前版本为 v0.6，主线仍聚焦 WeKnora-style Quick Q&A。v0.6 在 v0.5 Knowledge Base Platform Foundation 基础上，把单轮 RAG 调试台升级为会话化知识库聊天体验：会话列表、多轮消息、流式回答、query rewrite、每轮 sources 和 retrieval trace：
 
 ```text
 模型管理
@@ -18,8 +18,10 @@ knowmate 知友是一个参考 [Tencent/WeKnora](https://github.com/Tencent/WeKn
   -> RRF hybrid merge
   -> optional rerank
   -> parent-child context expansion
+  -> optional query rewrite
   -> chat model 生成 answer
-  -> 返回 answer + sources
+  -> 返回 answer + sources + retrieval trace
+  -> 保存 chat session / messages
 ```
 
 ## 当前进度
@@ -91,15 +93,23 @@ knowmate 知友是一个参考 [Tencent/WeKnora](https://github.com/Tencent/WeKn
   - 文档列表支持状态、文件类型、关键字筛选，并返回 `chunk_count`、`task_status`、`embedding_model_id`、`processed_at` 和失败原因。
   - 新增批量删除、批量重处理、manual text / markdown 导入、轻量 URL HTML title + readable text 导入。
   - 前端新增 VectorStore 管理页、FAQ 管理页、知识库类型/索引策略/VectorStore 选择、任务状态和批量操作入口。
+- v0.6 会话化 Quick Q&A：
+  - 新增 `chat_sessions` / `chat_messages` 表、repository、schemas 和 Alembic migration。
+  - 新增会话 API，支持列表、详情、创建、重命名、删除、pin/unpin 和消息列表。
+  - 新增 `POST /api/v1/quick-answer/stream` SSE 接口，保留旧 `/api/v1/quick-answer` 非流式行为。
+  - 流式回答继续复用 `KnowledgeSearchService` / retriever pipeline，不另写检索链路。
+  - assistant message 保存 `sources_json`、`retrieval_trace_json` 和非敏感 `model_config_json`。
+  - query rewrite 作为可选能力：有历史消息且开启时复用 KB 绑定 QA 模型改写追问，trace 展示 original / rewritten query 和失败/跳过状态。
+  - 前端 `/#/chat` 升级为会话化聊天工作台：左侧会话栏、流式消息、每条 assistant 消息 sources/trace 折叠面板、基础会话设置和保留的检索调试入口。
 - 自动化测试：覆盖多模型 CRUD、凭据加密、知识库模型校验、重处理、检索配置、hybrid/RRF/rerank/parent-child retrieval、knowledge-search API、前端关键逻辑、API 和文档处理 payload。
-- v0.5 质量验证当前为 `66 passed`，详见下方“验证命令”和 [CHANGELOG.md](CHANGELOG.md)。
+- v0.6 质量验证详见下方“验证命令”和 [CHANGELOG.md](CHANGELOG.md)。
 
 暂未实现：
 
 - 登录、RBAC、多租户隔离。
 - OCR / MinerU / 图片类文件解析。
 - 真正 BM25 引擎、pg_jieba、Elasticsearch/OpenSearch、ParadeDB/pg_search。
-- GraphRAG、多维索引、query rewrite、多轮会话、流式回答。
+- GraphRAG、多维索引、Agent Mode、Wiki Mode。
 - WeKnoraCloud、Ollama 拉取、VLM、ASR。
 
 ## 技术栈
@@ -216,8 +226,9 @@ Vite 会把 `/api` 和 `/health` 代理到 `http://127.0.0.1:8000`。
 7. 进入知识库的文档管理页，上传 `.txt/.md/.pdf/.docx/.csv/.json/.xlsx` 文档。
 8. 等待 Worker 处理到“解析完成”，页面可在 drawer 中查看 chunks。
 9. 切换向量模型、维度或切分参数后，点击“重新处理”或“重建知识库”重建向量。
-10. 进入 `/#/chat`，在“知识搜索”里调试 sources，不调用 LLM。
-11. 在“快速问答”里提问，返回 Markdown 回答和来源依据。
+10. 进入 `/#/chat`，选择知识库后新建会话，或从左侧会话列表继续历史会话。
+11. 在输入区提问，页面会流式追加 assistant 消息；每条回答可展开来源依据和 retrieval trace。
+12. 需要调试召回时，展开“检索调试”，只返回 sources，不调用 LLM。
 
 ## 核心 API
 
@@ -262,6 +273,13 @@ Vite 会把 `/api` 和 `/health` 代理到 `http://127.0.0.1:8000`。
 | `POST` | `/api/v1/documents/{document_id}/reprocess` | 重处理单个文档 |
 | `POST` | `/api/v1/knowledge-search` | 知识搜索，只返回检索 hits，不调用 LLM |
 | `POST` | `/api/v1/quick-answer` | 快速问答 |
+| `POST` | `/api/v1/quick-answer/stream` | 流式快速问答，返回 SSE events 并保存会话消息 |
+| `GET` | `/api/v1/chat-sessions` | 查询会话列表 |
+| `POST` | `/api/v1/chat-sessions` | 创建会话 |
+| `GET` | `/api/v1/chat-sessions/{session_id}` | 查询会话详情和消息 |
+| `PATCH` | `/api/v1/chat-sessions/{session_id}` | 更新会话标题、置顶状态和设置 |
+| `DELETE` | `/api/v1/chat-sessions/{session_id}` | 软删除会话 |
+| `GET` | `/api/v1/chat-sessions/{session_id}/messages` | 查询会话消息 |
 | `GET` | `/api/v1/tasks` | 查询任务中心 |
 | `GET` | `/api/v1/tasks/{task_id}` | 查询单个任务 |
 | `POST` | `/api/v1/tasks/{task_id}/retry` | 重试失败任务 |
@@ -301,6 +319,53 @@ Vite 会把 `/api` 和 `/health` 代理到 `http://127.0.0.1:8000`。
   "task_status": "queued"
 }
 ```
+
+## v0.6 Schema 变化
+
+新增 `chat_sessions`：
+
+```json
+{
+  "knowledge_base_id": "KB ID",
+  "title": "会话标题",
+  "is_pinned": false,
+  "settings": {
+    "mode": "hybrid",
+    "top_k": 10,
+    "enable_rerank": false,
+    "enable_query_rewrite": false
+  }
+}
+```
+
+新增 `chat_messages`，assistant 消息会保存：
+
+```json
+{
+  "role": "assistant",
+  "content": "回答正文",
+  "original_query": "用户原问题",
+  "rewritten_query": "改写后的检索 query",
+  "sources": [],
+  "retrieval_trace": {
+    "original_query": "用户原问题",
+    "rewritten_query": "改写后的检索 query",
+    "rewrite_enabled": true,
+    "rewrite_failed": false,
+    "rewrite_skipped": false,
+    "retrieval_mode": "hybrid",
+    "top_k": 10,
+    "enable_rerank": false,
+    "hit_count": 3
+  },
+  "model_config": {
+    "qa_model_id": "KnowledgeQA 模型 ID",
+    "embedding_model_id": "Embedding 模型 ID"
+  }
+}
+```
+
+`model_config` 只保存模型 id、name、type、provider、model_name 等非敏感信息，不保存 API Key。
 
 ## v0.3 / v0.3.1 Schema 变化
 
@@ -406,17 +471,15 @@ npm --prefix frontend run build
 
 最近一次本地验证结果：
 
-- `python -m pytest -q`：`66 passed`
+- `python -m pytest -q`：`76 passed`
 - `ruff check .`：通过
 - `python -m compileall app tests`：通过
 - `npm --prefix frontend run build`：通过
-- v0.4 前端构建和本地启动自测：
+- v0.6 前端构建和本地启动烟测：
   - `npm --prefix frontend run build`：通过。
-  - Docker Compose `postgres / redis / qdrant` healthy。
-  - `alembic upgrade head` 已升级到 `0005_v03_keyword_retrieval`。
-  - API `/health` 返回 `{"status":"ok"}`。
-  - Celery worker 已连接 Redis 并 ready。
-  - Vite 工作台可访问 `http://127.0.0.1:5173`。
+  - Vite dev server `http://127.0.0.1:5174/#/chat` 可渲染 Chat 页面。
+  - 浏览器烟测确认“新建会话 / Query rewrite / 发送 / 检索调试”等关键控件可见。
+  - 本次烟测未启动后端服务，页面显示“后端未连接”属于预期状态。
 
 ## 开发备注
 

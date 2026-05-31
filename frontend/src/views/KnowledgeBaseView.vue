@@ -14,9 +14,25 @@ const modelStore = useModelsStore();
 const retrieval = useRetrievalStore();
 const vectorStore = useVectorStoresStore();
 const createVisible = ref(false);
+const editVisible = ref(false);
 const creating = ref(false);
+const editing = ref(false);
+const editingKbId = ref("");
 
 const createForm = reactive({
+  name: "",
+  description: "",
+  kb_type: "document",
+  embedding_model_id: "",
+  summary_model_id: "",
+  vector_store_id: "",
+  enable_vector: true,
+  enable_keyword: true,
+  enable_parent_child: false,
+  enable_rerank: false,
+});
+
+const editForm = reactive({
   name: "",
   description: "",
   kb_type: "document",
@@ -71,6 +87,50 @@ async function submitCreate() {
     Message.error(formatApiError(error instanceof Error ? error.message : error));
   } finally {
     creating.value = false;
+  }
+}
+
+function openEditModal(record: any) {
+  const strategy = record.indexing_strategy || {};
+  editingKbId.value = record.id;
+  editForm.name = record.name;
+  editForm.description = record.description || "";
+  editForm.kb_type = record.kb_type || "document";
+  editForm.embedding_model_id = record.embedding_model_id;
+  editForm.summary_model_id = record.summary_model_id;
+  editForm.vector_store_id = record.vector_store_id || "";
+  editForm.enable_vector = strategy.enable_vector !== false;
+  editForm.enable_keyword = strategy.enable_keyword !== false;
+  editForm.enable_parent_child = Boolean(strategy.enable_parent_child);
+  editForm.enable_rerank = Boolean(strategy.enable_rerank);
+  editVisible.value = true;
+}
+
+async function submitEdit() {
+  editing.value = true;
+  try {
+    await kbStore.updateKnowledgeBase(editingKbId.value, {
+      name: editForm.name,
+      description: editForm.description,
+      kb_type: editForm.kb_type,
+      embedding_model_id: editForm.embedding_model_id,
+      summary_model_id: editForm.summary_model_id,
+      vector_store_id: editForm.vector_store_id || null,
+      indexing_strategy: {
+        enable_vector: editForm.enable_vector,
+        enable_keyword: editForm.enable_keyword,
+        enable_parent_child: editForm.enable_parent_child,
+        enable_rerank: editForm.enable_rerank,
+        enable_wiki: false,
+        enable_knowledge_graph: false,
+      },
+    });
+    editVisible.value = false;
+    Message.success("知识库配置已更新");
+  } catch (error) {
+    Message.error(formatApiError(error instanceof Error ? error.message : error));
+  } finally {
+    editing.value = false;
   }
 }
 
@@ -134,6 +194,9 @@ onMounted(() => {
                 </a-button>
                 <a-button size="mini" @click="router.push(`/knowledge-bases/${record.id}/faqs`)">
                   FAQ
+                </a-button>
+                <a-button size="mini" data-testid="edit-kb-config" @click="openEditModal(record)">
+                  编辑配置
                 </a-button>
                 <a-popconfirm content="确认删除这个知识库？" type="warning" @ok="deleteKb(record.id)">
                   <a-button size="mini" status="danger">删除</a-button>
@@ -238,6 +301,65 @@ onMounted(() => {
           </a-form-item>
         </div>
         <a-alert type="info" content="创建 payload 将包含 chunking_config 与 parser_engine_rules。" />
+      </div>
+    </a-modal>
+
+    <a-modal v-model:visible="editVisible" title="编辑知识库配置" :confirm-loading="editing" @ok="submitEdit">
+      <div class="modal-form">
+        <a-form-item label="名称">
+          <a-input v-model="editForm.name" />
+        </a-form-item>
+        <a-form-item label="描述">
+          <a-textarea v-model="editForm.description" :auto-size="{ minRows: 3, maxRows: 5 }" />
+        </a-form-item>
+        <a-form-item label="知识库类型">
+          <a-radio-group v-model="editForm.kb_type" type="button">
+            <a-radio value="document">文档知识库</a-radio>
+            <a-radio value="faq">FAQ 知识库</a-radio>
+          </a-radio-group>
+        </a-form-item>
+        <a-form-item label="Embedding 模型">
+          <a-select v-model="editForm.embedding_model_id">
+            <a-option v-for="model in modelStore.embeddingModels" :key="model.id" :value="model.id">
+              {{ model.name }} · {{ model.model_name }}
+            </a-option>
+          </a-select>
+        </a-form-item>
+        <a-form-item label="QA 模型">
+          <a-select v-model="editForm.summary_model_id">
+            <a-option v-for="model in modelStore.chatModels" :key="model.id" :value="model.id">
+              {{ model.name }} · {{ model.model_name }}
+            </a-option>
+          </a-select>
+        </a-form-item>
+        <a-form-item label="VectorStore">
+          <a-select v-model="editForm.vector_store_id" allow-clear placeholder="使用默认 Qdrant">
+            <a-option v-for="store in vectorStore.vectorStores" :key="store.id" :value="store.id">
+              {{ store.name }} · {{ store.provider }}{{ store.is_default ? " · 默认" : "" }}
+            </a-option>
+          </a-select>
+        </a-form-item>
+        <a-divider>索引策略</a-divider>
+        <div class="form-grid form-grid--compact">
+          <a-form-item label="vector">
+            <a-switch v-model="editForm.enable_vector" />
+          </a-form-item>
+          <a-form-item label="keyword">
+            <a-switch v-model="editForm.enable_keyword" />
+          </a-form-item>
+          <a-form-item label="parent-child">
+            <a-switch v-model="editForm.enable_parent_child" />
+          </a-form-item>
+          <a-form-item label="rerank">
+            <a-switch v-model="editForm.enable_rerank" />
+          </a-form-item>
+          <a-form-item label="Wiki">
+            <a-switch :model-value="false" disabled />
+          </a-form-item>
+          <a-form-item label="Knowledge Graph">
+            <a-switch :model-value="false" disabled />
+          </a-form-item>
+        </div>
       </div>
     </a-modal>
   </main>

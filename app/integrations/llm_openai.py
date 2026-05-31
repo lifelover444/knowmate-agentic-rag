@@ -67,7 +67,7 @@ class OpenAIChatModel:
         self.client = None if self.local_fallback else OpenAI(api_key=api_key, base_url=base_url)
         self.model = config.chat_model
 
-    def complete(self, messages: list[dict[str, str]]) -> str:
+    def complete(self, messages: list[dict[str, str]], temperature: float = 0.2) -> str:
         if self.local_fallback:
             return self._local_complete(messages)
         if self.client is None:
@@ -75,9 +75,26 @@ class OpenAIChatModel:
         response = self.client.chat.completions.create(
             model=self.model,
             messages=messages,
-            temperature=0.2,
+            temperature=temperature,
         )
         return response.choices[0].message.content or ""
+
+    def stream_complete(self, messages: list[dict[str, str]], temperature: float = 0.2):
+        if self.local_fallback:
+            yield self._local_complete(messages)
+            return
+        if self.client is None:
+            raise RuntimeError("OpenAI client is not configured")
+        stream = self.client.chat.completions.create(
+            model=self.model,
+            messages=messages,
+            temperature=temperature,
+            stream=True,
+        )
+        for chunk in stream:
+            token = chunk.choices[0].delta.content
+            if token:
+                yield token
 
     def _local_complete(self, messages: list[dict[str, str]]) -> str:
         user_content = messages[-1]["content"] if messages else ""
@@ -109,6 +126,30 @@ class OpenAICompatibleModelTester:
             "detected_dimension": embedding_result.get("detected_dimension"),
             "message": message,
         }
+
+    def test_rerank(self, config: OpenAICompatibleConfig) -> dict:
+        try:
+            from app.integrations.reranker import RerankerClient
+
+            results = RerankerClient(config).rerank(
+                query="什么是文本排序模型",
+                documents=[
+                    "文本排序模型用于根据查询相关性对候选文档排序。",
+                    "量子计算是计算科学的前沿领域。",
+                ],
+                top_n=1,
+            )
+            if not results:
+                return {"rerank_ok": False, "message": "重排模型测试失败：未返回排序结果"}
+            top_index, top_score = results[0]
+            return {
+                "rerank_ok": True,
+                "top_index": top_index,
+                "top_score": top_score,
+                "message": "重排模型连接测试通过",
+            }
+        except Exception as exc:
+            return {"rerank_ok": False, "message": f"重排模型测试失败: {exc}"}
 
     def test_chat(self, config: OpenAICompatibleConfig) -> dict:
         chat_ok = False

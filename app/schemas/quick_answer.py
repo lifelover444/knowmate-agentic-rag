@@ -9,6 +9,14 @@ class QuickAnswerRequest(BaseModel):
     enable_rerank: bool | None = None
 
 
+class QuickAnswerStreamRequest(QuickAnswerRequest):
+    session_id: str | None = None
+    stream: bool | None = True
+    enable_query_rewrite: bool | None = None
+    temperature: float | None = Field(default=None, ge=0, le=2)
+    system_prompt: str | None = None
+
+
 class SourceRead(BaseModel):
     document_id: str
     knowledge_base_id: str

@@ -1,5 +1,47 @@
 # Changelog
 
+## v0.6
+
+v0.6 开发 “会话化 Quick Q&A”，参考 WeKnora 的 session/chat/streaming 方向，但不追 Tencent/WeKnora 官方 v0.6.0 的 RBAC、多工作区、CLI 和 fan-out 全量范围。主线是把 knowmate v0.5 的单轮 Quick Q&A 调试台升级为可持续使用的知识库聊天体验。
+
+### Added
+
+- 新增 `chat_sessions` 和 `chat_messages` 表及 Alembic migration `0009_v06_chat_sessions`。
+- 新增 `app/db/repositories/chat.py`、`app/schemas/chat.py` 和 `app/api/v1/chat_sessions.py`。
+- 新增会话 API：
+  - `GET /api/v1/chat-sessions`
+  - `POST /api/v1/chat-sessions`
+  - `GET /api/v1/chat-sessions/{session_id}`
+  - `PATCH /api/v1/chat-sessions/{session_id}`
+  - `DELETE /api/v1/chat-sessions/{session_id}`
+  - `GET /api/v1/chat-sessions/{session_id}/messages`
+- 新增 `POST /api/v1/quick-answer/stream` SSE 接口，事件包含 session、user_message、rewrite、retrieval、token、final、done。
+- assistant 消息保存 sources、retrieval trace 和非敏感 model config 快照。
+- 新增可选 query rewrite：有历史消息且开启时复用 KB 绑定 QA 模型改写追问，trace 标注 original query、rewritten query、rewrite_failed 和 rewrite_skipped。
+- OpenAI-compatible chat client 新增 streaming completion 边界。
+- 前端 `/#/chat` 改为会话化聊天工作台：左侧会话栏、流式消息、会话重命名/删除/pin、query rewrite 开关、每条 assistant 消息 sources/trace 展开面板。
+- 保留 knowledge-search 调试入口。
+
+### Changed
+
+- 旧 `POST /api/v1/quick-answer` 保持非流式兼容，但内部复用新的 answer preparation 逻辑。
+- Markdown 渲染继续禁用原始 HTML 直通。
+- stream quick-answer 继续复用 `KnowledgeSearchService` / retriever pipeline，不新增独立检索链路。
+
+### Not Included
+
+- 不实现完整登录/RBAC/多租户、Agent Mode、Wiki Mode、MCP、IM、小程序、外部数据源同步、OCR/MinerU/VLM/ASR、多 VectorStore fan-out 或真正 BM25。
+
+### Verification
+
+- `python -m pytest -q`：`76 passed`
+- `python -m pytest tests/test_v06_chat_sessions.py tests/test_v06_quick_answer_stream.py tests/test_frontend_v06_chat.py -q`：`6 passed`
+- `python -m pytest tests/test_quick_answer.py tests/test_v03_knowledge_search.py tests/test_model_config_required.py -q`：`8 passed`
+- `ruff check .`：通过
+- `python -m compileall app tests`：通过
+- `npm --prefix frontend run build`：通过
+- Vite dev server `http://127.0.0.1:5174/#/chat` 浏览器烟测：Chat 页面关键控件可见；未启动后端时显示“后端未连接”。
+
 ## v0.5
 
 v0.5 开发 “WeKnora-style Knowledge Base Platform Foundation”，在 v0.4 Dashboard 和 v0.3 Quick Q&A 主链路基础上补齐任务中心、FAQ 知识库、per-KB indexing strategy、VectorStore 管理与绑定、文档批量管理，以及 manual text / URL 在线导入边界。

@@ -7,12 +7,16 @@ const qwenPresets = {
     baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
     chatModel: "qwen-plus",
     embeddingModel: "text-embedding-v4",
+    rerankBaseUrl: "https://dashscope.aliyuncs.com/compatible-api/v1/reranks",
+    rerankModel: "qwen3-rerank",
     embeddingDimension: 1024,
   },
   intl: {
     baseUrl: "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
     chatModel: "qwen-plus",
     embeddingModel: "text-embedding-v4",
+    rerankBaseUrl: "https://dashscope-intl.aliyuncs.com/compatible-api/v1/reranks",
+    rerankModel: "qwen3-rerank",
     embeddingDimension: 1024,
   },
 };
@@ -85,9 +89,19 @@ function applyPreset() {
   localError.value = "";
   if (currentProvider.value === "qwen") {
     const preset = qwenPresets[region.value];
-    configName.value = props.modelType === "Embedding" ? "阿里云百炼 Qwen Embedding" : "阿里云百炼 Qwen QA";
-    baseUrl.value = preset.baseUrl;
-    modelName.value = props.modelType === "Embedding" ? preset.embeddingModel : preset.chatModel;
+    if (props.modelType === "Embedding") {
+      configName.value = "阿里云百炼 Qwen Embedding";
+      baseUrl.value = preset.baseUrl;
+      modelName.value = preset.embeddingModel;
+    } else if (props.modelType === "Rerank") {
+      configName.value = "阿里云百炼 Qwen Rerank";
+      baseUrl.value = preset.rerankBaseUrl;
+      modelName.value = preset.rerankModel;
+    } else {
+      configName.value = "阿里云百炼 Qwen QA";
+      baseUrl.value = preset.baseUrl;
+      modelName.value = preset.chatModel;
+    }
     embeddingDimension.value = preset.embeddingDimension;
   } else if (currentProvider.value === "deepseek") {
     configName.value = "DeepSeek QA";
@@ -149,7 +163,7 @@ function handleTest() {
   const payload: ModelTestPayload = {
     ...buildPayload(Boolean(apiKey.value.trim())),
     model_id: modelId,
-    embedding_dimension: requiresDimension.value ? Number(embeddingDimension.value) : 1,
+    embedding_dimension: requiresDimension.value ? Number(embeddingDimension.value) : undefined,
   };
   emit("test", payload);
 }

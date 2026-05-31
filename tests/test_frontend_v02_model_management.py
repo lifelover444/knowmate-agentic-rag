@@ -37,3 +37,21 @@ def test_frontend_supports_separate_qa_and_embedding_model_credentials():
     assert "selectedEmbeddingModelId" in app
     assert "model_id" in app
     assert "deepseek" in app
+
+
+def test_frontend_uses_qwen_rerank_preset_instead_of_qwen_plus():
+    app = frontend_source()
+
+    assert "rerankModel" in app
+    assert "qwen3-rerank" in app
+    assert "compatible-api/v1/reranks" in app
+
+
+def test_frontend_can_edit_existing_kb_rerank_strategy_and_warn_chat():
+    app = frontend_source()
+
+    assert "updateKnowledgeBase" in app
+    assert "edit-kb-config" in app
+    assert "submitEdit" in app
+    assert "当前知识库未启用重排" in app
+    assert "selectedKbAllowsRerank" in app

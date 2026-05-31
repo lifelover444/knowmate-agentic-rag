@@ -224,6 +224,55 @@ export interface SourceRead {
   context_content?: string | null;
 }
 
+export interface ChatSettings {
+  mode?: string | null;
+  top_k?: number | null;
+  enable_rerank?: boolean | null;
+  temperature?: number | null;
+  system_prompt?: string | null;
+  enable_query_rewrite?: boolean;
+}
+
+export interface ChatMessageRead {
+  id: string;
+  tenant_id: number;
+  session_id: string;
+  role: "user" | "assistant" | "system";
+  content: string;
+  original_query?: string | null;
+  rewritten_query?: string | null;
+  sources: SourceRead[];
+  retrieval_trace?: Record<string, unknown> | null;
+  model_config?: Record<string, unknown> | null;
+  status: string;
+  error_message?: string | null;
+  created_at: string;
+}
+
+export interface ChatSessionRead {
+  id: string;
+  tenant_id: number;
+  knowledge_base_id: string;
+  title: string;
+  is_pinned: boolean;
+  settings: ChatSettings | Record<string, unknown>;
+  last_message_at: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ChatSessionDetail extends ChatSessionRead {
+  messages: ChatMessageRead[];
+}
+
+export interface ChatSessionListResponse {
+  items: ChatSessionRead[];
+}
+
+export interface ChatMessageListResponse {
+  items: ChatMessageRead[];
+}
+
 export interface QuickAnswerResponse {
   answer: string;
   sources: SourceRead[];
