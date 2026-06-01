@@ -34,6 +34,7 @@ class KnowledgeBase(Base):
     kb_type: Mapped[str] = mapped_column(String(32), nullable=False, default="document", index=True)
     chunking_config: Mapped[dict] = mapped_column(JSON, nullable=False)
     parser_engine_rules: Mapped[list | None] = mapped_column(JSON)
+    faq_config: Mapped[dict | None] = mapped_column(JSON)
     indexing_strategy: Mapped[dict | None] = mapped_column(JSON)
     vector_store_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     embedding_model_id: Mapped[str] = mapped_column(String(128), nullable=False)
@@ -44,6 +45,19 @@ class KnowledgeBase(Base):
 
     documents: Mapped[list["Knowledge"]] = relationship(back_populates="knowledge_base")
     chunks: Mapped[list["Chunk"]] = relationship(back_populates="knowledge_base")
+
+
+class KnowledgeBasePin(Base):
+    __tablename__ = "knowledge_base_pins"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "knowledge_base_id", name="uq_kb_pins_tenant_kb"),
+        Index("ix_kb_pins_tenant_pinned", "tenant_id", "pinned_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    tenant_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    knowledge_base_id: Mapped[str] = mapped_column(ForeignKey("knowledge_bases.id"), nullable=False, index=True)
+    pinned_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
 
 
 class KnowledgeTag(Base):
@@ -59,6 +73,34 @@ class KnowledgeTag(Base):
     name: Mapped[str] = mapped_column(String(128), nullable=False)
     color: Mapped[str | None] = mapped_column(String(32))
     sort_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+
+class KnowledgeProcessingSpan(Base):
+    __tablename__ = "knowledge_processing_spans"
+    __table_args__ = (
+        UniqueConstraint("knowledge_id", "attempt", "span_id", name="uq_processing_spans_knowledge_attempt_span"),
+        Index("ix_processing_spans_knowledge_attempt", "knowledge_id", "attempt"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    tenant_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    knowledge_id: Mapped[str] = mapped_column(ForeignKey("knowledges.id"), nullable=False, index=True)
+    attempt: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    span_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    parent_span_id: Mapped[str | None] = mapped_column(String(64))
+    name: Mapped[str] = mapped_column(String(64), nullable=False)
+    kind: Mapped[str] = mapped_column(String(16), nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False)
+    input_json: Mapped[dict | None] = mapped_column("input", JSON)
+    output_json: Mapped[dict | None] = mapped_column("output", JSON)
+    metadata_json: Mapped[dict | None] = mapped_column("metadata", JSON)
+    error_code: Mapped[str | None] = mapped_column(String(64))
+    error_message: Mapped[str | None] = mapped_column(Text)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    duration_ms: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
 
@@ -198,6 +240,7 @@ class FAQEntry(Base):
     knowledge_base_id: Mapped[str] = mapped_column(ForeignKey("knowledge_bases.id"), nullable=False, index=True)
     knowledge_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
     question: Mapped[str] = mapped_column(Text, nullable=False)
+    similar_questions: Mapped[list | None] = mapped_column(JSON)
     answer: Mapped[str] = mapped_column(Text, nullable=False)
     faq_metadata: Mapped[dict | None] = mapped_column("metadata", JSON)
     tag_id: Mapped[str | None] = mapped_column(String(36), index=True)

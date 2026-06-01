@@ -29,6 +29,26 @@ class IndexingStrategySchema(BaseModel):
     enable_knowledge_graph: bool = False
 
 
+class FAQConfigSchema(BaseModel):
+    index_mode: str = Field(default="question_answer")
+    question_index_mode: str = Field(default="combined")
+
+
+class KnowledgeBaseCapabilities(BaseModel):
+    document: bool = False
+    faq: bool = False
+    vector: bool = False
+    keyword: bool = False
+    parent_child: bool = False
+    rerank: bool = False
+    wiki: bool = False
+    graph: bool = False
+
+
+class KnowledgeBasePinUpdate(BaseModel):
+    pinned: bool
+
+
 class KnowledgeBaseCreate(BaseModel):
     name: str = Field(min_length=1, max_length=255)
     description: str | None = None
@@ -37,6 +57,7 @@ class KnowledgeBaseCreate(BaseModel):
     summary_model_id: str | None = Field(default=None, max_length=128)
     chunking_config: ChunkingConfigSchema | None = None
     parser_engine_rules: list[ParserEngineRuleSchema] | None = None
+    faq_config: FAQConfigSchema | None = None
     indexing_strategy: IndexingStrategySchema | None = None
     vector_store_id: str | None = Field(default=None, max_length=36)
 
@@ -49,6 +70,7 @@ class KnowledgeBaseUpdate(BaseModel):
     summary_model_id: str | None = Field(default=None, max_length=128)
     chunking_config: ChunkingConfigSchema | None = None
     parser_engine_rules: list[ParserEngineRuleSchema] | None = None
+    faq_config: FAQConfigSchema | None = None
     indexing_strategy: IndexingStrategySchema | None = None
     vector_store_id: str | None = Field(default=None, max_length=36)
 
@@ -61,6 +83,7 @@ class KnowledgeBaseRead(BaseModel):
     kb_type: str = "document"
     chunking_config: dict
     parser_engine_rules: list | None = None
+    faq_config: dict | None = None
     indexing_strategy: dict
     vector_store_id: str | None = None
     embedding_model_id: str
@@ -68,6 +91,9 @@ class KnowledgeBaseRead(BaseModel):
     document_count: int = 0
     chunk_count: int = 0
     processing_count: int = 0
+    capabilities: KnowledgeBaseCapabilities
+    is_pinned: bool = False
+    pinned_at: datetime | None = None
     created_at: datetime
     updated_at: datetime
 

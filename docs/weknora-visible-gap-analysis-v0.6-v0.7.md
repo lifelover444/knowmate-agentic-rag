@@ -2,7 +2,7 @@
 
 Date: 2026-05-30
 
-Scope: non-click analysis based on Tencent/WeKnora public README, changelog, DeepWiki source index, and the local knowmate README / CHANGELOG / frontend routes. The first draft used the v0.5 baseline; the current baseline was updated to knowmate v0.61 on 2026-05-31. This is not a live UI test report because Chrome automation is blocked by policy on the WeKnora production domain.
+Scope: non-click analysis based on Tencent/WeKnora public README, changelog, DeepWiki source index, and the local knowmate README / CHANGELOG / frontend routes. The first draft used the v0.5 baseline; the baseline was updated to knowmate v0.61 on 2026-05-31 and supplemented with knowmate v0.7 P0 completion status on 2026-06-01. This is not a live UI test report because Chrome automation is blocked by policy on the WeKnora production domain.
 
 Primary sources:
 
@@ -17,7 +17,19 @@ Primary sources:
 
 ## Executive Summary
 
-knowmate v0.61 covers the core Quick Q&A foundation plus conversation-ready chat, tags, document preview, FAQ import/export, batch feedback, and a settings-center shell. The largest remaining gaps are no longer basic RAG ingestion, but WeKnora's broader Agent, Wiki, workspace/RBAC, advanced parsing, external import, multi-client, and enterprise observability surfaces.
+knowmate v0.7 covers the core Quick Q&A foundation plus conversation-ready chat, tags, document preview, FAQ import/export, batch feedback, settings-center shell, KB capabilities / pin, integrated KB detail settings, multi-scope retrieval, Chat mention, document-processing timeline, FAQ similar questions, and FAQ indexing modes. The largest remaining gaps are no longer basic RAG ingestion, but WeKnora's broader Agent, Wiki, workspace/RBAC, advanced parsing, external import, multi-client, and enterprise observability surfaces.
+
+## v0.7 Update
+
+As of 2026-06-01, TASK-010 through TASK-019 are consolidated as knowmate `v0.7`. v0.7 still avoids the larger Agent/Wiki/RBAC scope and delivers the original v0.7 P0 Quick Q&A platformization items:
+
+- KB capabilities and pinning.
+- Integrated KB detail page and post-create settings editing.
+- Multi-KB / file-scope retrieval and Chat mention scope.
+- Document-processing parse/chunk/embed/upsert/finalize timeline.
+- FAQ similar questions, FAQ indexing modes, and matched-question display.
+
+Therefore, the original v0.7 P0 recommendations in this document are now delivered. Upload queue, stop generation, automatic title generation, document download/cancel/move, retrieval trace deepening, command palette, real parser/storage status, attachment context, and RBAC-lite move to v0.71 or later candidates.
 
 ## v0.61 Update
 

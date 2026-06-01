@@ -42,6 +42,7 @@ def to_chat_message_read(message: ChatMessage) -> ChatMessageRead:
         sources=[SourceRead.model_validate(source) for source in (message.sources_json or [])],
         retrieval_trace=message.retrieval_trace_json,
         model_config_info=message.model_config_json,
+        mentioned_items=(message.model_config_json or {}).get("mentioned_items") or [],
         status=message.status,
         error_message=message.error_message,
         created_at=message.created_at,
@@ -135,7 +136,12 @@ class ChatService:
 
         return questions
 
-    def create_user_message(self, session: ChatSession, content: str) -> ChatMessage:
+    def create_user_message(
+        self,
+        session: ChatSession,
+        content: str,
+        mentioned_items: list[dict] | None = None,
+    ) -> ChatMessage:
         now = datetime.now(UTC)
         session.last_message_at = now
         session.updated_at = now
@@ -147,6 +153,7 @@ class ChatService:
                 role="user",
                 content=content,
                 original_query=content,
+                model_config_json={"mentioned_items": mentioned_items or []},
                 status="completed",
                 created_at=now,
             )

@@ -7,13 +7,15 @@ import SourceCard from "../components/SourceCard.vue";
 import { useChatStore } from "../stores/chat";
 import { useKnowledgeBaseStore } from "../stores/knowledgeBase";
 import { useRetrievalStore } from "../stores/retrieval";
-import type { ChatMessageRead, ChatSessionRead } from "../types/api";
+import type { ChatMessageRead, ChatSessionRead, MentionedItem } from "../types/api";
 import { formatApiError } from "../utils/api";
 
 const chat = useChatStore();
 const kbStore = useKnowledgeBaseStore();
 const retrieval = useRetrievalStore();
 const selectedKbId = ref("");
+const selectedMentionKbIds = ref<string[]>([]);
+const selectedMentionDocumentIds = ref<string[]>([]);
 const enableQueryRewrite = ref(false);
 const renameVisible = ref(false);
 const renameTitle = ref("");
@@ -32,6 +34,29 @@ const md = new MarkdownIt({
 });
 
 const selectedKb = computed(() => kbStore.knowledgeBases.find((item) => item.id === selectedKbId.value));
+const mentionedItems = computed<MentionedItem[]>(() => [
+  ...selectedMentionKbIds.value
+    .map((id) => kbStore.knowledgeBases.find((kb) => kb.id === id))
+    .filter(Boolean)
+    .map((kb) => ({
+      id: kb!.id,
+      name: kb!.name,
+      type: "kb",
+      kb_type: kb!.kb_type,
+    })),
+  ...selectedMentionDocumentIds.value
+    .map((id) => kbStore.documents.find((document) => document.id === id))
+    .filter(Boolean)
+    .map((document) => ({
+      id: document!.id,
+      name: document!.title,
+      type: "file",
+    })),
+]);
+const effectiveKnowledgeBaseIds = computed(() => {
+  // 没有选择 scope 时保留当前单 KB 默认行为。
+  return selectedMentionKbIds.value.length ? selectedMentionKbIds.value : selectedKbId.value ? [selectedKbId.value] : [];
+});
 const selectedKbAllowsRerank = computed(() => {
   const strategy = selectedKb.value?.indexing_strategy as Record<string, unknown> | undefined;
   return Boolean(strategy?.enable_rerank);
@@ -49,11 +74,19 @@ function shortTime(value: string): string {
 function requestParams() {
   return {
     knowledge_base_id: selectedKbId.value,
+    knowledge_base_ids: effectiveKnowledgeBaseIds.value,
+    knowledge_ids: selectedMentionDocumentIds.value,
+    mentioned_items: mentionedItems.value,
     top_k: Number(retrieval.retrievalRerankTopK || 10),
     mode: retrieval.retrievalMode,
     enable_rerank: retrieval.retrievalEnableRerank,
     enable_query_rewrite: enableQueryRewrite.value,
   };
+}
+
+function clearMentionScope() {
+  selectedMentionKbIds.value = [];
+  selectedMentionDocumentIds.value = [];
 }
 
 async function newSession() {
@@ -191,6 +224,12 @@ onMounted(() => {
 });
 
 watch(selectedKbId, (kbId) => {
+  selectedMentionDocumentIds.value = [];
+  if (kbId) {
+    kbStore.loadDocuments(kbId).catch((error) => {
+      Message.error(`选择范围加载失败：${formatApiError(error instanceof Error ? error.message : error)}`);
+    });
+  }
   if (!chat.currentSession || !chat.messages.length) {
     chat.loadRecommendedQuestions(kbId).catch((error) => {
       Message.error(formatApiError(error instanceof Error ? error.message : error));
@@ -277,6 +316,39 @@ watch(selectedKbId, (kbId) => {
           content="当前知识库未启用重排。请到知识库列表点击“编辑配置”，打开该知识库的 rerank 索引策略。"
           show-icon
         />
+        <!-- MentionSelector: knowmate 当前用显式选择器复刻 WeKnora @ KB/file scope。 -->
+        <section class="mention-scope-panel">
+          <div class="section-heading">
+            <div>
+              <h2>引用范围</h2>
+              <p>选择知识库或当前知识库下的文件，发送时提交 knowledge_base_ids、knowledge_ids 和 mentioned_items。</p>
+            </div>
+            <a-button size="small" @click="clearMentionScope">清除范围</a-button>
+          </div>
+          <div class="mention-scope-controls">
+            <a-select v-model="selectedMentionKbIds" multiple allow-clear placeholder="选择 KB scope">
+              <a-option v-for="kb in kbStore.knowledgeBases" :key="kb.id" :value="kb.id">
+                {{ kb.name }} · {{ kb.kb_type === "faq" ? "FAQ" : "文档" }}
+              </a-option>
+            </a-select>
+            <a-select v-model="selectedMentionDocumentIds" multiple allow-clear placeholder="选择当前 KB 文件">
+              <a-option v-for="document in kbStore.documents" :key="document.id" :value="document.id">
+                {{ document.title }}
+              </a-option>
+            </a-select>
+          </div>
+          <div class="mention-chip-list">
+            <a-tag
+              v-for="item in mentionedItems"
+              :key="`${item.type}-${item.id}`"
+              class="mention-chip"
+              :color="item.type === 'kb' ? 'green' : 'gray'"
+            >
+              {{ item.type === "kb" ? "KB" : "文件" }} · {{ item.name }}
+            </a-tag>
+            <span v-if="!mentionedItems.length" class="muted-text">默认使用当前单 KB。</span>
+          </div>
+        </section>
 
         <div class="message-list" data-testid="chat-message-list">
           <section
@@ -299,6 +371,15 @@ watch(selectedKbId, (kbId) => {
             </button>
           </section>
           <article v-for="message in chat.messages" :key="message.id" class="message" :class="`message--${message.role}`">
+            <div v-if="message.role === 'user' && message.mentioned_items?.length" class="message-mentions">
+              <a-tag
+                v-for="item in message.mentioned_items"
+                :key="`${message.id}-${item.type}-${item.id}`"
+                :color="item.type === 'kb' ? 'green' : 'gray'"
+              >
+                {{ item.type === "kb" ? "KB" : "文件" }} · {{ item.name }}
+              </a-tag>
+            </div>
             <div class="message__bubble">
               <div v-if="message.role === 'assistant'" class="markdown-body" v-html="renderMarkdown(message.content)"></div>
               <p v-else>{{ message.content }}</p>
@@ -521,6 +602,31 @@ watch(selectedKbId, (kbId) => {
   align-items: center;
   padding: 14px;
   border-bottom: 1px solid var(--km-border);
+}
+
+.mention-scope-panel {
+  display: grid;
+  gap: 10px;
+  border-bottom: 1px solid var(--km-border);
+  padding: 14px;
+  background: #fbfdfc;
+}
+
+.mention-scope-controls {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.mention-chip-list,
+.message-mentions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.mention-chip {
+  max-width: 220px;
 }
 
 .message-list {

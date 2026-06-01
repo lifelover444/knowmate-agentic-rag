@@ -65,6 +65,72 @@
 - verification: 文档一致性检查和 markdown 文本搜索通过；详见本次文档更新验证。
 - follow_ups: 后续任务应基于 v0.61 基线继续排队。
 
+### 2026-05-31 | TASK-010 | KB capabilities 和 pin 后端基础
+- summary: 增加单租户 KB pin 后端基础和 WeKnora-style capabilities 响应；新增 `knowledge_base_pins` 模型/migration、pin 读写仓库方法、`PUT /api/v1/knowledge-bases/{kb_id}/pin`，知识库读取/列表返回 `capabilities`、`is_pinned`、`pinned_at`，列表按 pin 状态置顶排序。
+- files: `alembic/versions/0011_v07_kb_pins.py`, `app/db/models.py`, `app/db/repositories/knowledge_base.py`, `app/schemas/knowledge_base.py`, `app/services/knowledge_base.py`, `app/api/v1/knowledge_bases.py`, `tests/test_v07_kb_capabilities_pin.py`
+- verification: `python -m pytest tests/test_v07_kb_capabilities_pin.py -q` -> 4 passed; `python -m pytest tests/test_v07_kb_capabilities_pin.py tests/test_v021_crud_endpoints.py tests/test_v05_document_management.py tests/test_v07_tags.py -q` -> 15 passed; `python -m compileall app tests` -> exit 0; `ruff check .` -> All checks passed; `python -m pytest -q` -> 105 passed.
+- follow_ups: 自动进入 `TASK-011`。
+
+### 2026-05-31 | TASK-011 | KB pin 和 capabilities 前端展示
+- summary: 前端知识库列表接入 TASK-010 的 `capabilities`、`is_pinned` 和 `pinned_at` 字段；新增 pin/unpin 操作、置顶状态展示、能力标签组和 Wiki/Graph 禁用占位，并通过 store 调用 `PUT /api/v1/knowledge-bases/{kb_id}/pin` 刷新列表排序。
+- files: `frontend/src/types/api.ts`, `frontend/src/stores/knowledgeBase.ts`, `frontend/src/views/KnowledgeBaseView.vue`, `frontend/src/styles/app.css`, `tests/test_frontend_v07_kb_pin_capabilities.py`
+- verification: `python -m pytest tests/test_frontend_v07_kb_pin_capabilities.py -q` -> 1 passed; `npm --prefix frontend run build` -> exit 0; `python -m pytest (rg --files tests | rg 'test_frontend_.*\\.py$') -q` -> 19 passed; `ruff check .` -> All checks passed; `python -m compileall app tests` -> exit 0; `python -m pytest -q` -> 106 passed.
+- follow_ups: 自动进入 `TASK-012`。
+
+### 2026-05-31 | TASK-012 | WeKnora-like KB 详情一体化页面骨架
+- summary: 新增 `KnowledgeBaseDetailView.vue` 和 `/knowledge-bases/:kbId` 路由，按 KB 类型默认展示文档或 FAQ 工作流；详情页收敛概览、文档管理、FAQ 管理、设置、任务/状态入口，并将 Wiki/Graph 保持为禁用占位；创建和列表详情入口默认进入 KB detail，旧 documents/faqs 路由继续可用。
+- files: `frontend/src/views/KnowledgeBaseDetailView.vue`, `frontend/src/router/index.ts`, `frontend/src/views/KnowledgeBaseView.vue`, `frontend/src/styles/app.css`, `tests/test_frontend_v07_kb_detail_shell.py`
+- verification: `python -m pytest tests/test_frontend_v07_kb_detail_shell.py -q` -> 1 passed; `npm --prefix frontend run build` -> exit 0; `python -m pytest (rg --files tests | rg 'test_frontend_.*\\.py$') -q` -> 20 passed; `ruff check .` -> All checks passed; `python -m compileall app tests` -> exit 0; `python -m pytest -q` -> 107 passed.
+- follow_ups: 自动进入 `TASK-013`。
+
+### 2026-05-31 | TASK-013 | KB 设置面板支持创建后编辑模型、parser、chunking 和 indexing
+- summary: 在 KB detail 设置区新增 WeKnora-like 轻量配置面板，覆盖基础信息、QA/Embedding 模型、parser rules、chunking config、indexing strategy 和 vector store；保存复用 `PUT /api/v1/knowledge-bases/{kb_id}`，成功后提示需要重处理/重建索引，并提供立即重建入口；后端模型类型错误改为更明确中文提示。
+- files: `frontend/src/views/KnowledgeBaseDetailView.vue`, `frontend/src/styles/app.css`, `app/services/model_config.py`, `tests/test_frontend_v07_kb_settings_panel.py`, `tests/test_v07_kb_settings_update.py`
+- verification: `python -m pytest tests/test_frontend_v07_kb_settings_panel.py -q` -> 1 passed; `python -m pytest tests/test_v07_kb_settings_update.py -q` -> 2 passed; `npm --prefix frontend run build` -> exit 0; `python -m pytest (rg --files tests | rg 'test_frontend_.*\\.py$') -q` -> 21 passed; `python -m pytest tests/test_v07_kb_settings_update.py tests/test_v07_kb_capabilities_pin.py tests/test_v021_crud_endpoints.py tests/test_v05_indexing_strategy.py -q` -> 13 passed; `ruff check .` -> All checks passed; `python -m compileall app tests` -> exit 0; `python -m pytest -q` -> 110 passed.
+- follow_ups: 自动进入 `TASK-014`。
+
+### 2026-05-31 | TASK-014 | 多知识库和文件范围检索后端
+- summary: 扩展 `knowledge-search` 和 `quick-answer` 的 scope schema，支持 WeKnora-style `knowledge_base_ids` 与 `knowledge_ids`；检索服务会合并单 KB、多 KB和文件范围，反查文件所属 KB，校验跨 KB Embedding 模型一致性，并按 KB fan-out 检索后合并去重；sources 新增 `knowledge_base_name`；keyword/vector/hybrid retriever 支持文件过滤且保留旧 fake retriever 兼容。
+- files: `app/schemas/knowledge_search.py`, `app/schemas/quick_answer.py`, `app/services/knowledge_search.py`, `app/services/quick_answer.py`, `app/api/v1/knowledge_search.py`, `app/api/v1/quick_answer.py`, `app/rag/retriever/__init__.py`, `app/db/repositories/chunk.py`, `app/integrations/qdrant_store.py`, `app/rag/quick_answer.py`, `frontend/src/types/api.ts`, `tests/test_v07_multi_scope_retrieval.py`
+- verification: `python -m pytest tests/test_v07_multi_scope_retrieval.py -q` -> 5 passed; `python -m pytest tests/test_v07_multi_scope_retrieval.py tests/test_v03_knowledge_search.py tests/test_quick_answer.py tests/test_v06_quick_answer_stream.py tests/test_v06_chat_sessions.py -q` -> 17 passed; `npm --prefix frontend run build` -> exit 0; `python -m pytest (rg --files tests | rg 'test_frontend_.*\\.py$') -q` -> 21 passed; `ruff check .` -> All checks passed; `python -m compileall app tests` -> exit 0; `python -m pytest -q` -> 115 passed.
+- follow_ups: 自动进入 `TASK-015`。
+
+### 2026-05-31 | TASK-015 | Chat mention 选择器和多 scope 问答体验
+- summary: Chat 工作台新增显式 KB/file scope 选择和 mention chips；发送与检索调试会提交 `knowledge_base_ids`、`knowledge_ids` 和 `mentioned_items`，未选择 scope 时继续使用当前单 KB；用户消息持久化并展示 mentioned_items，SourceCard 展示 `knowledge_base_name` 真实来源。
+- files: `frontend/src/views/ChatView.vue`, `frontend/src/stores/chat.ts`, `frontend/src/types/api.ts`, `frontend/src/components/SourceCard.vue`, `app/schemas/quick_answer.py`, `app/schemas/chat.py`, `app/services/chat.py`, `app/api/v1/quick_answer.py`, `tests/test_frontend_v07_chat_mentions.py`, `tests/test_v07_chat_mentioned_items.py`
+- verification: `python -m pytest tests/test_frontend_v07_chat_mentions.py -q` -> 1 passed; `python -m pytest tests/test_v07_chat_mentioned_items.py -q` -> 1 passed; `npm --prefix frontend run build` -> exit 0; `python -m pytest tests/test_v07_chat_mentioned_items.py tests/test_v07_multi_scope_retrieval.py tests/test_v06_quick_answer_stream.py tests/test_v06_chat_sessions.py tests/test_v07_chat_experience.py -q` -> 15 passed; `python -m pytest (rg --files tests | rg 'test_frontend_.*\\.py$') -q` -> 22 passed; `ruff check .` -> All checks passed; `python -m compileall app tests` -> exit 0; `python -m pytest -q` -> 117 passed.
+- follow_ups: 自动进入 `TASK-016`。
+
+### 2026-05-31 | TASK-016 | 文档处理 spans/timeline 后端
+- summary: 增加 WeKnora-style 文档处理 timeline 后端基础；新增 `knowledge_processing_spans` 模型和 migration、`ProcessingSpanService` 轻量 tracker、`GET /api/v1/documents/{document_id}/spans`，并在文档处理流程中记录 parse、chunk、embed、upsert、finalize 五阶段状态、耗时、错误和 downstream cancelled；旧文档无 spans 时返回安全占位。
+- files: `alembic/versions/0012_v07_processing_spans.py`, `app/db/models.py`, `app/schemas/processing_span.py`, `app/services/processing_spans.py`, `app/services/document_processing.py`, `app/api/v1/documents.py`, `tests/test_v07_processing_spans.py`
+- verification: `python -m pytest tests/test_v07_processing_spans.py -q` -> 4 passed; `python -m pytest tests/test_v07_processing_spans.py tests/test_document_processing_chunk_payload.py tests/test_v02_model_binding_reprocess.py tests/test_v07_document_preview.py tests/test_v05_document_management.py tests/test_v03_knowledge_search.py -q` -> 22 passed; `ruff check .` -> All checks passed; `python -m compileall app tests` -> exit 0; `python -m pytest -q` -> 121 passed.
+- follow_ups: 自动进入 `TASK-017`。
+
+### 2026-05-31 | TASK-017 | 文档处理 timeline 前端
+- summary: 前端接入 TASK-016 spans API；新增 `ProcessingSpanTimeline` 类型、store 的 `loadDocumentSpans`，文档列表对 pending/processing/failed 文档提供“处理时间线”入口，预览抽屉和单独抽屉展示五阶段状态、耗时、错误和手动刷新，旧文档 attempt 0 显示可读占位。
+- files: `frontend/src/types/api.ts`, `frontend/src/stores/knowledgeBase.ts`, `frontend/src/views/DocumentsView.vue`, `frontend/src/styles/app.css`, `tests/test_frontend_v07_processing_timeline.py`
+- verification: `python -m pytest tests/test_frontend_v07_processing_timeline.py -q` -> 1 passed; `npm --prefix frontend run build` -> exit 0; `python -m pytest (rg --files tests | rg 'test_frontend_.*\\.py$') -q` -> 23 passed; `ruff check .` -> All checks passed; `python -m compileall app tests` -> exit 0; `python -m pytest -q` -> 122 passed; Playwright with fetch stubs confirmed the timeline drawer renders failed/cancelled stages and error text.
+- follow_ups: 自动进入 `TASK-018`。
+
+### 2026-05-31 | TASK-018 | FAQ similar questions 和索引模式后端
+- summary: 增加 WeKnora-style FAQ 相似问和索引模式后端；KB schema/model 支持 `faq_config.index_mode` 与 `faq_config.question_index_mode`，FAQ entry 支持 `similar_questions`；导入导出新增 `similar_questions` 列；FAQ 索引按 question_only/question_answer 与 combined/separate 生成 chunk、search_text、向量 payload，并在 metadata 标记 `standard_question`、`similar_questions`、`matched_question` 和 `question_role`。
+- files: `alembic/versions/0013_v07_faq_similar_indexing.py`, `app/db/models.py`, `app/schemas/knowledge_base.py`, `app/schemas/faq.py`, `app/services/knowledge_base.py`, `app/api/v1/knowledge_bases.py`, `app/services/faq.py`, `app/services/faq_import_export.py`, `tests/test_v07_faq_similar_indexing.py`, `tests/test_v07_faq_import_export.py`
+- verification: `python -m pytest tests/test_v07_faq_similar_indexing.py -q` -> 2 passed; `python -m pytest tests/test_v07_faq_similar_indexing.py tests/test_v05_faq.py tests/test_v07_faq_import_export.py tests/test_v07_kb_settings_update.py tests/test_v07_multi_scope_retrieval.py tests/test_v03_knowledge_search.py -q` -> 18 passed; `ruff check .` -> All checks passed; `python -m compileall app tests` -> exit 0; `npm --prefix frontend run build` -> exit 0; `python -m pytest -q` -> 124 passed.
+- follow_ups: 自动进入 `TASK-019`。
+
+### 2026-05-31 | TASK-019 | FAQ similar questions 和索引模式前端
+- summary: 前端接入 TASK-018；FAQ 类型和 store 支持 `similar_questions` 与 `faq_config`；FAQ 管理页展示相似问法、创建/编辑弹窗可输入相似问法并去重过滤、导入说明包含 `similar_questions` 列、检索测试展示 `matched_question`；KB 详情设置区新增 FAQ index mode 和 question index mode 表单并随保存提交。
+- files: `frontend/src/types/api.ts`, `frontend/src/stores/knowledgeBase.ts`, `frontend/src/views/FAQView.vue`, `frontend/src/views/KnowledgeBaseDetailView.vue`, `frontend/src/styles/app.css`, `tests/test_frontend_v07_faq_similar_indexing.py`
+- verification: `python -m pytest tests/test_frontend_v07_faq_similar_indexing.py -q` -> 1 passed; `npm --prefix frontend run build` -> exit 0; `python -m pytest (rg --files tests | rg 'test_frontend_.*\\.py$') -q` -> 24 passed; `ruff check .` -> All checks passed; `python -m compileall app tests` -> exit 0; `python -m pytest -q` -> 125 passed; Playwright with fetch stubs confirmed FAQ list renders similar questions and search drawer renders matched question.
+- follow_ups: v0.7 P0 队列完成；后续进入 v0.71 候选或用户指定的新任务。
+
+### 2026-06-01 | v0.7 | 文档归档
+- summary: 将项目文档更新到当前版本 `v0.7`：README 当前版本、v0.7 Schema/API 变化、CHANGELOG v0.7 条目、AI Task Board 基线、v0.7 对比路线文档和 v0.6-v0.7 差距分析均补充 TASK-010 到 TASK-019 完成状态。
+- files: `README.md`, `CHANGELOG.md`, `docs/ai-loop/requirements.md`, `docs/ai-loop/done.md`, `docs/weknora-local-comparison-v0.7-roadmap.zh-CN.md`, `docs/weknora-visible-gap-analysis-v0.6-v0.7.zh-CN.md`, `docs/weknora-visible-gap-analysis-v0.6-v0.7.md`
+- verification: 文档版本文本搜索、README schema 字段核对和 git diff 范围检查通过。
+- follow_ups: v0.71 候选继续保留在 `docs/ai-loop/requirements.md` Parking Lot。
+
 ## Entry Template
 ### YYYY-MM-DD | TASK-000 | Short summary
 - summary: What was delivered.

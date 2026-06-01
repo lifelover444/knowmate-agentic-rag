@@ -225,7 +225,7 @@ class ModelConfigService:
     def get_model(self, model_id: str, expected_type: str | None = None) -> ModelConfig:
         model = self._get_model(model_id)
         if expected_type and model.type != expected_type:
-            raise RuntimeError(MODEL_NOT_AVAILABLE_MESSAGE)
+            raise RuntimeError(f"模型类型不匹配：需要 {expected_type} 类型")
         if model.status != "active":
             raise RuntimeError(MODEL_NOT_AVAILABLE_MESSAGE)
         return model

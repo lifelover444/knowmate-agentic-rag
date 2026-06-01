@@ -38,6 +38,7 @@ class ChunkRepository:
         terms: list[str],
         limit: int,
         score_threshold: float | None = None,
+        knowledge_ids: list[str] | None = None,
     ) -> list[dict]:
         if self.db.bind and self.db.bind.dialect.name == "postgresql":
             return self._postgres_keyword_search(
@@ -45,12 +46,14 @@ class ChunkRepository:
                 query=query,
                 limit=limit,
                 score_threshold=score_threshold,
+                knowledge_ids=knowledge_ids,
             )
         return self._fallback_keyword_search(
             knowledge_base_id=knowledge_base_id,
             terms=terms,
             limit=limit,
             score_threshold=score_threshold,
+            knowledge_ids=knowledge_ids,
         )
 
     def soft_delete_by_document(self, knowledge_id: str) -> int:
@@ -69,6 +72,7 @@ class ChunkRepository:
         query: str,
         limit: int,
         score_threshold: float | None,
+        knowledge_ids: list[str] | None,
     ) -> list[dict]:
         ts_query = func.plainto_tsquery("simple", query)
         score_expr = func.ts_rank(func.to_tsvector("simple", func.coalesce(Chunk.search_text, "")), ts_query)
@@ -80,9 +84,10 @@ class ChunkRepository:
                 Chunk.is_enabled.is_(True),
                 func.to_tsvector("simple", func.coalesce(Chunk.search_text, "")).op("@@")(ts_query),
             )
-            .order_by(score_expr.desc(), Chunk.chunk_index.asc())
-            .limit(limit)
         )
+        if knowledge_ids:
+            statement = statement.where(Chunk.knowledge_id.in_(knowledge_ids))
+        statement = statement.order_by(score_expr.desc(), Chunk.chunk_index.asc()).limit(limit)
         rows = self.db.execute(statement).all()
         results = [_keyword_row(chunk, float(score or 0)) for chunk, score in rows]
         if score_threshold is not None:
@@ -96,6 +101,7 @@ class ChunkRepository:
         terms: list[str],
         limit: int,
         score_threshold: float | None,
+        knowledge_ids: list[str] | None,
     ) -> list[dict]:
         if not terms:
             return []
@@ -112,6 +118,9 @@ class ChunkRepository:
                 .order_by(Chunk.chunk_index.asc())
             ).all()
         )
+        if knowledge_ids:
+            allowed = set(knowledge_ids)
+            rows = [chunk for chunk in rows if chunk.knowledge_id in allowed]
         scored: list[dict] = []
         for chunk in rows:
             text = (chunk.search_text or chunk.content or "").lower()

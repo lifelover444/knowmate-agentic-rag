@@ -6,6 +6,11 @@ export const routes: RouteRecordRaw[] = [
   { path: "/chat", component: () => import("../views/ChatView.vue"), meta: { title: "快速问答" } },
   { path: "/knowledge-bases", component: () => import("../views/KnowledgeBaseView.vue"), meta: { title: "知识库" } },
   {
+    path: "/knowledge-bases/:kbId",
+    component: () => import("../views/KnowledgeBaseDetailView.vue"),
+    meta: { title: "知识库详情" },
+  },
+  {
     path: "/knowledge-bases/:kbId/documents",
     component: () => import("../views/DocumentsView.vue"),
     meta: { title: "文档管理" },

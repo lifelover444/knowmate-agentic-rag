@@ -14,6 +14,7 @@ import type {
   KnowledgeBaseRead,
   KnowledgeTagPayload,
   KnowledgeTagRead,
+  ProcessingSpanTimeline,
   ProcessingTaskRead,
 } from "../types/api";
 
@@ -26,6 +27,7 @@ export const useKnowledgeBaseStore = defineStore("knowledgeBase", () => {
   const chunks = ref<ChunkRead[]>([]);
   const currentDocument = ref<DocumentRead | null>(null);
   const currentDocumentPreview = ref<DocumentPreviewRead | null>(null);
+  const currentProcessingTimeline = ref<ProcessingSpanTimeline | null>(null);
   const selectedDocumentIds = ref<string[]>([]);
   const faqs = ref<FAQEntryRead[]>([]);
   const batchOperationResult = ref<BatchDocumentResponse | null>(null);
@@ -63,6 +65,13 @@ export const useKnowledgeBaseStore = defineStore("knowledgeBase", () => {
   async function updateKnowledgeBase(kbId: string, payload: Partial<KnowledgeBasePayload>) {
     const updated = await putJson<KnowledgeBaseRead, Partial<KnowledgeBasePayload>>(`/knowledge-bases/${kbId}`, payload);
     currentKb.value = updated;
+    await loadKnowledgeBases();
+    return updated;
+  }
+
+  async function updateKnowledgeBasePin(kbId: string, pinned: boolean) {
+    const updated = await putJson<KnowledgeBaseRead, { pinned: boolean }>(`/knowledge-bases/${kbId}/pin`, { pinned });
+    if (currentKb.value?.id === kbId) currentKb.value = updated;
     await loadKnowledgeBases();
     return updated;
   }
@@ -171,12 +180,18 @@ export const useKnowledgeBaseStore = defineStore("knowledgeBase", () => {
     return currentDocumentPreview.value;
   }
 
+  async function loadDocumentSpans(documentId: string) {
+    currentProcessingTimeline.value = await getJson<ProcessingSpanTimeline>(`/documents/${documentId}/spans`);
+    return currentProcessingTimeline.value;
+  }
+
   async function deleteDocument(documentId: string) {
     const kbId = currentDocument.value?.knowledge_base_id || currentKb.value?.id;
     await deleteRequest(`/documents/${documentId}`);
     if (currentDocument.value?.id === documentId) {
       currentDocument.value = null;
       currentDocumentPreview.value = null;
+      currentProcessingTimeline.value = null;
       chunks.value = [];
     }
     if (kbId) await loadDocuments(kbId);
@@ -256,13 +271,34 @@ export const useKnowledgeBaseStore = defineStore("knowledgeBase", () => {
     return faqs.value;
   }
 
-  async function createFaq(kbId: string, payload: { question: string; answer: string; metadata?: Record<string, unknown>; enabled: boolean }) {
+  async function createFaq(
+    kbId: string,
+    payload: {
+      question: string;
+      similar_questions?: string[];
+      answer: string;
+      metadata?: Record<string, unknown>;
+      enabled: boolean;
+      tag_id?: string | null;
+    },
+  ) {
     const faq = await postJson<FAQEntryRead>(`/knowledge-bases/${kbId}/faqs`, payload);
     await loadFaqs(kbId);
     return faq;
   }
 
-  async function updateFaq(kbId: string, faqId: string, payload: Partial<{ question: string; answer: string; metadata: Record<string, unknown>; enabled: boolean }>) {
+  async function updateFaq(
+    kbId: string,
+    faqId: string,
+    payload: Partial<{
+      question: string;
+      similar_questions: string[];
+      answer: string;
+      metadata: Record<string, unknown>;
+      enabled: boolean;
+      tag_id: string | null;
+    }>,
+  ) {
     const faq = await putJson<FAQEntryRead>(`/knowledge-bases/${kbId}/faqs/${faqId}`, payload);
     await loadFaqs(kbId);
     return faq;
@@ -322,6 +358,7 @@ export const useKnowledgeBaseStore = defineStore("knowledgeBase", () => {
     chunks,
     currentDocument,
     currentDocumentPreview,
+    currentProcessingTimeline,
     selectedDocumentIds,
     faqs,
     batchOperationResult,
@@ -337,6 +374,7 @@ export const useKnowledgeBaseStore = defineStore("knowledgeBase", () => {
     loadKnowledgeBase,
     createKnowledgeBase,
     updateKnowledgeBase,
+    updateKnowledgeBasePin,
     deleteKnowledgeBase,
     loadTags,
     createTag,
@@ -349,6 +387,7 @@ export const useKnowledgeBaseStore = defineStore("knowledgeBase", () => {
     pollDocument,
     loadChunks,
     loadDocumentPreview,
+    loadDocumentSpans,
     deleteDocument,
     reprocessDocument,
     reprocessKnowledgeBase,

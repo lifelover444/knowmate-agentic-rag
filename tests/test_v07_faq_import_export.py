@@ -117,12 +117,19 @@ def test_faq_export_supports_csv_and_xlsx(client: TestClient):
     csv_response = client.get(f"/api/v1/knowledge-bases/{kb_id}/faqs/export", params={"format": "csv"})
     assert csv_response.status_code == 200
     assert "text/csv" in csv_response.headers["content-type"]
-    assert "question,answer,metadata,enabled,tag_id" in csv_response.text
+    assert "question,similar_questions,answer,metadata,enabled,tag_id" in csv_response.text
     assert "导出问题" in csv_response.text
 
     xlsx_response = client.get(f"/api/v1/knowledge-bases/{kb_id}/faqs/export", params={"format": "xlsx"})
     assert xlsx_response.status_code == 200
     workbook = load_workbook(io.BytesIO(xlsx_response.content))
     sheet = workbook.active
-    assert [cell.value for cell in sheet[1]] == ["question", "answer", "metadata", "enabled", "tag_id"]
+    assert [cell.value for cell in sheet[1]] == [
+        "question",
+        "similar_questions",
+        "answer",
+        "metadata",
+        "enabled",
+        "tag_id",
+    ]
     assert sheet["A2"].value == "导出问题"

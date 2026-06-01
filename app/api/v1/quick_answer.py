@@ -34,6 +34,8 @@ def quick_answer(
     try:
         result = QuickAnswerService(db, settings, embedder, chat_model, vector_store).answer(
             knowledge_base_id=payload.knowledge_base_id,
+            knowledge_base_ids=payload.knowledge_base_ids,
+            knowledge_ids=payload.knowledge_ids,
             query=payload.query,
             top_k=payload.top_k,
             mode=payload.mode,
@@ -49,6 +51,7 @@ def quick_answer(
             SourceRead(
                 document_id=source.document_id,
                 knowledge_base_id=source.knowledge_base_id,
+                knowledge_base_name=source.knowledge_base_name,
                 chunk_id=source.chunk_id,
                 title=source.title,
                 content=source.content,
@@ -87,18 +90,25 @@ def quick_answer_stream(
             if session is None:
                 raise LookupError("chat session not found")
         else:
+            primary_kb_id = payload.knowledge_base_id or (
+                payload.knowledge_base_ids[0] if payload.knowledge_base_ids else None
+            )
+            if primary_kb_id is None:
+                raise ValueError("至少提供一个 knowledge_base_id、knowledge_base_ids 或 knowledge_ids")
             session = chat_service.create_session(
                 ChatSessionCreate(
-                    knowledge_base_id=payload.knowledge_base_id,
+                    knowledge_base_id=primary_kb_id,
                     title=payload.query[:40],
                 )
             )
-        if session.knowledge_base_id != payload.knowledge_base_id:
+        if payload.knowledge_base_id and session.knowledge_base_id != payload.knowledge_base_id:
             raise ValueError("会话绑定的知识库与请求不一致")
         history = repo.list_messages(session.id, settings.default_tenant_id)
-        user_message = chat_service.create_user_message(session, payload.query)
+        user_message = chat_service.create_user_message(session, payload.query, payload.mentioned_items)
         prepared = QuickAnswerService(db, settings, embedder, chat_model, vector_store).prepare_answer(
             knowledge_base_id=payload.knowledge_base_id,
+            knowledge_base_ids=payload.knowledge_base_ids,
+            knowledge_ids=payload.knowledge_ids,
             query=payload.query,
             top_k=payload.top_k,
             mode=payload.mode,

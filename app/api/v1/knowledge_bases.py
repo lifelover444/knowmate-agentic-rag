@@ -10,9 +10,20 @@ from app.db.repositories.document import DocumentRepository
 from app.db.repositories.knowledge_base import KnowledgeBaseRepository
 from app.db.repositories.task import ProcessingTaskRepository
 from app.schemas.document import BatchDocumentFailure, BatchDocumentRequest, BatchDocumentResponse, DocumentRead
-from app.schemas.knowledge_base import KnowledgeBaseCreate, KnowledgeBaseRead, KnowledgeBaseUpdate
+from app.schemas.knowledge_base import (
+    KnowledgeBaseCreate,
+    KnowledgeBasePinUpdate,
+    KnowledgeBaseRead,
+    KnowledgeBaseUpdate,
+)
 from app.services.document import DocumentService
-from app.services.knowledge_base import KnowledgeBaseService, normalize_chunking_config, normalize_indexing_strategy
+from app.services.knowledge_base import (
+    KnowledgeBaseService,
+    knowledge_base_capabilities,
+    normalize_chunking_config,
+    normalize_faq_config,
+    normalize_indexing_strategy,
+)
 from app.services.task import TASK_DOCUMENT_REPROCESS, TASK_KNOWLEDGE_BASE_REBUILD, ProcessingTaskService
 from app.workers import tasks
 
@@ -24,14 +35,20 @@ AppSettings = Annotated[Settings, Depends(get_settings)]
 
 def to_read(kb, repo: KnowledgeBaseRepository, settings: Settings) -> KnowledgeBaseRead:
     document_count, chunk_count, processing_count = repo.counts(kb.id)
+    indexing_strategy = normalize_indexing_strategy(kb.indexing_strategy)
+    pinned_at = repo.pinned_at(kb.id, settings.default_tenant_id)
     return KnowledgeBaseRead.model_validate(
         {
             **kb.__dict__,
             "chunking_config": normalize_chunking_config(kb.chunking_config, settings),
-            "indexing_strategy": normalize_indexing_strategy(kb.indexing_strategy),
+            "faq_config": normalize_faq_config(kb.kb_type, kb.faq_config),
+            "indexing_strategy": indexing_strategy,
             "document_count": document_count,
             "chunk_count": chunk_count,
             "processing_count": processing_count,
+            "capabilities": knowledge_base_capabilities(kb.kb_type, indexing_strategy),
+            "is_pinned": pinned_at is not None,
+            "pinned_at": pinned_at,
         }
     )
 
@@ -88,6 +105,21 @@ def update_knowledge_base(
     except (RuntimeError, ValueError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return to_read(updated, repo, settings)
+
+
+@router.put("/{kb_id}/pin", response_model=KnowledgeBaseRead)
+def update_knowledge_base_pin(
+    kb_id: str,
+    payload: KnowledgeBasePinUpdate,
+    db: DBSession,
+    settings: AppSettings,
+):
+    repo = KnowledgeBaseRepository(db)
+    kb = repo.get(kb_id, settings.default_tenant_id)
+    if kb is None:
+        raise HTTPException(status_code=404, detail="knowledge base not found")
+    repo.set_pin(kb.id, settings.default_tenant_id, payload.pinned)
+    return to_read(kb, repo, settings)
 
 
 @router.delete("/{kb_id}", status_code=status.HTTP_204_NO_CONTENT)

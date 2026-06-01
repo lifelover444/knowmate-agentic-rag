@@ -23,6 +23,7 @@ const selectedImportFile = ref<File | null>(null);
 const filters = ref({ tag_id: "" });
 const form = reactive({
   question: "",
+  similarQuestionsText: "",
   answer: "",
   metadataText: "{}",
   tag_id: "",
@@ -37,6 +38,7 @@ const searchForm = reactive({
 function openCreate() {
   editing.value = null;
   form.question = "";
+  form.similarQuestionsText = "";
   form.answer = "";
   form.metadataText = "{}";
   form.tag_id = filters.value.tag_id;
@@ -47,6 +49,7 @@ function openCreate() {
 function openEdit(record: FAQEntryRead) {
   editing.value = record;
   form.question = record.question;
+  form.similarQuestionsText = (record.similar_questions || []).join("\n");
   form.answer = record.answer;
   form.metadataText = JSON.stringify(record.metadata || {}, null, 2);
   form.tag_id = record.tag_id || "";
@@ -62,11 +65,24 @@ function metadataPayload() {
   }
 }
 
+function parseSimilarQuestions() {
+  const seen = new Set<string>();
+  return form.similarQuestionsText
+    .split(/\n|##/)
+    .map((item) => item.trim())
+    .filter((item) => {
+      if (!item || item === form.question.trim() || seen.has(item)) return false;
+      seen.add(item);
+      return true;
+    });
+}
+
 async function submit() {
   saving.value = true;
   try {
     const payload = {
       question: form.question,
+      similar_questions: parseSimilarQuestions(),
       answer: form.answer,
       metadata: metadataPayload(),
       tag_id: form.tag_id || null,
@@ -260,6 +276,16 @@ onMounted(() => {
       <a-table :data="kbStore.faqs" :pagination="false" row-key="id">
         <template #columns>
           <a-table-column title="问题" data-index="question" />
+          <a-table-column title="相似问法">
+            <template #cell="{ record }">
+              <div v-if="record.similar_questions?.length" class="similar-question-list">
+                <a-tag v-for="question in record.similar_questions" :key="question" color="blue">
+                  {{ question }}
+                </a-tag>
+              </div>
+              <span v-else class="muted-text">未设置</span>
+            </template>
+          </a-table-column>
           <a-table-column title="答案" data-index="answer" />
           <a-table-column title="标签">
             <template #cell="{ record }">
@@ -303,6 +329,13 @@ onMounted(() => {
     <a-modal v-model:visible="modalVisible" title="FAQ 条目" :confirm-loading="saving" @ok="submit">
       <div class="modal-form">
         <a-form-item label="问题"><a-input v-model="form.question" /></a-form-item>
+        <a-form-item label="相似问法">
+          <a-textarea
+            v-model="form.similarQuestionsText"
+            placeholder="一行一个，或使用 ## 分隔"
+            :auto-size="{ minRows: 3, maxRows: 6 }"
+          />
+        </a-form-item>
         <a-form-item label="答案"><a-textarea v-model="form.answer" :auto-size="{ minRows: 4, maxRows: 8 }" /></a-form-item>
         <a-form-item label="标签">
           <a-select v-model="form.tag_id" allow-clear placeholder="未分类">
@@ -326,6 +359,7 @@ onMounted(() => {
         <a-form-item label="文件">
           <a-upload :auto-upload="false" :limit="1" accept=".csv,.xlsx" @change="onImportFileChange" />
         </a-form-item>
+        <p class="muted-text">导入/导出列包含 question、similar_questions、answer、metadata、enabled、tag_id。</p>
       </div>
     </a-modal>
 
@@ -348,6 +382,9 @@ onMounted(() => {
               <a-tag color="blue">score {{ hit.score.toFixed(3) }}</a-tag>
             </header>
             <p>{{ hit.content }}</p>
+            <p v-if="hit.metadata?.matched_question" class="matched-question">
+              命中问法：{{ hit.metadata.matched_question }}
+            </p>
             <small>{{ hit.retrieval_method || "unknown" }} · {{ hit.chunk_type || "faq" }}</small>
           </article>
           <a-empty v-if="!kbStore.faqSearchHits.length" description="暂无检索结果" />

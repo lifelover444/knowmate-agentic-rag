@@ -11,9 +11,11 @@ from app.db.repositories.document import DocumentRepository
 from app.db.repositories.knowledge_base import KnowledgeBaseRepository
 from app.db.repositories.task import ProcessingTaskRepository
 from app.schemas.document import ChunkRead, DocumentPreviewRead, DocumentRead, ManualTextImportRequest, URLImportRequest
+from app.schemas.processing_span import ProcessingSpanTimeline
 from app.services.document import DocumentService
 from app.services.document_preview import DocumentPreviewService
 from app.services.model_config import MODEL_CONFIG_REQUIRED_MESSAGE, ModelConfigService
+from app.services.processing_spans import ProcessingSpanService
 from app.services.task import TASK_DOCUMENT_REPROCESS, TASK_DOCUMENT_UPLOAD_PROCESS, ProcessingTaskService
 from app.workers import tasks
 
@@ -59,6 +61,14 @@ def list_document_chunks(document_id: str, db: DBSession):
 def get_document_preview(document_id: str, db: DBSession):
     try:
         return DocumentPreviewService(db).build_preview(document_id)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.get("/{document_id}/spans", response_model=ProcessingSpanTimeline)
+def get_document_spans(document_id: str, db: DBSession):
+    try:
+        return ProcessingSpanService(db).get_timeline(document_id)
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 

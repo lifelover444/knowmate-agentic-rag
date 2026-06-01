@@ -1,5 +1,84 @@
 # Changelog
 
+## v0.7
+
+v0.7 是在 v0.61 知识管理补强基础上的 WeKnora P0 对齐版本，聚合 TASK-010 到 TASK-019。本版本仍不进入 Agent/Wiki/RBAC 大范围，而是把 Quick Q&A 主链路周边的知识库平台化、范围检索、处理可观测性和 FAQ 高级索引补到更接近 WeKnora 的可用状态。
+
+### Added
+
+- 新增知识库 capabilities 和 pin 后端基础：
+  - 新增 `knowledge_base_pins` 表和 Alembic migration `0011_v07_kb_pins`。
+  - 知识库读取和列表返回 `capabilities`、`is_pinned`、`pinned_at`。
+  - 新增 `PUT /api/v1/knowledge-bases/{kb_id}/pin`，列表按置顶状态排序。
+- 新增知识库列表 pin / capabilities 前端展示：
+  - 列表支持 pin/unpin。
+  - 展示能力标签组，Wiki / Graph 等未启用能力保持禁用占位。
+- 新增 WeKnora-like KB 详情一体化页面骨架：
+  - 新增 `/#/knowledge-bases/:kbId`。
+  - 详情页收敛概览、文档/FAQ 工作流、设置、任务/状态入口。
+  - 旧文档和 FAQ 路由继续保留。
+- 新增创建后 KB 设置面板：
+  - 可编辑基础信息、QA / Embedding 模型、parser rules、chunking config、indexing strategy 和 vector store。
+  - 保存复用 `PUT /api/v1/knowledge-bases/{kb_id}`，成功后提示需要重处理或重建索引。
+- 新增多知识库和文件范围检索：
+  - `knowledge-search` 和 `quick-answer` 支持 `knowledge_base_ids` 与 `knowledge_ids`。
+  - 支持单 KB、多 KB、KB + 文件范围 fan-out 检索后合并去重。
+  - 校验跨 KB Embedding 模型一致性，避免不同向量维度混用。
+  - sources 新增 `knowledge_base_name`。
+- 新增 Chat mention 范围选择体验：
+  - Chat 工作台支持显式 KB/file scope 选择和 mention chips。
+  - 发送和检索调试会提交 `knowledge_base_ids`、`knowledge_ids` 和 `mentioned_items`。
+  - 用户消息持久化并展示 mentioned items。
+- 新增文档处理 spans/timeline：
+  - 新增 `knowledge_processing_spans` 表和 Alembic migration `0012_v07_processing_spans`。
+  - 新增 `GET /api/v1/documents/{document_id}/spans`。
+  - 文档处理记录 parse、chunk、embed、upsert、finalize 五阶段状态、耗时、错误和 downstream cancelled。
+  - 旧文档无 spans 时返回 attempt `0` 安全占位。
+  - 前端文档列表、预览抽屉和处理时间线抽屉展示阶段状态。
+- 新增 FAQ similar questions 和索引模式：
+  - 新增 Alembic migration `0013_v07_faq_similar_indexing`。
+  - `KnowledgeBase` 支持 `faq_config.index_mode` 和 `faq_config.question_index_mode`。
+  - `FAQEntry` 支持 `similar_questions`。
+  - FAQ 导入导出新增 `similar_questions` 列。
+  - FAQ 索引按 `question_only / question_answer` 与 `combined / separate` 生成 chunk、search_text 和 Qdrant payload。
+  - metadata 标记 `standard_question`、`similar_questions`、`matched_question`、`question_role` 和 `index_mode`。
+  - FAQ 管理页展示相似问法，编辑弹窗可输入相似问法，检索测试展示命中问法。
+
+### Changed
+
+- 知识库创建和列表入口默认进入 KB detail，降低文档/FAQ 页面割裂感。
+- 多 scope 检索仍保持旧单 KB 请求兼容；未传新 scope 时沿用原 `knowledge_base_id` 行为。
+- SourceCard 在多 KB 检索场景下显示真实知识库来源。
+- FAQ 相似问法会去空、去重，并过滤与标准问题相同的问法。
+
+### Not Included
+
+- 不实现完整登录、RBAC、多租户 workspace、审计日志。
+- 不实现 Agent Mode、MCP 工具、Wiki Mode、GraphRAG 或外部数据源同步。
+- 不实现停止生成、自动标题、附件上下文、文件夹上传、文档下载、取消解析和文档移动；这些已进入 v0.71 候选。
+- 不接入真实 MinerU/OCR、对象存储 provider、Web Search provider 或完整 BM25 引擎。
+
+### Verification
+
+- `python -m pytest tests/test_v07_kb_capabilities_pin.py -q`：`4 passed`
+- `python -m pytest tests/test_frontend_v07_kb_pin_capabilities.py -q`：`1 passed`
+- `python -m pytest tests/test_frontend_v07_kb_detail_shell.py -q`：`1 passed`
+- `python -m pytest tests/test_frontend_v07_kb_settings_panel.py -q`：`1 passed`
+- `python -m pytest tests/test_v07_kb_settings_update.py -q`：`2 passed`
+- `python -m pytest tests/test_v07_multi_scope_retrieval.py -q`：`5 passed`
+- `python -m pytest tests/test_frontend_v07_chat_mentions.py -q`：`1 passed`
+- `python -m pytest tests/test_v07_chat_mentioned_items.py -q`：`1 passed`
+- `python -m pytest tests/test_v07_processing_spans.py -q`：`4 passed`
+- `python -m pytest tests/test_frontend_v07_processing_timeline.py -q`：`1 passed`
+- `python -m pytest tests/test_v07_faq_similar_indexing.py -q`：`2 passed`
+- `python -m pytest tests/test_frontend_v07_faq_similar_indexing.py -q`：`1 passed`
+- `python -m pytest -q`：`125 passed`
+- `python -m pytest (rg --files tests | rg 'test_frontend_.*\\.py$') -q`：`24 passed`
+- `ruff check .`：通过
+- `python -m compileall app tests`：通过
+- `npm --prefix frontend run build`：通过，仍有 Vite 大 chunk 提示。
+- 浏览器 stub 验证：文档处理时间线可展示 failed/cancelled 阶段和错误文本；FAQ 页面可展示相似问法与检索命中问法。
+
 ## v0.61
 
 v0.61 是在 v0.6 会话化 Quick Q&A 基础上的 WeKnora 对齐补强版本，聚合 TASK-001 到 TASK-009。本版本不扩大到 Agent/Wiki/RBAC 主线，而是把知识库管理、FAQ、文档预览、批处理反馈、设置中心和会话侧栏体验补到更接近 WeKnora 的产品化状态。

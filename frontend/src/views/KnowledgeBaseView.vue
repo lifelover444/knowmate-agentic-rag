@@ -6,6 +6,7 @@ import { useKnowledgeBaseStore } from "../stores/knowledgeBase";
 import { useModelsStore } from "../stores/models";
 import { useRetrievalStore } from "../stores/retrieval";
 import { useVectorStoresStore } from "../stores/vectorStores";
+import type { KnowledgeBaseRead } from "../types/api";
 import { formatApiError } from "../utils/api";
 
 const router = useRouter();
@@ -82,7 +83,7 @@ async function submitCreate() {
     });
     createVisible.value = false;
     Message.success("知识库已创建");
-    router.push(created.kb_type === "faq" ? `/knowledge-bases/${created.id}/faqs` : `/knowledge-bases/${created.id}/documents`);
+    router.push(`/knowledge-bases/${created.id}`);
   } catch (error) {
     Message.error(formatApiError(error instanceof Error ? error.message : error));
   } finally {
@@ -143,6 +144,39 @@ async function deleteKb(kbId: string) {
   }
 }
 
+function capabilityItems(record: KnowledgeBaseRead) {
+  const capabilities = record.capabilities || {
+    document: record.kb_type !== "faq",
+    faq: record.kb_type === "faq",
+    vector: false,
+    keyword: false,
+    parent_child: false,
+    rerank: false,
+    wiki: false,
+    graph: false,
+  };
+  return [
+    { key: "document", label: "文档", enabled: Boolean(capabilities.document), color: "green" },
+    { key: "faq", label: "FAQ", enabled: Boolean(capabilities.faq), color: "purple" },
+    { key: "vector", label: "向量", enabled: Boolean(capabilities.vector), color: "blue" },
+    { key: "keyword", label: "关键词", enabled: Boolean(capabilities.keyword), color: "arcoblue" },
+    { key: "parent_child", label: "父子块", enabled: Boolean(capabilities.parent_child), color: "cyan" },
+    { key: "rerank", label: "重排", enabled: Boolean(capabilities.rerank), color: "orangered" },
+    { key: "wiki", label: capabilities.wiki ? "Wiki" : "Wiki 未启用", enabled: Boolean(capabilities.wiki), color: "gray" },
+    { key: "graph", label: capabilities.graph ? "Graph" : "Graph 未启用", enabled: Boolean(capabilities.graph), color: "gray" },
+  ];
+}
+
+async function togglePin(record: KnowledgeBaseRead) {
+  const pinned = !record.is_pinned;
+  try {
+    await kbStore.updateKnowledgeBasePin(record.id, pinned);
+    Message.success(pinned ? "知识库已置顶" : "已取消置顶");
+  } catch (error) {
+    Message.error(formatApiError(error instanceof Error ? error.message : error) || "置顶失败");
+  }
+}
+
 onMounted(() => {
   Promise.all([
     kbStore.loadKnowledgeBases(),
@@ -166,7 +200,15 @@ onMounted(() => {
     <section class="content-card">
       <a-table :data="kbStore.knowledgeBases" :loading="kbStore.loading" :pagination="false" row-key="id">
         <template #columns>
-          <a-table-column title="名称" data-index="name" />
+          <a-table-column title="名称">
+            <template #cell="{ record }">
+              <div class="kb-name-cell">
+                <a-tag v-if="record.is_pinned" color="gold">置顶</a-tag>
+                <strong>{{ record.name }}</strong>
+                <small v-if="record.pinned_at">pinned_at: {{ new Date(record.pinned_at).toLocaleString("zh-CN") }}</small>
+              </div>
+            </template>
+          </a-table-column>
           <a-table-column title="描述" data-index="description" />
           <a-table-column title="文档">
             <template #cell="{ record }">{{ record.document_count }} / {{ record.chunk_count }} chunks</template>
@@ -186,9 +228,30 @@ onMounted(() => {
               </div>
             </template>
           </a-table-column>
+          <a-table-column title="能力">
+            <template #cell="{ record }">
+              <div class="kb-capabilities" data-testid="kb-capabilities">
+                <a-tag
+                  v-for="item in capabilityItems(record)"
+                  :key="item.key"
+                  :color="item.enabled ? item.color : 'gray'"
+                  :class="{ 'kb-capability-disabled': !item.enabled }"
+                >
+                  {{ item.label }}
+                </a-tag>
+              </div>
+            </template>
+          </a-table-column>
           <a-table-column title="操作">
             <template #cell="{ record }">
               <a-space>
+                <a-button size="mini" :type="record.is_pinned ? 'primary' : 'outline'" @click="togglePin(record)">
+                  <span class="sr-only">{{ record.is_pinned ? "pin-filled" : "pin" }}</span>
+                  {{ record.is_pinned ? "取消置顶" : "置顶" }}
+                </a-button>
+                <a-button size="mini" @click="router.push(`/knowledge-bases/${record.id}`)">
+                  详情
+                </a-button>
                 <a-button size="mini" type="primary" @click="router.push(`/knowledge-bases/${record.id}/documents`)">
                   文档管理
                 </a-button>

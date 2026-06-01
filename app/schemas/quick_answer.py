@@ -2,7 +2,10 @@ from pydantic import BaseModel, Field
 
 
 class QuickAnswerRequest(BaseModel):
-    knowledge_base_id: str
+    knowledge_base_id: str | None = None
+    knowledge_base_ids: list[str] = Field(default_factory=list)
+    knowledge_ids: list[str] = Field(default_factory=list)
+    mentioned_items: list[dict] = Field(default_factory=list)
     query: str = Field(min_length=1)
     top_k: int | None = Field(default=None, ge=1, le=20)
     mode: str | None = None
@@ -20,6 +23,7 @@ class QuickAnswerStreamRequest(QuickAnswerRequest):
 class SourceRead(BaseModel):
     document_id: str
     knowledge_base_id: str
+    knowledge_base_name: str | None = None
     chunk_id: str
     title: str | None = None
     content: str

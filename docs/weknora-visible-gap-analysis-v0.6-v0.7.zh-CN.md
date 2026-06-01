@@ -2,7 +2,7 @@
 
 日期：2026-05-30
 
-范围：本报告是非点击版差距分析，初版依据 Tencent/WeKnora 公开 README、CHANGELOG、DeepWiki 源码索引，以及本地 knowmate v0.5 的 README、CHANGELOG 和前端路由/页面结构整理；2026-05-31 已按 knowmate v0.61 更新当前基线。由于 Chrome 插件安全策略阻止对 WeKnora 线上生产域名进行自动化点击，本报告不包含线上页面真实点击验证结果。
+范围：本报告是非点击版差距分析，初版依据 Tencent/WeKnora 公开 README、CHANGELOG、DeepWiki 源码索引，以及本地 knowmate v0.5 的 README、CHANGELOG 和前端路由/页面结构整理；2026-05-31 已按 knowmate v0.61 更新当前基线；2026-06-01 已补充 knowmate v0.7 P0 完成状态。由于 Chrome 插件安全策略阻止对 WeKnora 线上生产域名进行自动化点击，本报告不包含线上页面真实点击验证结果。
 
 主要参考来源：
 
@@ -17,7 +17,19 @@
 
 ## 一句话结论
 
-knowmate v0.61 已经把 Quick Q&A 的核心 RAG 主链路、会话化问答、标签、文档预览、FAQ 导入导出、批处理反馈和设置中心外壳搭起来了，当前最大的差距不再是“能不能上传文档并问答”，而是 WeKnora 更完整的 Agent、Wiki、工作区/RBAC、高级解析、外部导入、多端入口和企业级可观测性。
+knowmate v0.7 已经把 Quick Q&A 的核心 RAG 主链路、会话化问答、标签、文档预览、FAQ 导入导出、批处理反馈、设置中心外壳、KB capabilities / pin、KB 详情一体化设置、多 scope 检索、Chat mention、文档处理 timeline、FAQ 相似问法和 FAQ 索引模式搭起来了，当前最大的差距不再是“能不能上传文档并问答”，而是 WeKnora 更完整的 Agent、Wiki、工作区/RBAC、高级解析、外部导入、多端入口和企业级可观测性。
+
+## v0.7 更新说明
+
+截至 2026-06-01，TASK-010 到 TASK-019 已作为 knowmate `v0.7` 归档完成。v0.7 仍未进入 Agent/Wiki/RBAC 大范围，而是完成原 v0.7 P0 的 Quick Q&A 平台化补齐：
+
+- KB capabilities 与 pin。
+- KB 详情一体化页面和创建后设置编辑。
+- 多知识库 / 文件范围检索和 Chat mention scope。
+- 文档处理 parse/chunk/embed/upsert/finalize timeline。
+- FAQ 相似问法、FAQ 索引模式和命中问法展示。
+
+因此，本文中原建议放到 v0.7 P0 的项目已经落地。上传队列、停止生成、自动标题、文档下载/取消/移动、retrieval trace 细化、Command Palette、真实 parser/storage status、附件上下文和 RBAC-lite 进入 v0.71 或后续候选。
 
 ## v0.61 更新说明
 

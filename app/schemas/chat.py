@@ -67,6 +67,7 @@ class ChatMessageRead(BaseModel):
     content: str
     original_query: str | None = None
     rewritten_query: str | None = None
+    mentioned_items: list[dict] = Field(default_factory=list)
     sources: list[SourceRead] = Field(default_factory=list)
     retrieval_trace: dict | None = None
     model_config_info: dict | None = Field(default=None, alias="model_config")

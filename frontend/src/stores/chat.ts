@@ -9,6 +9,7 @@ import type {
   ChatSessionRead,
   ChatSettings,
   KnowledgeSearchResponse,
+  MentionedItem,
   QuickAnswerResponse,
   RecommendedQuestionListResponse,
   RecommendedQuestionRead,
@@ -16,6 +17,9 @@ import type {
 
 interface AskParams {
   knowledge_base_id: string;
+  knowledge_base_ids?: string[];
+  knowledge_ids?: string[];
+  mentioned_items?: MentionedItem[];
   top_k: number;
   mode: string;
   enable_rerank: boolean;
@@ -28,13 +32,19 @@ function nowIso(): string {
   return new Date().toISOString();
 }
 
-function optimisticMessage(role: "user" | "assistant", content: string, sessionId: string): ChatMessageRead {
+function optimisticMessage(
+  role: "user" | "assistant",
+  content: string,
+  sessionId: string,
+  mentionedItems: MentionedItem[] = [],
+): ChatMessageRead {
   return {
     id: `local-${role}-${Date.now()}`,
     tenant_id: 10000,
     session_id: sessionId,
     role,
     content,
+    mentioned_items: role === "user" ? mentionedItems : [],
     sources: [],
     status: role === "assistant" ? "streaming" : "completed",
     created_at: nowIso(),
@@ -157,13 +167,16 @@ export const useChatStore = defineStore("chat", () => {
     quickAnswer.value = null;
     const sessionIdBeforeSend = currentSession.value?.id || "";
     if (sessionIdBeforeSend) {
-      messages.value.push(optimisticMessage("user", question.value, sessionIdBeforeSend));
+      messages.value.push(optimisticMessage("user", question.value, sessionIdBeforeSend, params.mentioned_items || []));
       messages.value.push(optimisticMessage("assistant", "", sessionIdBeforeSend));
     }
     try {
       await postSse("/quick-answer/stream", {
         session_id: currentSession.value?.id,
         knowledge_base_id: params.knowledge_base_id,
+        knowledge_base_ids: params.knowledge_base_ids,
+        knowledge_ids: params.knowledge_ids,
+        mentioned_items: params.mentioned_items,
         query: question.value,
         top_k: params.top_k,
         mode: params.mode,
@@ -175,7 +188,7 @@ export const useChatStore = defineStore("chat", () => {
         if (sse.event === "session") {
           currentSession.value = { ...(sse.data as unknown as ChatSessionDetail), messages: messages.value };
           if (!sessionIdBeforeSend) {
-            messages.value.push(optimisticMessage("user", question.value, currentSession.value.id));
+            messages.value.push(optimisticMessage("user", question.value, currentSession.value.id, params.mentioned_items || []));
             messages.value.push(optimisticMessage("assistant", "", currentSession.value.id));
           }
         }
@@ -212,6 +225,8 @@ export const useChatStore = defineStore("chat", () => {
     try {
       knowledgeSearchResult.value = await postJson<KnowledgeSearchResponse>("/knowledge-search", {
         knowledge_base_id: params.knowledge_base_id,
+        knowledge_base_ids: params.knowledge_base_ids,
+        knowledge_ids: params.knowledge_ids,
         query: knowledgeSearchQuery.value,
         top_k: params.top_k,
         mode: params.mode,

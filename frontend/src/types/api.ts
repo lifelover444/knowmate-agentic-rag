@@ -69,6 +69,22 @@ export interface IndexingStrategy {
   enable_knowledge_graph: boolean;
 }
 
+export interface FAQConfig {
+  index_mode: "question_only" | "question_answer" | string;
+  question_index_mode: "combined" | "separate" | string;
+}
+
+export interface KnowledgeBaseCapabilities {
+  document: boolean;
+  faq: boolean;
+  vector: boolean;
+  keyword: boolean;
+  parent_child: boolean;
+  rerank: boolean;
+  wiki: boolean;
+  graph: boolean;
+}
+
 export interface ParserEngineRule {
   file_types: string[];
   engine: string;
@@ -90,6 +106,7 @@ export interface KnowledgeBaseRead {
   kb_type: "document" | "faq" | string;
   chunking_config: ChunkingConfig | Record<string, unknown>;
   parser_engine_rules?: ParserEngineRule[] | null;
+  faq_config?: FAQConfig | null;
   indexing_strategy: IndexingStrategy | Record<string, unknown>;
   vector_store_id?: string | null;
   embedding_model_id: string;
@@ -97,6 +114,9 @@ export interface KnowledgeBaseRead {
   document_count: number;
   chunk_count: number;
   processing_count: number;
+  capabilities: KnowledgeBaseCapabilities;
+  is_pinned: boolean;
+  pinned_at?: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -109,6 +129,7 @@ export interface KnowledgeBasePayload {
   summary_model_id?: string | null;
   chunking_config: ChunkingConfig;
   parser_engine_rules: ParserEngineRule[];
+  faq_config?: FAQConfig | null;
   indexing_strategy?: IndexingStrategy;
   vector_store_id?: string | null;
 }
@@ -232,6 +253,7 @@ export interface FAQEntryRead {
   knowledge_base_id: string;
   knowledge_id: string;
   question: string;
+  similar_questions: string[];
   answer: string;
   metadata?: Record<string, unknown> | null;
   tag_id?: string | null;
@@ -302,9 +324,33 @@ export interface DocumentPreviewRead {
   metadata?: Record<string, unknown> | null;
 }
 
+export interface ProcessingSpanRead {
+  span_id: string;
+  parent_span_id?: string | null;
+  name: string;
+  kind: string;
+  status: "pending" | "running" | "done" | "failed" | "cancelled" | "skipped" | string;
+  input?: Record<string, unknown> | null;
+  output?: Record<string, unknown> | null;
+  metadata?: Record<string, unknown> | null;
+  error_code?: string | null;
+  error_message?: string | null;
+  started_at?: string | null;
+  finished_at?: string | null;
+  duration_ms: number;
+}
+
+export interface ProcessingSpanTimeline {
+  knowledge_id: string;
+  attempt: number;
+  root: ProcessingSpanRead;
+  stages: ProcessingSpanRead[];
+}
+
 export interface SourceRead {
   document_id: string;
   knowledge_base_id: string;
+  knowledge_base_name?: string | null;
   chunk_id: string;
   title?: string | null;
   content: string;
@@ -331,6 +377,13 @@ export interface ChatSettings {
   enable_query_rewrite?: boolean;
 }
 
+export interface MentionedItem {
+  id: string;
+  name: string;
+  type: "kb" | "file" | string;
+  kb_type?: string | null;
+}
+
 export interface ChatMessageRead {
   id: string;
   tenant_id: number;
@@ -339,6 +392,7 @@ export interface ChatMessageRead {
   content: string;
   original_query?: string | null;
   rewritten_query?: string | null;
+  mentioned_items?: MentionedItem[];
   sources: SourceRead[];
   retrieval_trace?: Record<string, unknown> | null;
   model_config?: Record<string, unknown> | null;

@@ -87,6 +87,59 @@ h3 {
   background: var(--km-bg-card);
 }
 
+.kb-detail-shell {
+  gap: 14px;
+}
+
+.kb-detail-overview,
+.kb-detail-panel {
+  display: grid;
+  gap: 14px;
+}
+
+.kb-detail-metrics {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.kb-detail-metrics span {
+  border: 1px solid var(--km-border);
+  border-radius: var(--km-radius);
+  padding: 6px 10px;
+  color: var(--km-text-secondary);
+  background: #fbfdfc;
+  font-size: 13px;
+}
+
+.kb-detail-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.kb-detail-embedded.page-shell {
+  padding: 0;
+}
+
+.kb-settings-form {
+  display: grid;
+  gap: 18px;
+}
+
+.kb-settings-form section {
+  display: grid;
+  gap: 10px;
+  border-top: 1px solid var(--km-border);
+  padding-top: 14px;
+}
+
+.kb-settings-form h3 {
+  color: var(--km-text-primary);
+  font-size: 15px;
+  font-weight: 700;
+}
+
 .section-heading {
   display: flex;
   align-items: flex-start;
@@ -133,6 +186,44 @@ h3 {
   gap: 3px;
   color: var(--km-text-secondary);
   font-size: 12px;
+}
+
+.kb-name-cell {
+  display: grid;
+  gap: 4px;
+  align-items: start;
+}
+
+.kb-name-cell strong {
+  font-size: 14px;
+}
+
+.kb-name-cell small {
+  color: var(--km-text-placeholder);
+  font-size: 12px;
+}
+
+.kb-capabilities {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  max-width: 280px;
+}
+
+.kb-capability-disabled {
+  opacity: 0.6;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  border: 0;
+  white-space: nowrap;
 }
 
 .inline-error {
@@ -224,6 +315,124 @@ h3 {
   font-size: 15px;
 }
 
+.processing-timeline {
+  display: grid;
+  gap: 10px;
+  border: 1px solid var(--km-border);
+  border-radius: var(--km-radius);
+  padding: 12px;
+  background: #fbfdfc;
+}
+
+.processing-timeline--drawer {
+  border: 0;
+  padding: 0;
+  background: transparent;
+}
+
+.processing-timeline__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.processing-timeline__header h3 {
+  margin: 0;
+}
+
+.processing-timeline__header small {
+  color: var(--km-text-secondary);
+}
+
+.timeline-stage-list {
+  display: grid;
+  gap: 8px;
+}
+
+.timeline-stage {
+  display: grid;
+  grid-template-columns: 14px minmax(0, 1fr);
+  gap: 8px;
+  position: relative;
+}
+
+.timeline-stage::before {
+  position: absolute;
+  top: 17px;
+  bottom: -10px;
+  left: 5px;
+  width: 1px;
+  background: var(--km-border);
+  content: "";
+}
+
+.timeline-stage:last-child::before {
+  display: none;
+}
+
+.timeline-stage__dot {
+  width: 11px;
+  height: 11px;
+  margin-top: 4px;
+  border: 2px solid var(--km-border);
+  border-radius: 999px;
+  background: #ffffff;
+  z-index: 1;
+}
+
+.timeline-stage__body {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  border: 1px solid var(--km-border);
+  border-radius: var(--km-radius);
+  padding: 9px 10px;
+  background: #ffffff;
+}
+
+.timeline-stage__body header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.timeline-stage__body small {
+  color: var(--km-text-secondary);
+}
+
+.timeline-stage--done .timeline-stage__dot {
+  border-color: var(--km-success);
+  background: var(--km-success);
+}
+
+.timeline-stage--running .timeline-stage__dot {
+  border-color: var(--km-warning);
+  background: var(--km-warning);
+  box-shadow: 0 0 0 4px rgba(255, 125, 0, 0.12);
+}
+
+.timeline-stage--failed .timeline-stage__dot {
+  border-color: var(--km-error);
+  background: var(--km-error);
+}
+
+.timeline-stage--cancelled .timeline-stage__dot {
+  border-style: dashed;
+  border-color: var(--km-text-placeholder);
+}
+
+.timeline-root-error {
+  border: 1px solid rgba(245, 63, 63, 0.24);
+  border-radius: var(--km-radius);
+  padding: 10px 12px;
+  color: var(--km-error);
+  background: #fff2f0;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
 .preview-content {
   max-height: calc(100vh - 160px);
   overflow: auto;
@@ -255,10 +464,25 @@ h3 {
   margin-bottom: 16px;
 }
 
+.faq-config-panel {
+  border-left: 3px solid var(--km-primary);
+  padding-left: 14px;
+}
+
 .faq-import-failures,
-.faq-search-results {
+.faq-search-results,
+.similar-question-list {
   display: grid;
   gap: 10px;
+}
+
+.similar-question-list {
+  justify-items: start;
+}
+
+.matched-question {
+  color: var(--km-warning);
+  font-size: 12px;
 }
 
 .faq-import-failure,

@@ -15,6 +15,7 @@ class RetrievalHit:
     knowledge_base_id: str
     content: str
     score: float
+    knowledge_base_name: str | None = None
     title: str | None = None
     context_header: str | None = None
     parent_chunk_id: str | None = None
@@ -37,6 +38,7 @@ class Retriever(Protocol):
         knowledge_base_id: str,
         limit: int,
         score_threshold: float | None = None,
+        knowledge_ids: list[str] | None = None,
     ) -> list[RetrievalHit]:
         ...
 
@@ -53,6 +55,7 @@ class VectorRetriever:
         knowledge_base_id: str,
         limit: int,
         score_threshold: float | None = None,
+        knowledge_ids: list[str] | None = None,
     ) -> list[RetrievalHit]:
         query_vector = self.embedder.embed(query)
         hits = _vector_search(
@@ -61,6 +64,7 @@ class VectorRetriever:
             query_vector=query_vector,
             limit=limit,
             score_threshold=score_threshold,
+            knowledge_ids=knowledge_ids,
         )
         return [
             RetrievalHit(
@@ -92,6 +96,7 @@ class KeywordRetriever:
         knowledge_base_id: str,
         limit: int,
         score_threshold: float | None = None,
+        knowledge_ids: list[str] | None = None,
     ) -> list[RetrievalHit]:
         terms = tokenize_query(query)
         rows = self.chunk_repo.keyword_search(
@@ -100,6 +105,7 @@ class KeywordRetriever:
             terms=terms,
             limit=limit,
             score_threshold=score_threshold,
+            knowledge_ids=knowledge_ids,
         )
         return [
             RetrievalHit(
@@ -143,9 +149,22 @@ class HybridRetriever:
         knowledge_base_id: str,
         limit: int,
         score_threshold: float | None = None,
+        knowledge_ids: list[str] | None = None,
     ) -> list[RetrievalHit]:
-        vector_hits = self.vector_retriever.search(query, knowledge_base_id=knowledge_base_id, limit=limit)
-        keyword_hits = self.keyword_retriever.search(query, knowledge_base_id=knowledge_base_id, limit=limit)
+        vector_hits = _search_with_optional_knowledge_ids(
+            self.vector_retriever,
+            query,
+            knowledge_base_id=knowledge_base_id,
+            limit=limit,
+            knowledge_ids=knowledge_ids,
+        )
+        keyword_hits = _search_with_optional_knowledge_ids(
+            self.keyword_retriever,
+            query,
+            knowledge_base_id=knowledge_base_id,
+            limit=limit,
+            knowledge_ids=knowledge_ids,
+        )
         merged: dict[str, RetrievalHit] = {}
         rrf_scores: dict[str, float] = {}
 
@@ -241,6 +260,25 @@ def clean_rerank_passage(content: str, *, max_chars: int = 4000) -> str:
     return cleaned[:max_chars]
 
 
+def _search_with_optional_knowledge_ids(
+    retriever,
+    query: str,
+    *,
+    knowledge_base_id: str,
+    limit: int,
+    knowledge_ids: list[str] | None,
+):
+    try:
+        return retriever.search(
+            query,
+            knowledge_base_id=knowledge_base_id,
+            limit=limit,
+            knowledge_ids=knowledge_ids,
+        )
+    except TypeError:
+        return retriever.search(query, knowledge_base_id=knowledge_base_id, limit=limit)
+
+
 def tokenize_query(query: str) -> list[str]:
     if jieba is not None:
         terms = [item.strip().lower() for item in jieba.cut(query) if item.strip()]
@@ -254,16 +292,28 @@ def tokenize_query(query: str) -> list[str]:
     return [term for term in expanded if len(term) > 1 or re.match(r"[\u4e00-\u9fff]", term)]
 
 
-def _vector_search(vector_store, *, knowledge_base_id: str, query_vector: list[float], limit: int, score_threshold):
+def _vector_search(
+    vector_store,
+    *,
+    knowledge_base_id: str,
+    query_vector: list[float],
+    limit: int,
+    score_threshold,
+    knowledge_ids: list[str] | None,
+):
     try:
         return vector_store.search(
             knowledge_base_id=knowledge_base_id,
             query_vector=query_vector,
             limit=limit,
             score_threshold=score_threshold,
+            knowledge_ids=knowledge_ids,
         )
     except TypeError:
         hits = vector_store.search(knowledge_base_id=knowledge_base_id, query_vector=query_vector, limit=limit)
-        if score_threshold is None:
-            return hits
-        return [hit for hit in hits if float(hit.get("score") or 0) >= score_threshold]
+        if knowledge_ids:
+            allowed = set(knowledge_ids)
+            hits = [hit for hit in hits if str(hit.get("knowledge_id")) in allowed]
+        if score_threshold is not None:
+            hits = [hit for hit in hits if float(hit.get("score") or 0) >= score_threshold]
+        return hits

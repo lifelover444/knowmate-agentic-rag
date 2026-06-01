@@ -11,6 +11,8 @@ const route = useRoute();
 const router = useRouter();
 const kbStore = useKnowledgeBaseStore();
 const drawerVisible = ref(false);
+const timelineVisible = ref(false);
+const timelineLoading = ref(false);
 const importVisible = ref(false);
 const importMode = ref<"text" | "url">("text");
 const activeDocument = ref<DocumentRead | null>(null);
@@ -45,6 +47,50 @@ function statusText(status: string) {
   );
 }
 
+function timelineStageText(name: string) {
+  return (
+    {
+      parse: "文档解析",
+      chunk: "内容切分",
+      embed: "向量生成",
+      upsert: "索引入库",
+      finalize: "完成收尾",
+    }[name] || name
+  );
+}
+
+function timelineStatusText(status: string) {
+  return (
+    {
+      pending: "等待中",
+      running: "处理中",
+      done: "已完成",
+      failed: "失败",
+      cancelled: "已取消",
+      skipped: "已跳过",
+    }[status] || status
+  );
+}
+
+function timelineStatusColor(status: string) {
+  return (
+    {
+      pending: "gray",
+      running: "blue",
+      done: "green",
+      failed: "red",
+      cancelled: "gray",
+      skipped: "gray",
+    }[status] || "gray"
+  );
+}
+
+function formatDuration(ms?: number | null) {
+  if (ms === undefined || ms === null) return "-";
+  if (ms < 1000) return `${Math.max(ms, 0)} ms`;
+  return `${(ms / 1000).toFixed(2)} s`;
+}
+
 async function refresh() {
   await Promise.all([
     kbStore.loadKnowledgeBase(kbId.value),
@@ -70,10 +116,33 @@ async function openChunks(document: DocumentRead) {
   kbStore.currentDocument = document;
   drawerVisible.value = true;
   try {
-    await Promise.all([kbStore.loadDocumentPreview(document.id), kbStore.loadChunks(document.id)]);
+    await Promise.all([
+      kbStore.loadDocumentPreview(document.id),
+      kbStore.loadChunks(document.id),
+      kbStore.loadDocumentSpans(document.id),
+    ]);
   } catch (error) {
     Message.error(formatApiError(error instanceof Error ? error.message : error));
   }
+}
+
+async function refreshProcessingTimeline() {
+  if (!activeDocument.value) return;
+  timelineLoading.value = true;
+  try {
+    await kbStore.loadDocumentSpans(activeDocument.value.id);
+  } catch (error) {
+    Message.error(formatApiError(error instanceof Error ? error.message : error));
+  } finally {
+    timelineLoading.value = false;
+  }
+}
+
+async function openProcessingTimeline(document: DocumentRead) {
+  activeDocument.value = document;
+  kbStore.currentDocument = document;
+  timelineVisible.value = true;
+  await refreshProcessingTimeline();
 }
 
 async function jumpToPreviewChunk(chunkId: string) {
@@ -412,6 +481,13 @@ onMounted(() => {
             <template #cell="{ record }">
               <a-space>
                 <a-button size="mini" @click="openChunks(record)">文档预览</a-button>
+                <a-button
+                  v-if="['pending', 'processing', 'failed'].includes(record.parse_status)"
+                  size="mini"
+                  @click="openProcessingTimeline(record)"
+                >
+                  处理时间线
+                </a-button>
                 <a-button size="mini" data-testid="reprocess-doc" @click="reprocess(record)">重新处理</a-button>
                 <a-popconfirm content="确认删除这个文档？" type="warning" @ok="deleteDocument(record)">
                   <a-button size="mini" status="danger">删除</a-button>
@@ -435,6 +511,42 @@ onMounted(() => {
           <p v-if="kbStore.currentDocumentPreview.error_message" class="inline-error">
             {{ kbStore.currentDocumentPreview.error_message }}
           </p>
+          <div class="processing-timeline" data-testid="processing-timeline">
+            <header class="processing-timeline__header">
+              <div>
+                <h3>处理时间线</h3>
+                <small>
+                  Attempt {{ kbStore.currentProcessingTimeline?.attempt ?? "-" }}
+                  · {{ timelineStatusText(kbStore.currentProcessingTimeline?.root.status || "pending") }}
+                </small>
+              </div>
+              <a-button size="mini" :loading="timelineLoading" @click="refreshProcessingTimeline">手动刷新</a-button>
+            </header>
+            <!-- 无阶段记录时显示当前文档状态占位 -->
+            <p v-if="kbStore.currentProcessingTimeline?.attempt === 0" class="muted-text">
+              历史文档没有处理明细，已根据当前状态生成占位阶段。
+            </p>
+            <div v-if="kbStore.currentProcessingTimeline" class="timeline-stage-list">
+              <article
+                v-for="stage in kbStore.currentProcessingTimeline.stages"
+                :key="stage.name"
+                class="timeline-stage"
+                :class="`timeline-stage--${stage.status}`"
+              >
+                <span class="timeline-stage__dot" />
+                <div class="timeline-stage__body">
+                  <header>
+                    <strong>{{ timelineStageText(stage.name) }}</strong>
+                    <a-tag :color="timelineStatusColor(stage.status)">
+                      {{ timelineStatusText(stage.status) }}
+                    </a-tag>
+                  </header>
+                  <small>{{ formatDuration(stage.duration_ms) }}</small>
+                  <p v-if="stage.error_message" class="inline-error">{{ stage.error_message }}</p>
+                </div>
+              </article>
+            </div>
+          </div>
           <a-button
             v-for="chunk in kbStore.currentDocumentPreview.chunks"
             :key="chunk.id"
@@ -463,6 +575,58 @@ onMounted(() => {
         </section>
       </div>
       <a-empty v-else description="暂无预览" />
+    </a-drawer>
+
+    <a-drawer
+      v-model:visible="timelineVisible"
+      :width="520"
+      :title="activeDocument ? `${activeDocument.title} · 处理时间线` : '处理时间线'"
+    >
+      <div class="processing-timeline processing-timeline--drawer" data-testid="processing-timeline-drawer">
+        <header class="processing-timeline__header">
+          <div>
+            <h3>处理时间线</h3>
+            <small>
+              Attempt {{ kbStore.currentProcessingTimeline?.attempt ?? "-" }}
+              · {{ timelineStatusText(kbStore.currentProcessingTimeline?.root.status || activeDocument?.parse_status || "pending") }}
+            </small>
+          </div>
+          <a-button size="mini" :loading="timelineLoading" @click="refreshProcessingTimeline">手动刷新</a-button>
+        </header>
+        <a-spin v-if="timelineLoading && !kbStore.currentProcessingTimeline" />
+        <template v-else-if="kbStore.currentProcessingTimeline">
+          <p v-if="kbStore.currentProcessingTimeline.attempt === 0" class="muted-text">
+            历史文档没有处理明细，已根据当前状态生成占位阶段。
+          </p>
+          <article
+            v-if="kbStore.currentProcessingTimeline.root.error_message"
+            class="timeline-root-error"
+          >
+            {{ kbStore.currentProcessingTimeline.root.error_message }}
+          </article>
+          <div class="timeline-stage-list">
+            <article
+              v-for="stage in kbStore.currentProcessingTimeline.stages"
+              :key="stage.name"
+              class="timeline-stage"
+              :class="`timeline-stage--${stage.status}`"
+            >
+              <span class="timeline-stage__dot" />
+              <div class="timeline-stage__body">
+                <header>
+                  <strong>{{ timelineStageText(stage.name) }}</strong>
+                  <a-tag :color="timelineStatusColor(stage.status)">
+                    {{ timelineStatusText(stage.status) }}
+                  </a-tag>
+                </header>
+                <small>{{ formatDuration(stage.duration_ms) }}</small>
+                <p v-if="stage.error_message" class="inline-error">{{ stage.error_message }}</p>
+              </div>
+            </article>
+          </div>
+        </template>
+        <a-empty v-else description="暂无处理时间线" />
+      </div>
     </a-drawer>
 
     <a-modal v-model:visible="importVisible" :title="importMode === 'url' ? 'URL 导入' : '在线文本导入'" @ok="submitImport">

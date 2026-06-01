@@ -3,7 +3,7 @@ from dataclasses import dataclass
 from sqlalchemy.orm import Session
 
 from app.core.config import Settings
-from app.db.models import ChatMessage
+from app.db.models import ChatMessage, Knowledge
 from app.integrations.llm_openai import OpenAIChatModel
 from app.rag.prompt import build_quick_answer_messages
 from app.rag.query_rewrite import build_query_rewrite_messages
@@ -35,14 +35,18 @@ class QuickAnswerService:
 
     def answer(
         self,
-        knowledge_base_id: str,
+        knowledge_base_id: str | None,
         query: str,
         top_k: int | None = None,
         mode: str | None = None,
         enable_rerank: bool | None = None,
+        knowledge_base_ids: list[str] | None = None,
+        knowledge_ids: list[str] | None = None,
     ):
         prepared = self.prepare_answer(
             knowledge_base_id=knowledge_base_id,
+            knowledge_base_ids=knowledge_base_ids,
+            knowledge_ids=knowledge_ids,
             query=query,
             top_k=top_k,
             mode=mode,
@@ -53,7 +57,9 @@ class QuickAnswerService:
     def prepare_answer(
         self,
         *,
-        knowledge_base_id: str,
+        knowledge_base_id: str | None,
+        knowledge_base_ids: list[str] | None = None,
+        knowledge_ids: list[str] | None = None,
         query: str,
         top_k: int | None = None,
         mode: str | None = None,
@@ -64,8 +70,9 @@ class QuickAnswerService:
         system_prompt: str | None = None,
         generate_answer: bool = True,
     ) -> QuickAnswerPrepared:
+        primary_kb_id = knowledge_base_id or _primary_knowledge_base_id(knowledge_base_ids, knowledge_ids, self.db)
         rewritten_query, rewrite_trace = self._rewrite_query(
-            knowledge_base_id=knowledge_base_id,
+            knowledge_base_id=primary_kb_id,
             query=query,
             history=history or [],
             enable_query_rewrite=enable_query_rewrite,
@@ -74,12 +81,14 @@ class QuickAnswerService:
         search_query = rewritten_query or query
         hits = KnowledgeSearchService(self.db, self.settings, self.embedder, self.vector_store).search(
             knowledge_base_id=knowledge_base_id,
+            knowledge_base_ids=knowledge_base_ids,
+            knowledge_ids=knowledge_ids,
             query=search_query,
             mode=mode,
             top_k=top_k,
             enable_rerank=enable_rerank,
         )
-        model_config = self._model_config_payload(knowledge_base_id)
+        model_config = self._model_config_payload(primary_kb_id)
         retrieval_trace = {
             **rewrite_trace,
             "retrieval_mode": mode,
@@ -98,7 +107,7 @@ class QuickAnswerService:
             )
 
         sources = [_hit_to_source(hit) for hit in hits]
-        chat_model = self._chat_model(knowledge_base_id)
+        chat_model = self._chat_model(primary_kb_id)
         messages = build_quick_answer_messages(
             query=search_query,
             contexts=[
@@ -206,6 +215,7 @@ def _hit_to_source(hit) -> AnswerSource:
     return AnswerSource(
         document_id=hit.document_id,
         knowledge_base_id=hit.knowledge_base_id,
+        knowledge_base_name=hit.knowledge_base_name,
         chunk_id=hit.chunk_id,
         content=hit.content,
         score=hit.score,
@@ -228,6 +238,7 @@ def _source_to_read(source: AnswerSource) -> SourceRead:
     return SourceRead(
         document_id=source.document_id,
         knowledge_base_id=source.knowledge_base_id,
+        knowledge_base_name=source.knowledge_base_name,
         chunk_id=source.chunk_id,
         title=source.title,
         content=source.content,
@@ -262,3 +273,17 @@ def stream_complete(chat_model, messages: list[dict[str, str]], temperature: flo
             yield from chat_model.stream_complete(messages)
             return
     yield _complete(chat_model, messages, temperature)
+
+
+def _primary_knowledge_base_id(
+    knowledge_base_ids: list[str] | None,
+    knowledge_ids: list[str] | None,
+    db: Session,
+) -> str:
+    if knowledge_base_ids:
+        return knowledge_base_ids[0]
+    if knowledge_ids:
+        document = db.get(Knowledge, knowledge_ids[0])
+        if document is not None:
+            return document.knowledge_base_id
+    raise ValueError("至少提供一个 knowledge_base_id、knowledge_base_ids 或 knowledge_ids")

@@ -58,6 +58,41 @@ def normalize_indexing_strategy(strategy: dict | None) -> dict:
     return normalized
 
 
+def default_faq_config() -> dict:
+    return {
+        "index_mode": "question_answer",
+        "question_index_mode": "combined",
+    }
+
+
+def normalize_faq_config(kb_type: str | None, config: dict | None) -> dict | None:
+    if normalize_kb_type(kb_type) != "faq":
+        return None
+    normalized = default_faq_config()
+    if config:
+        normalized.update(config)
+    if normalized["index_mode"] not in {"question_only", "question_answer"}:
+        raise ValueError("FAQ index_mode 仅支持 question_only 或 question_answer")
+    if normalized["question_index_mode"] not in {"combined", "separate"}:
+        raise ValueError("FAQ question_index_mode 仅支持 combined 或 separate")
+    return normalized
+
+
+def knowledge_base_capabilities(kb_type: str | None, indexing_strategy: dict | None) -> dict:
+    strategy = normalize_indexing_strategy(indexing_strategy)
+    normalized_type = normalize_kb_type(kb_type)
+    return {
+        "document": normalized_type == "document",
+        "faq": normalized_type == "faq",
+        "vector": bool(strategy["enable_vector"]),
+        "keyword": bool(strategy["enable_keyword"]),
+        "parent_child": bool(strategy["enable_parent_child"]),
+        "rerank": bool(strategy["enable_rerank"]),
+        "wiki": False,
+        "graph": False,
+    }
+
+
 def normalize_kb_type(value: str | None) -> str:
     kb_type = (value or "document").strip().lower()
     if kb_type not in {"document", "faq"}:
@@ -105,6 +140,7 @@ class KnowledgeBaseService:
                 kb_type=normalize_kb_type(payload.kb_type),
                 chunking_config=chunking,
                 parser_engine_rules=parser_engine_rules,
+                faq_config=normalize_faq_config(payload.kb_type, _dump_model(payload.faq_config)),
                 indexing_strategy=normalize_indexing_strategy(indexing_strategy),
                 vector_store_id=vector_store_id,
                 embedding_model_id=embedding_model_id,
@@ -128,6 +164,7 @@ class KnowledgeBaseService:
             kb.description = data["description"]
         if "kb_type" in data and data["kb_type"] is not None:
             kb.kb_type = normalize_kb_type(data["kb_type"])
+            kb.faq_config = normalize_faq_config(kb.kb_type, kb.faq_config)
         if "chunking_config" in data and data["chunking_config"] is not None:
             kb.chunking_config = normalize_chunking_config(data["chunking_config"], self.settings)
         if "parser_engine_rules" in data and data["parser_engine_rules"] is not None:
@@ -135,6 +172,8 @@ class KnowledgeBaseService:
                 item.model_dump() if hasattr(item, "model_dump") else item
                 for item in data["parser_engine_rules"]
             ]
+        if "faq_config" in data:
+            kb.faq_config = normalize_faq_config(kb.kb_type, _dump_model(data["faq_config"]))
         if "indexing_strategy" in data and data["indexing_strategy"] is not None:
             kb.indexing_strategy = normalize_indexing_strategy(data["indexing_strategy"])
         if "vector_store_id" in data:
@@ -152,3 +191,9 @@ class KnowledgeBaseService:
             for document in documents:
                 vector_store.delete_by_knowledge_id(document.id)
         return self.repo.soft_delete(kb)
+
+
+def _dump_model(value):
+    if value is None:
+        return None
+    return value.model_dump() if hasattr(value, "model_dump") else value

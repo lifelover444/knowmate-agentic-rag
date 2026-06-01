@@ -2,7 +2,7 @@
 
 knowmate 知友是一个参考 [Tencent/WeKnora](https://github.com/Tencent/WeKnora) 核心思路实现的知识库 RAG 项目。后端技术栈从 WeKnora 的 Go 实现改为 Python / FastAPI；项目不是 Tencent/WeKnora 官方项目。
 
-当前版本为 v0.61，主线仍聚焦 WeKnora-style Quick Q&A。v0.61 在 v0.6 会话化知识库聊天体验基础上，补齐标签、文档预览、FAQ 导入导出、批处理反馈、设置中心和会话侧栏增强：
+当前版本为 v0.7，主线仍聚焦 WeKnora-style Quick Q&A。v0.7 在 v0.61 知识管理补强基础上，继续参考本地 WeKnora 源码补齐知识库平台化 P0 能力：KB capabilities / pin、KB 详情一体化设置、多知识库/文件范围检索、Chat mention、文档处理时间线、FAQ 相似问法和 FAQ 索引模式：
 
 ```text
 模型管理
@@ -16,7 +16,9 @@ knowmate 知友是一个参考 [Tencent/WeKnora](https://github.com/Tencent/WeKn
   -> chunk 元数据写 PostgreSQL
   -> 向量写 Qdrant
   -> FAQ 导入导出 / FAQ 检索测试
+  -> FAQ 相似问法 / FAQ 索引模式
   -> quick-answer / knowledge-search
+  -> 多知识库 / 文件范围检索
   -> vector + keyword 召回
   -> RRF hybrid merge
   -> optional rerank
@@ -24,8 +26,11 @@ knowmate 知友是一个参考 [Tencent/WeKnora](https://github.com/Tencent/WeKn
   -> optional query rewrite
   -> chat model 生成 answer
   -> 返回 answer + sources + retrieval trace
+  -> sources 显示知识库来源
   -> 保存 chat session / messages
+  -> Chat mention scope
   -> 会话搜索 / 批量删除 / 推荐问题
+  -> 文档处理 timeline
 ```
 
 ## 当前进度
@@ -113,8 +118,19 @@ knowmate 知友是一个参考 [Tencent/WeKnora](https://github.com/Tencent/WeKn
   - 批量删除/重处理响应新增 requested/succeeded/failed/failures，任务列表新增 batch_summary，文档页展示批处理进度和失败任务重试。
   - 新增 `/#/settings` 设置中心外壳，整合模型、VectorStore、检索、解析器和存储状态；parser/storage provider 未接入项以禁用占位展示。
   - 会话列表支持搜索、批量删除；新会话空态展示来自 FAQ 和 chunk generated_questions 的推荐问题。
+- v0.7 WeKnora P0 对齐：
+  - 知识库列表和详情返回 WeKnora-like `capabilities`，支持单租户 KB pin/unpin 和置顶排序。
+  - 新增 KB 详情一体化页面骨架，把概览、文档/FAQ 工作流、设置、任务/状态入口收敛到同一页面。
+  - KB 设置面板支持创建后编辑基础信息、模型绑定、parser rules、chunking config、indexing strategy 和 vector store，保存后提示需要重处理/重建索引。
+  - `knowledge-search` 和 `quick-answer` 支持 `knowledge_base_ids` 与 `knowledge_ids` scope，允许多知识库或文件范围检索，并校验跨 KB embedding 模型一致性。
+  - Chat 工作台新增显式 KB/file scope 选择和 mention chips；用户消息保存并展示 `mentioned_items`，sources 展示 `knowledge_base_name`。
+  - 新增文档处理 spans/timeline：parse、chunk、embed、upsert、finalize 五阶段记录状态、耗时、错误和 downstream cancelled，历史文档返回安全占位。
+  - 文档列表、预览抽屉和处理时间线抽屉展示五阶段处理状态。
+  - FAQ 支持 `similar_questions`，导入导出新增 `similar_questions` 列。
+  - FAQ KB 支持 `faq_config.index_mode` 与 `faq_config.question_index_mode`，按 question_only/question_answer 和 combined/separate 生成检索 chunk 与向量 payload。
+  - FAQ 管理页展示相似问法，编辑弹窗可输入相似问法，检索测试展示 `matched_question`。
 - 自动化测试：覆盖多模型 CRUD、凭据加密、知识库模型校验、重处理、检索配置、hybrid/RRF/rerank/parent-child retrieval、knowledge-search API、前端关键逻辑、API 和文档处理 payload。
-- v0.61 质量验证详见下方“验证命令”和 [CHANGELOG.md](CHANGELOG.md)。
+- v0.7 质量验证详见下方“验证命令”和 [CHANGELOG.md](CHANGELOG.md)。
 
 暂未实现：
 
@@ -344,6 +360,74 @@ Vite 会把 `/api` 和 `/health` 代理到 `http://127.0.0.1:8000`。
   "task_status": "queued"
 }
 ```
+
+## v0.7 Schema / API 变化
+
+`KnowledgeBaseRead` 新增或强化：
+
+```json
+{
+  "capabilities": {
+    "document": true,
+    "faq": false,
+    "vector": true,
+    "keyword": true,
+    "parent_child": false,
+    "rerank": false,
+    "wiki": false,
+    "graph": false
+  },
+  "is_pinned": true,
+  "pinned_at": "2026-05-31T12:00:00Z",
+  "faq_config": {
+    "index_mode": "question_answer",
+    "question_index_mode": "combined"
+  }
+}
+```
+
+新增 KB pin API：
+
+```http
+PUT /api/v1/knowledge-bases/{kb_id}/pin
+```
+
+请求体：
+
+```json
+{
+  "pinned": true
+}
+```
+
+`knowledge-search` / `quick-answer` scope 支持：
+
+```json
+{
+  "knowledge_base_ids": ["kb-a", "kb-b"],
+  "knowledge_ids": ["document-or-faq-knowledge-id"]
+}
+```
+
+`SourceRead` 新增可选 `knowledge_base_name`，用于多 KB 检索后的来源展示。
+
+`FAQEntryRead` / 创建 / 更新 / 导入导出新增 `similar_questions`：
+
+```json
+{
+  "question": "发票怎么申请？",
+  "similar_questions": ["哪里下载发票", "发票入口在哪"],
+  "answer": "..."
+}
+```
+
+新增文档处理 timeline API：
+
+```http
+GET /api/v1/documents/{document_id}/spans
+```
+
+返回 root span、当前 attempt 和 parse/chunk/embed/upsert/finalize 五阶段状态；历史文档无 span 时返回 attempt `0` 占位阶段。
 
 ## v0.61 Schema 变化
 
@@ -613,16 +697,16 @@ npm --prefix frontend run build
 
 最近一次本地验证结果：
 
-- `python -m pytest tests/test_v07_chat_experience.py tests/test_v06_chat_sessions.py tests/test_v06_quick_answer_stream.py -q`：`9 passed`
-- `python -m pytest (rg --files tests | rg 'test_frontend_.*\\.py$') -q`：`18 passed`
+- `python -m pytest -q`：`125 passed`
+- `python -m pytest (rg --files tests | rg 'test_frontend_.*\\.py$') -q`：`24 passed`
 - `ruff check .`：通过
 - `python -m compileall app tests`：通过
 - `npm --prefix frontend run build`：通过，仍有 Vite 大 chunk 提示。
-- v0.61 分项验收详见 [CHANGELOG.md](CHANGELOG.md) 的 v0.61 Verification。
+- v0.7 分项验收详见 [CHANGELOG.md](CHANGELOG.md) 的 v0.7 Verification。
 
 ## 开发备注
 
-- v0.61 仍默认单租户，`DEFAULT_TENANT_ID=10000`。
+- v0.7 仍默认单租户，`DEFAULT_TENANT_ID=10000`。
 - Docker Compose 当前只提供 `postgres / redis / qdrant`，API、worker、前端 dev server 需要本地命令启动。
 - 文档上传后必须启动 Celery Worker，否则文档会停留在 `pending` 或 `processing`。
 - 切换 embedding 模型、维度、切分参数或 keyword 检索文本策略后，需要重处理文档或重建知识库来刷新 Qdrant 向量和 `chunks.search_text`。

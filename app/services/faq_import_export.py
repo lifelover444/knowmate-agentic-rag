@@ -12,7 +12,7 @@ from app.db.repositories.tag import KnowledgeTagRepository
 from app.schemas.faq import FAQEntryCreate
 from app.services.faq import FAQEntryService
 
-FAQ_COLUMNS = ["question", "answer", "metadata", "enabled", "tag_id"]
+FAQ_COLUMNS = ["question", "similar_questions", "answer", "metadata", "enabled", "tag_id"]
 
 
 @dataclass
@@ -59,6 +59,7 @@ class FAQImportExportService:
             rows.append(
                 {
                     "question": entry.question,
+                    "similar_questions": "##".join(entry.similar_questions or []),
                     "answer": entry.answer,
                     "metadata": json.dumps(entry.faq_metadata or {}, ensure_ascii=False),
                     "enabled": "true" if entry.enabled else "false",
@@ -106,6 +107,7 @@ class FAQImportExportService:
                 raise ValueError("标签不存在")
         return FAQEntryCreate(
             question=question,
+            similar_questions=_parse_list(row.get("similar_questions")),
             answer=answer,
             metadata=metadata,
             enabled=_parse_bool(row.get("enabled")),
@@ -136,3 +138,15 @@ def _read_rows(filename: str, data: bytes) -> list[tuple[int, dict[str, str]]]:
 def _parse_bool(value: str | None) -> bool:
     normalized = (value or "true").strip().lower()
     return normalized not in {"false", "0", "no", "停用", "禁用"}
+
+
+def _parse_list(value: str | None) -> list[str]:
+    items: list[str] = []
+    seen: set[str] = set()
+    for raw in (value or "").split("##"):
+        item = raw.strip()
+        if not item or item in seen:
+            continue
+        seen.add(item)
+        items.append(item)
+    return items

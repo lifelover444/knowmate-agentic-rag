@@ -32,6 +32,7 @@ class FAQEntryService:
                 knowledge_base_id=kb.id,
                 knowledge_id=entry_id,
                 question=payload.question,
+                similar_questions=_normalize_similar_questions(payload.question, payload.similar_questions),
                 answer=payload.answer,
                 faq_metadata=payload.metadata or {},
                 tag_id=payload.tag_id,
@@ -45,6 +46,9 @@ class FAQEntryService:
         data = payload.model_dump(exclude_unset=True)
         if "question" in data and data["question"] is not None:
             entry.question = data["question"]
+            entry.similar_questions = _normalize_similar_questions(entry.question, entry.similar_questions or [])
+        if "similar_questions" in data and data["similar_questions"] is not None:
+            entry.similar_questions = _normalize_similar_questions(entry.question, data["similar_questions"])
         if "answer" in data and data["answer"] is not None:
             entry.answer = data["answer"]
         if "metadata" in data:
@@ -92,32 +96,13 @@ class FAQEntryService:
         if not entry.enabled:
             return
 
-        content = _faq_content(entry)
-        chunk = Chunk(
-            id=str(uuid.uuid4()),
-            tenant_id=entry.tenant_id,
-            knowledge_base_id=entry.knowledge_base_id,
-            knowledge_id=entry.knowledge_id,
-            content=content,
-            search_text=_faq_search_text(entry),
-            chunk_index=0,
-            is_enabled=True,
-            start_at=0,
-            end_at=len(content),
-            chunk_type="faq",
-            context_header="FAQ",
-            tag_id=entry.tag_id,
-            chunk_metadata={
-                **(entry.faq_metadata or {}),
-                "title": entry.question,
-                "faq_entry_id": entry.id,
-                "source_type": "faq",
-            },
-            images=[],
-        )
-        self.chunks.replace_for_document(entry.knowledge_id, [chunk])
+        chunks = [
+            _to_faq_chunk(entry, item, index)
+            for index, item in enumerate(_faq_index_items(entry, kb.faq_config))
+        ]
+        self.chunks.replace_for_document(entry.knowledge_id, chunks)
         embedder = self._embedder(kb.embedding_model_id)
-        vectors = embedder.embed_many([content])
+        vectors = embedder.embed_many([chunk.search_text or chunk.content for chunk in chunks])
         self.vector_store.upsert_chunks(
             vectors=vectors,
             payloads=[
@@ -136,6 +121,7 @@ class FAQEntryService:
                     "chunk_type": "faq",
                     "metadata": chunk.chunk_metadata or {},
                 }
+                for chunk in chunks
             ],
         )
 
@@ -162,9 +148,93 @@ class FAQEntryService:
         return OpenAIEmbedder(runtime_config)
 
 
-def _faq_content(entry: FAQEntry) -> str:
-    return f"问题：{entry.question}\n答案：{entry.answer}"
+def _normalize_similar_questions(question: str, values: list[str] | None) -> list[str]:
+    normalized: list[str] = []
+    seen: set[str] = set()
+    standard = question.strip()
+    for value in values or []:
+        item = value.strip()
+        if not item or item == standard or item in seen:
+            continue
+        seen.add(item)
+        normalized.append(item)
+    return normalized
 
 
-def _faq_search_text(entry: FAQEntry) -> str:
-    return "\n".join([entry.question, entry.answer]).strip()
+def _faq_index_config(config: dict | None) -> tuple[str, str]:
+    data = config or {}
+    index_mode = data.get("index_mode") or "question_answer"
+    question_index_mode = data.get("question_index_mode") or "combined"
+    return index_mode, question_index_mode
+
+
+def _faq_index_items(entry: FAQEntry, config: dict | None) -> list[dict]:
+    index_mode, question_index_mode = _faq_index_config(config)
+    questions = [entry.question, *(entry.similar_questions or [])]
+    if question_index_mode == "separate":
+        return [
+            _faq_index_item(
+                entry,
+                question=question,
+                index_mode=index_mode,
+                question_role="standard" if index == 0 else "similar",
+            )
+            for index, question in enumerate(questions)
+        ]
+    combined_question = "\n".join(questions)
+    return [
+        _faq_index_item(
+            entry,
+            question=combined_question,
+            matched_question=entry.question,
+            index_mode=index_mode,
+            question_role="combined",
+        )
+    ]
+
+
+def _faq_index_item(
+    entry: FAQEntry,
+    *,
+    question: str,
+    index_mode: str,
+    question_role: str,
+    matched_question: str | None = None,
+) -> dict:
+    content = question.strip()
+    if index_mode == "question_answer":
+        content = f"{content}\n{entry.answer}".strip()
+    matched = matched_question or question.strip()
+    metadata = {
+        **(entry.faq_metadata or {}),
+        "title": entry.question,
+        "faq_entry_id": entry.id,
+        "source_type": "faq",
+        "standard_question": entry.question,
+        "similar_questions": entry.similar_questions or [],
+        "matched_question": matched,
+        "question_role": question_role,
+        "index_mode": index_mode,
+    }
+    return {"content": content, "search_text": content, "metadata": metadata}
+
+
+def _to_faq_chunk(entry: FAQEntry, item: dict, index: int) -> Chunk:
+    content = item["content"]
+    return Chunk(
+        id=str(uuid.uuid4()),
+        tenant_id=entry.tenant_id,
+        knowledge_base_id=entry.knowledge_base_id,
+        knowledge_id=entry.knowledge_id,
+        content=content,
+        search_text=item["search_text"],
+        chunk_index=index,
+        is_enabled=True,
+        start_at=0,
+        end_at=len(content),
+        chunk_type="faq",
+        context_header="FAQ",
+        tag_id=entry.tag_id,
+        chunk_metadata=item["metadata"],
+        images=[],
+    )

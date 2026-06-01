@@ -8,6 +8,7 @@ class AnswerSource:
     chunk_id: str
     content: str
     score: float
+    knowledge_base_name: str | None = None
     title: str | None = None
     context_header: str | None = None
     parent_chunk_id: str | None = None

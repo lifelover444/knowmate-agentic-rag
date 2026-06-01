@@ -99,6 +99,7 @@ class QdrantVectorStore:
         query_vector: list[float],
         limit: int,
         score_threshold: float | None = None,
+        knowledge_ids: list[str] | None = None,
     ) -> list[dict]:
         dimension = len(query_vector)
         collection = self.collection_name(dimension)
@@ -114,6 +115,13 @@ class QdrantVectorStore:
                 models.FieldCondition(key="is_enabled", match=models.MatchValue(value=True)),
             ]
         )
+        if knowledge_ids:
+            query_filter.must.append(
+                models.FieldCondition(
+                    key="knowledge_id",
+                    match=models.MatchAny(any=knowledge_ids),
+                )
+            )
         if hasattr(self.client, "search"):
             results = self.client.search(
                 collection_name=collection,

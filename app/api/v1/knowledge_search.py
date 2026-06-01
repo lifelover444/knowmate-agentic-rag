@@ -28,6 +28,8 @@ def knowledge_search(
     try:
         hits = KnowledgeSearchService(db, settings, embedder, vector_store).search(
             knowledge_base_id=payload.knowledge_base_id,
+            knowledge_base_ids=payload.knowledge_base_ids,
+            knowledge_ids=payload.knowledge_ids,
             query=payload.query,
             mode=payload.mode,
             top_k=payload.top_k,
@@ -44,6 +46,7 @@ def _to_source(hit) -> SourceRead:
     return SourceRead(
         document_id=hit.document_id,
         knowledge_base_id=hit.knowledge_base_id,
+        knowledge_base_name=hit.knowledge_base_name,
         chunk_id=hit.chunk_id,
         title=hit.title,
         content=hit.content,

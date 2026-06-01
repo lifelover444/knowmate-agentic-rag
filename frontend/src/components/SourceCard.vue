@@ -20,6 +20,7 @@ function metadataText(metadata?: Record<string, unknown> | null): string {
     <header class="source-card__header">
       <div>
         <strong>{{ source.title || source.document_id }}</strong>
+        <small v-if="source.knowledge_base_name">真实来源：{{ source.knowledge_base_name }}</small>
         <small>{{ source.document_id }} / {{ source.chunk_id }}</small>
       </div>
       <a-tag color="green">{{ source.retrieval_method || "unknown" }}</a-tag>

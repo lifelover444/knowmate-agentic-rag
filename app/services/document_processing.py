@@ -14,6 +14,7 @@ from app.rag.chunker import AdaptiveTextChunker, ChunkingConfig, ParsedChunk, sp
 from app.rag.parser import DocumentParser
 from app.services.knowledge_base import normalize_chunking_config
 from app.services.model_config import ModelConfigService
+from app.services.processing_spans import ProcessingSpanService
 
 
 class DocumentProcessingService:
@@ -35,15 +36,29 @@ class DocumentProcessingService:
         if kb is None:
             raise LookupError("knowledge base not found")
 
+        spans = ProcessingSpanService(self.db)
+        attempt = spans.open_attempt(document)
+        current_stage: str | None = None
         document.parse_status = "processing"
         self.documents.save(document)
         try:
+            current_stage = "parse"
+            spans.begin_stage(
+                document.id,
+                attempt,
+                current_stage,
+                input_json={"file_path": document.file_path, "file_type": document.file_type},
+            )
             file_path = Path(document.file_path or "")
             parsed = DocumentParser().parse(
                 file_path,
                 engine=_select_parser_engine(kb.parser_engine_rules, document.file_type),
             )
             document.doc_metadata = {**(document.doc_metadata or {}), **parsed.metadata, "pages": parsed.pages}
+            spans.end_stage(document.id, attempt, current_stage, output_json={"pages": parsed.pages})
+
+            current_stage = "chunk"
+            spans.begin_stage(document.id, attempt, current_stage, input_json={"content_length": len(parsed.content)})
             chunking = normalize_chunking_config(kb.chunking_config, self.settings)
             db_chunks, embedding_chunks = _build_db_chunks(
                 document=document,
@@ -55,10 +70,15 @@ class DocumentProcessingService:
                     chunk.pre_chunk_id = db_chunks[idx - 1].id
                 if idx < len(db_chunks) - 1:
                     chunk.next_chunk_id = db_chunks[idx + 1].id
-            if hasattr(self.vector_store, "delete_by_knowledge_id"):
-                self.vector_store.delete_by_knowledge_id(document.id)
-            self.chunks.replace_for_document(document.id, db_chunks)
+            spans.end_stage(
+                document.id,
+                attempt,
+                current_stage,
+                output_json={"chunk_count": len(db_chunks), "embedding_chunk_count": len(embedding_chunks)},
+            )
 
+            current_stage = "embed"
+            spans.begin_stage(document.id, attempt, current_stage, input_json={"chunk_count": len(embedding_chunks)})
             contents = [_embedding_content(chunk) for chunk in embedding_chunks]
             embedder = self.embedder
             if embedder is None:
@@ -68,6 +88,13 @@ class DocumentProcessingService:
                 )
                 embedder = OpenAIEmbedder(runtime_config)
             vectors = embedder.embed_many(contents)
+            spans.end_stage(document.id, attempt, current_stage, output_json={"vector_count": len(vectors)})
+
+            current_stage = "upsert"
+            spans.begin_stage(document.id, attempt, current_stage, input_json={"vector_count": len(vectors)})
+            if hasattr(self.vector_store, "delete_by_knowledge_id"):
+                self.vector_store.delete_by_knowledge_id(document.id)
+            self.chunks.replace_for_document(document.id, db_chunks)
             payloads = [
                 {
                     "content": chunk.content,
@@ -87,13 +114,21 @@ class DocumentProcessingService:
                 for chunk in embedding_chunks
             ]
             self.vector_store.upsert_chunks(vectors=vectors, payloads=payloads)
+            spans.end_stage(document.id, attempt, current_stage, output_json={"payload_count": len(payloads)})
 
+            current_stage = "finalize"
+            spans.begin_stage(document.id, attempt, current_stage)
             document.parse_status = "completed"
             document.error_message = None
             document.embedding_model_id = kb.embedding_model_id
             document.processed_at = datetime.now(UTC)
             self.documents.save(document)
+            spans.end_stage(document.id, attempt, current_stage, output_json={"parse_status": "completed"})
+            spans.finalize_root(document.id, attempt, "done")
         except Exception as exc:
+            if current_stage is not None:
+                spans.fail_stage(document.id, attempt, current_stage, exc)
+            spans.finalize_root(document.id, attempt, "failed", error_message=str(exc))
             document.parse_status = "failed"
             document.error_message = str(exc)
             self.documents.save(document)
