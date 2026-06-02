@@ -17,13 +17,15 @@ from app.schemas.quick_answer import SourceRead
 
 
 def to_chat_session_read(session: ChatSession) -> ChatSessionRead:
+    settings_json = session.settings_json or {}
     return ChatSessionRead(
         id=session.id,
         tenant_id=session.tenant_id,
         knowledge_base_id=session.knowledge_base_id,
         title=session.title,
         is_pinned=session.is_pinned,
-        settings=session.settings_json or {},
+        settings=settings_json,
+        last_request_state=settings_json.get("last_request_state") or {},
         last_message_at=session.last_message_at,
         created_at=session.created_at,
         updated_at=session.updated_at,
@@ -78,6 +80,25 @@ class ChatService:
             session.is_pinned = payload.is_pinned
         if payload.settings is not None:
             session.settings_json = payload.settings.model_dump(exclude_none=True)
+        session.updated_at = datetime.now(UTC)
+        return self.repo.save_session(session)
+
+    def update_last_request_state(self, session: ChatSession, state: dict) -> ChatSession:
+        settings_json = dict(session.settings_json or {})
+        settings_json["last_request_state"] = state
+        session.settings_json = settings_json
+        session.updated_at = datetime.now(UTC)
+        return self.repo.save_session(session)
+
+    def maybe_auto_title(self, session: ChatSession, query: str, history_count: int) -> ChatSession:
+        if history_count:
+            return session
+        if session.title.strip() not in {"", "新会话"} and not session.title.strip().endswith("会话"):
+            return session
+        title = _title_from_query(query)
+        if not title:
+            return session
+        session.title = title
         session.updated_at = datetime.now(UTC)
         return self.repo.save_session(session)
 
@@ -240,3 +261,9 @@ class ChatService:
                 created_at=now,
             )
         )
+
+
+def _title_from_query(query: str) -> str:
+    title = " ".join((query or "").strip().split())
+    title = title.rstrip("？?。.!！；;：:")
+    return title[:28] or "新会话"

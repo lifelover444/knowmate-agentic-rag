@@ -1,6 +1,6 @@
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.orm import Session
 
 from app.api.v1.deps import get_db, get_settings
@@ -57,6 +57,18 @@ def list_recommended_questions(knowledge_base_id: str, db: DBSession, settings: 
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     return RecommendedQuestionListResponse(items=items)
+
+
+@router.post("/{session_id}/stop")
+def stop_chat_generation(session_id: str, request: Request, db: DBSession, settings: AppSettings):
+    repo = ChatRepository(db)
+    session = repo.get_session(session_id, settings.default_tenant_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="会话不存在")
+    registry = request.app.state.chat_stop_registry
+    stopped = registry.stop_session(session_id)
+    message = "已请求停止生成" if stopped else "当前没有正在生成的回答"
+    return {"session_id": session_id, "stopped": stopped, "message": message}
 
 
 @router.get("/{session_id}", response_model=ChatSessionDetail)

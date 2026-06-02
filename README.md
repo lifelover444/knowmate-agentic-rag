@@ -2,13 +2,14 @@
 
 knowmate 知友是一个参考 [Tencent/WeKnora](https://github.com/Tencent/WeKnora) 核心思路实现的知识库 RAG 项目。后端技术栈从 WeKnora 的 Go 实现改为 Python / FastAPI；项目不是 Tencent/WeKnora 官方项目。
 
-当前版本为 v0.7，主线仍聚焦 WeKnora-style Quick Q&A。v0.7 在 v0.61 知识管理补强基础上，继续参考本地 WeKnora 源码补齐知识库平台化 P0 能力：KB capabilities / pin、KB 详情一体化设置、多知识库/文件范围检索、Chat mention、文档处理时间线、FAQ 相似问法和 FAQ 索引模式：
+当前版本为 v0.71，主线仍聚焦 WeKnora-style Quick Q&A。v0.71 在 v0.7 知识库平台化基础上，继续补齐 Quick Q&A 操作闭环与可观测性：上传队列、文档下载 / 取消解析 / 移动、停止生成、自动标题、last-request state、阶段化 retrieval trace、真实运行状态 API 和 Command Palette：
 
 ```text
 模型管理
   -> 知识库绑定 QA / Embedding 模型
   -> 标签组织
   -> 文档上传
+  -> 上传队列 / 多文件进度
   -> Celery Worker 解析文档
   -> Adaptive Chunking 切片
   -> 文档预览 / chunk outline
@@ -26,11 +27,15 @@ knowmate 知友是一个参考 [Tencent/WeKnora](https://github.com/Tencent/WeKn
   -> optional query rewrite
   -> chat model 生成 answer
   -> 返回 answer + sources + retrieval trace
+  -> 阶段化 retrieval trace
   -> sources 显示知识库来源
   -> 保存 chat session / messages
   -> Chat mention scope
+  -> 停止生成 / 自动标题 / last-request state
   -> 会话搜索 / 批量删除 / 推荐问题
   -> 文档处理 timeline
+  -> 文档下载 / 取消解析 / 移动 KB
+  -> runtime status / Command Palette
 ```
 
 ## 当前进度
@@ -129,8 +134,17 @@ knowmate 知友是一个参考 [Tencent/WeKnora](https://github.com/Tencent/WeKn
   - FAQ 支持 `similar_questions`，导入导出新增 `similar_questions` 列。
   - FAQ KB 支持 `faq_config.index_mode` 与 `faq_config.question_index_mode`，按 question_only/question_answer 和 combined/separate 生成检索 chunk 与向量 payload。
   - FAQ 管理页展示相似问法，编辑弹窗可输入相似问法，检索测试展示 `matched_question`。
+- v0.71 Quick Q&A 操作闭环与可观测性：
+  - 文档上传组件支持多文件上传队列，逐文件展示 pending / uploading / queued / processing / completed / failed 状态，并区分上传失败、解析失败和部分成功。
+  - 文档管理新增原文件下载、queued/processing 取消解析和移动到其他兼容知识库；取消解析会同步任务状态和处理 timeline。
+  - 同一知识库内活跃重复文件上传返回中文 409 错误；已软删除的同一文件允许重新上传，避免复用旧 deterministic document id 触发主键冲突。
+  - Quick Answer stream 支持停止生成；停止后保存 partial assistant message 为 cancelled。
+  - 空白或占位会话标题会在首问后自动生成；会话保存 `last_request_state`，前端展示最近一次请求状态、scope、命中数、模型摘要和耗时。
+  - retrieval trace 新增 rewrite / search / rerank / answer 阶段列表，包含状态、耗时和输出摘要。
+  - 新增 `/api/v1/runtime-status`，返回 database、local storage、vector store、parser registry 等运行状态，设置页使用真实状态而不是静态占位。
+  - 新增全局 Command Palette，支持按钮和 Ctrl/Meta+K 打开，快速跳转 Chat、知识库、文档、FAQ、模型、检索、解析器和存储状态。
 - 自动化测试：覆盖多模型 CRUD、凭据加密、知识库模型校验、重处理、检索配置、hybrid/RRF/rerank/parent-child retrieval、knowledge-search API、前端关键逻辑、API 和文档处理 payload。
-- v0.7 质量验证详见下方“验证命令”和 [CHANGELOG.md](CHANGELOG.md)。
+- v0.71 质量验证详见下方“验证命令”和 [CHANGELOG.md](CHANGELOG.md)。
 
 暂未实现：
 
@@ -310,6 +324,9 @@ Vite 会把 `/api` 和 `/health` 代理到 `http://127.0.0.1:8000`。
 | `GET` | `/api/v1/documents/{document_id}/chunks` | 查询文档切片 |
 | `GET` | `/api/v1/documents/{document_id}/preview` | 查询文档摘要、正文预览和 chunk outline |
 | `POST` | `/api/v1/documents/{document_id}/reprocess` | 重处理单个文档 |
+| `GET` | `/api/v1/documents/{document_id}/download` | 下载文档原文件 |
+| `POST` | `/api/v1/documents/{document_id}/cancel-parse` | 取消 queued/processing 文档解析 |
+| `POST` | `/api/v1/documents/move` | 移动文档到其他兼容知识库 |
 | `POST` | `/api/v1/knowledge-search` | 知识搜索，只返回检索 hits，不调用 LLM |
 | `POST` | `/api/v1/quick-answer` | 快速问答 |
 | `POST` | `/api/v1/quick-answer/stream` | 流式快速问答，返回 SSE events 并保存会话消息 |
@@ -321,6 +338,8 @@ Vite 会把 `/api` 和 `/health` 代理到 `http://127.0.0.1:8000`。
 | `PATCH` | `/api/v1/chat-sessions/{session_id}` | 更新会话标题、置顶状态和设置 |
 | `DELETE` | `/api/v1/chat-sessions/{session_id}` | 软删除会话 |
 | `GET` | `/api/v1/chat-sessions/{session_id}/messages` | 查询会话消息 |
+| `POST` | `/api/v1/chat-sessions/{session_id}/stop` | 停止当前会话流式生成 |
+| `GET` | `/api/v1/runtime-status` | 查询数据库、存储、向量库和 parser registry 运行状态 |
 | `GET` | `/api/v1/tasks` | 查询任务中心 |
 | `GET` | `/api/v1/tasks/{task_id}` | 查询单个任务 |
 | `POST` | `/api/v1/tasks/{task_id}/retry` | 重试失败任务 |
@@ -428,6 +447,72 @@ GET /api/v1/documents/{document_id}/spans
 ```
 
 返回 root span、当前 attempt 和 parse/chunk/embed/upsert/finalize 五阶段状态；历史文档无 span 时返回 attempt `0` 占位阶段。
+
+## v0.71 Schema / API 变化
+
+文档上传行为：
+
+- 同一知识库内存在活跃同 hash 文件时，上传接口返回 `409 Conflict` 和中文错误 `该文件已上传，请勿重复上传。`。
+- 如果历史同 hash 文件已经软删除，重新上传会生成新的 document id，不复用已删除记录的主键。
+
+文档生命周期新增：
+
+```http
+GET /api/v1/documents/{document_id}/download
+POST /api/v1/documents/{document_id}/cancel-parse
+POST /api/v1/documents/move
+```
+
+`DocumentMoveRequest`：
+
+```json
+{
+  "document_ids": ["document-id"],
+  "target_knowledge_base_id": "target-kb-id"
+}
+```
+
+会话生成生命周期新增：
+
+```http
+POST /api/v1/chat-sessions/{session_id}/stop
+```
+
+`ChatSessionRead.settings.last_request_state` 会保存最近一次请求的非敏感状态，例如：
+
+```json
+{
+  "status": "completed",
+  "knowledge_base_ids": ["kb-id"],
+  "knowledge_ids": [],
+  "hit_count": 5,
+  "model": "qwen-max",
+  "elapsed_ms": 1234
+}
+```
+
+`retrieval_trace` 新增阶段列表：
+
+```json
+{
+  "stages": [
+    {
+      "name": "search",
+      "status": "completed",
+      "duration_ms": 35,
+      "summary": "hybrid hits: 5"
+    }
+  ]
+}
+```
+
+运行状态新增：
+
+```http
+GET /api/v1/runtime-status
+```
+
+返回 database、local storage、vector store、parser registry 和 system 概览，供设置页展示真实状态。
 
 ## v0.61 Schema 变化
 
@@ -697,16 +782,19 @@ npm --prefix frontend run build
 
 最近一次本地验证结果：
 
-- `python -m pytest -q`：`125 passed`
-- `python -m pytest (rg --files tests | rg 'test_frontend_.*\\.py$') -q`：`24 passed`
-- `ruff check .`：通过
+- `python -m pytest tests/test_v071_document_lifecycle.py tests/test_frontend_v071_document_lifecycle.py -q`：`5 passed`
+- `python -m pytest tests/test_v071_chat_generation_lifecycle.py tests/test_frontend_v071_chat_generation_lifecycle.py -q`：`4 passed`
+- `python -m pytest tests/test_v071_observability_status.py tests/test_frontend_v071_observability_status.py -q`：`3 passed`
+- `python -m pytest tests/test_frontend_v071_command_palette.py -q`：`1 passed`
+- `python -m pytest tests/test_v05_document_management.py::test_deleted_duplicate_file_can_be_uploaded_again tests/test_v05_document_management.py::test_active_duplicate_file_upload_returns_chinese_error -q`：`2 passed`
+- `ruff check app\api\v1\documents.py app\db\repositories\document.py app\services\document.py tests\test_v05_document_management.py`：通过
 - `python -m compileall app tests`：通过
 - `npm --prefix frontend run build`：通过，仍有 Vite 大 chunk 提示。
-- v0.7 分项验收详见 [CHANGELOG.md](CHANGELOG.md) 的 v0.7 Verification。
+- v0.71 分项验收详见 [CHANGELOG.md](CHANGELOG.md) 的 v0.71 Verification。
 
 ## 开发备注
 
-- v0.7 仍默认单租户，`DEFAULT_TENANT_ID=10000`。
+- v0.71 仍默认单租户，`DEFAULT_TENANT_ID=10000`。
 - Docker Compose 当前只提供 `postgres / redis / qdrant`，API、worker、前端 dev server 需要本地命令启动。
 - 文档上传后必须启动 Celery Worker，否则文档会停留在 `pending` 或 `processing`。
 - 切换 embedding 模型、维度、切分参数或 keyword 检索文本策略后，需要重处理文档或重建知识库来刷新 Qdrant 向量和 `chunks.search_text`。

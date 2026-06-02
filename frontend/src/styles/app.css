@@ -516,6 +516,40 @@ h3 {
   gap: 14px;
 }
 
+.upload-queue-panel {
+  display: grid;
+  gap: 14px;
+}
+
+.upload-queue-list {
+  display: grid;
+  gap: 10px;
+}
+
+.upload-queue-item {
+  display: grid;
+  gap: 8px;
+  border: 1px solid #e5e6eb;
+  border-radius: var(--km-radius);
+  padding: 10px 12px;
+  background: #f7fbfa;
+}
+
+.upload-queue-item header,
+.upload-queue-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 12px;
+}
+
+.upload-queue-meta {
+  justify-content: flex-start;
+  color: var(--km-text-secondary);
+  font-size: 12px;
+}
+
 .batch-summary-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));

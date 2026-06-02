@@ -87,6 +87,25 @@ class ProcessingSpanService:
         self._cancel_downstream(document_id, attempt, name)
         self.db.commit()
 
+    def cancel_attempt(self, document_id: str, attempt: int, error_message: str = "用户已取消解析") -> None:
+        rows = list(
+            self.db.scalars(
+                select(KnowledgeProcessingSpan).where(
+                    KnowledgeProcessingSpan.knowledge_id == document_id,
+                    KnowledgeProcessingSpan.attempt == attempt,
+                    KnowledgeProcessingSpan.status.in_(["pending", "running"]),
+                )
+            ).all()
+        )
+        now = datetime.now(UTC)
+        for row in rows:
+            row.status = "cancelled"
+            row.finished_at = now
+            row.duration_ms = _duration_ms(row.started_at, now)
+            row.error_message = error_message if row.kind == "root" else None
+            self.db.add(row)
+        self.db.commit()
+
     def finalize_root(self, document_id: str, attempt: int, status: str, error_message: str | None = None) -> None:
         root = self._root(document_id, attempt)
         finished_at = datetime.now(UTC)
@@ -199,6 +218,9 @@ def _placeholder_timeline(document: Knowledge) -> ProcessingSpanTimeline:
     elif status == "processing":
         root_status = "running"
         stage_statuses = ["running", "pending", "pending", "pending", "pending"]
+    elif status == "cancelled":
+        root_status = "cancelled"
+        stage_statuses = ["cancelled"] * len(PROCESSING_STAGES)
     else:
         root_status = "pending"
         stage_statuses = ["pending"] * len(PROCESSING_STAGES)

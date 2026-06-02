@@ -19,6 +19,18 @@ class DocumentRepository:
     def get(self, document_id: str) -> Knowledge | None:
         return self.db.scalar(select(Knowledge).where(Knowledge.id == document_id, Knowledge.deleted_at.is_(None)))
 
+    def get_including_deleted(self, document_id: str) -> Knowledge | None:
+        return self.db.scalar(select(Knowledge).where(Knowledge.id == document_id))
+
+    def find_active_by_file_hash(self, kb_id: str, file_hash: str) -> Knowledge | None:
+        return self.db.scalar(
+            select(Knowledge).where(
+                Knowledge.knowledge_base_id == kb_id,
+                Knowledge.file_hash == file_hash,
+                Knowledge.deleted_at.is_(None),
+            )
+        )
+
     def list_by_knowledge_base(
         self,
         kb_id: str,
@@ -74,3 +86,17 @@ class DocumentRepository:
             chunk.is_enabled = False
         self.db.commit()
         return documents
+
+    def move_to_knowledge_base(self, document: Knowledge, target_kb_id: str, embedding_model_id: str) -> Knowledge:
+        document.knowledge_base_id = target_kb_id
+        document.embedding_model_id = embedding_model_id
+        document.tag_id = None
+        chunks = list(self.db.scalars(select(Chunk).where(Chunk.knowledge_id == document.id)).all())
+        for chunk in chunks:
+            chunk.knowledge_base_id = target_kb_id
+            chunk.tag_id = None
+            self.db.add(chunk)
+        self.db.add(document)
+        self.db.commit()
+        self.db.refresh(document)
+        return document

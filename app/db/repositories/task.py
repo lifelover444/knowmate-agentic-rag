@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from datetime import UTC, datetime
 
 from sqlalchemy import select
@@ -76,3 +78,30 @@ class ProcessingTaskRepository:
         task.finished_at = datetime.now(UTC)
         task.error_message = error_message
         return self.save(task)
+
+    def mark_cancelled(self, task: ProcessingTask, error_message: str = "用户已取消解析") -> ProcessingTask:
+        task.status = "cancelled"
+        task.finished_at = datetime.now(UTC)
+        task.error_message = error_message
+        return self.save(task)
+
+    def cancel_active_for_document(
+        self,
+        document_id: str,
+        error_message: str = "用户已取消解析",
+    ) -> list[ProcessingTask]:
+        tasks = list(
+            self.db.scalars(
+                select(ProcessingTask).where(
+                    ProcessingTask.document_id == document_id,
+                    ProcessingTask.status.in_(["queued", "processing"]),
+                )
+            ).all()
+        )
+        for task in tasks:
+            task.status = "cancelled"
+            task.finished_at = datetime.now(UTC)
+            task.error_message = error_message
+            self.db.add(task)
+        self.db.commit()
+        return tasks

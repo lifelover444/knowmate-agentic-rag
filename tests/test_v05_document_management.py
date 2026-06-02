@@ -68,6 +68,39 @@ def test_batch_reprocess_and_delete_documents(client: TestClient, monkeypatch):
     assert client.get(f"/api/v1/knowledge-bases/{kb_id}/documents").json() == []
 
 
+def test_deleted_duplicate_file_can_be_uploaded_again(client: TestClient, monkeypatch):
+    kb_id = _create_kb(client)
+    enqueued: list[str] = []
+    monkeypatch.setattr("app.workers.tasks.enqueue_document_processing", enqueued.append)
+    files = {"file": ("same.pdf", b"%PDF-1.4 same content\n%%EOF", "application/pdf")}
+    first = client.post(f"/api/v1/knowledge-bases/{kb_id}/documents/file", files=files)
+    assert first.status_code == 201, first.text
+    first_document_id = first.json()["id"]
+
+    delete_response = client.delete(f"/api/v1/documents/{first_document_id}")
+    assert delete_response.status_code == 204
+
+    second = client.post(f"/api/v1/knowledge-bases/{kb_id}/documents/file", files=files)
+
+    assert second.status_code == 201, second.text
+    assert second.json()["id"] != first_document_id
+    assert second.json()["file_name"] == "same.pdf"
+    assert enqueued == [first_document_id, second.json()["id"]]
+
+
+def test_active_duplicate_file_upload_returns_chinese_error(client: TestClient, monkeypatch):
+    kb_id = _create_kb(client)
+    monkeypatch.setattr("app.workers.tasks.enqueue_document_processing", lambda document_id: None)
+    files = {"file": ("same.pdf", b"%PDF-1.4 same content\n%%EOF", "application/pdf")}
+    first = client.post(f"/api/v1/knowledge-bases/{kb_id}/documents/file", files=files)
+    assert first.status_code == 201, first.text
+
+    duplicate = client.post(f"/api/v1/knowledge-bases/{kb_id}/documents/file", files=files)
+
+    assert duplicate.status_code == 409
+    assert "该文件已上传" in duplicate.text
+
+
 def test_manual_text_import_enters_processing_tasks(client: TestClient, monkeypatch):
     kb_id = _create_kb(client)
     enqueued: list[str] = []

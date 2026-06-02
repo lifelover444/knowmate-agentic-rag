@@ -60,6 +60,24 @@ class BatchDocumentResponse(BaseModel):
     task_ids: list[str] = Field(default_factory=list)
 
 
+class DocumentMoveRequest(BaseModel):
+    document_ids: list[str] = Field(min_length=1)
+    target_kb_id: str = Field(min_length=1)
+
+
+class DocumentMoveFailure(BaseModel):
+    document_id: str
+    reason: str
+
+
+class DocumentMoveResponse(BaseModel):
+    requested: int
+    moved: int
+    failed: int
+    failures: list[DocumentMoveFailure] = Field(default_factory=list)
+    target_kb_id: str
+
+
 class ChunkRead(BaseModel):
     id: str
     tenant_id: int

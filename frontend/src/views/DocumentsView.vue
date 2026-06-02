@@ -7,6 +7,18 @@ import { useKnowledgeBaseStore } from "../stores/knowledgeBase";
 import { formatApiError } from "../utils/api";
 import type { DocumentRead } from "../types/api";
 
+type UploadQueueStatus = "pending" | "uploading" | "queued" | "processing" | "completed" | "failed";
+
+interface UploadQueueItem {
+  id: string;
+  fileName: string;
+  fileSize: number;
+  status: UploadQueueStatus;
+  documentId?: string;
+  taskId?: string;
+  errorMessage?: string;
+}
+
 const route = useRoute();
 const router = useRouter();
 const kbStore = useKnowledgeBaseStore();
@@ -23,6 +35,11 @@ const tagModalVisible = ref(false);
 const tagForm = ref({ name: "", color: "#2563eb", sort_order: 0 });
 const batchTagVisible = ref(false);
 const batchTagId = ref<string>("");
+const uploadQueue = ref<UploadQueueItem[]>([]);
+const uploadQueueRunning = ref(false);
+const moveDocumentVisible = ref(false);
+const targetKnowledgeBaseId = ref("");
+const movingDocumentIds = ref<string[]>([]);
 
 function statusColor(status: string) {
   return (
@@ -31,6 +48,7 @@ function statusColor(status: string) {
       processing: "blue",
       completed: "green",
       failed: "red",
+      cancelled: "gray",
     }[status] || "gray"
   );
 }
@@ -43,9 +61,53 @@ function statusText(status: string) {
       processing: "解析中",
       completed: "解析完成",
       failed: "解析失败",
+      cancelled: "已取消",
     }[status] || status
   );
 }
+
+function uploadQueueStatusText(status: UploadQueueStatus) {
+  return (
+    {
+      pending: "等待上传",
+      uploading: "上传中",
+      queued: "已入队解析",
+      processing: "解析中",
+      completed: "解析完成",
+      failed: "失败",
+    }[status] || status
+  );
+}
+
+function uploadQueueStatusColor(status: UploadQueueStatus) {
+  return (
+    {
+      pending: "gray",
+      uploading: "blue",
+      queued: "orange",
+      processing: "blue",
+      completed: "green",
+      failed: "red",
+    }[status] || "gray"
+  );
+}
+
+const uploadQueueSummary = computed(() => {
+  const total = uploadQueue.value.length;
+  const completed = uploadQueue.value.filter((item) => item.status === "completed").length;
+  const failed = uploadQueue.value.filter((item) => item.status === "failed").length;
+  const running = uploadQueue.value.filter((item) => ["pending", "uploading", "queued", "processing"].includes(item.status)).length;
+  const partial = total > 0 && completed > 0 && failed > 0;
+  return { total, completed, failed, running, partial };
+});
+
+const moveTargetKnowledgeBases = computed(() => {
+  const current = kbStore.currentKb;
+  return kbStore.knowledgeBases.filter((kb) => {
+    if (!current || kb.id === current.id) return false;
+    return kb.kb_type === current.kb_type && kb.embedding_model_id === current.embedding_model_id;
+  });
+});
 
 function timelineStageText(name: string) {
   return (
@@ -100,14 +162,50 @@ async function refresh() {
   ]);
 }
 
-async function upload(file: File) {
+async function resolveUploadTaskId(documentId: string) {
+  await kbStore.loadTasks({ knowledge_base_id: kbId.value });
+  return kbStore.tasks.find((task) => task.document_id === documentId)?.id;
+}
+
+async function uploadFiles(files: File[]) {
+  const queueItems: UploadQueueItem[] = files.map((file, index) => ({
+    id: `${Date.now()}-${index}-${file.name}`,
+    fileName: file.name,
+    fileSize: file.size,
+    status: "pending",
+  }));
+  uploadQueue.value = [...uploadQueue.value, ...queueItems];
+  uploadQueueRunning.value = true;
   try {
-    const document = await kbStore.uploadDocument(kbId.value, file);
-    Message.success("文档已上传，开始解析");
-    await kbStore.pollDocument(document.id);
-    Message.success("文档解析完成");
-  } catch (error) {
-    Message.error(formatApiError(error instanceof Error ? error.message : error));
+    for (let index = 0; index < files.length; index += 1) {
+      const file = files[index];
+      const queueItem = queueItems[index];
+      try {
+        queueItem.status = "uploading";
+        const uploadedDocument = await kbStore.uploadDocument(kbId.value, file);
+        queueItem.documentId = uploadedDocument.id;
+        queueItem.status = "queued";
+        queueItem.taskId = await resolveUploadTaskId(uploadedDocument.id);
+        queueItem.status = "processing";
+        await kbStore.pollDocument(uploadedDocument.id);
+        queueItem.status = "completed";
+      } catch (error) {
+        const reason = formatApiError(error instanceof Error ? error.message : error);
+        queueItem.status = "failed";
+        queueItem.errorMessage = queueItem.documentId ? `解析失败：${reason}` : `上传失败：${reason}`;
+      }
+    }
+    const summary = uploadQueueSummary.value;
+    if (summary.partial) {
+      Message.warning(`部分成功：${summary.completed} 个完成，${summary.failed} 个失败`);
+    } else if (summary.failed > 0) {
+      Message.error(`上传队列完成，失败 ${summary.failed} 个`);
+    } else if (summary.completed > 0) {
+      Message.success(`上传队列完成，解析完成 ${summary.completed} 个`);
+    }
+    await refresh();
+  } finally {
+    uploadQueueRunning.value = false;
   }
 }
 
@@ -168,6 +266,57 @@ async function deleteDocument(document: DocumentRead) {
   } catch (error) {
     Message.error(formatApiError(error instanceof Error ? error.message : error));
   }
+}
+
+async function downloadDocument(document: DocumentRead) {
+  try {
+    const blob = await kbStore.downloadDocument(document.id);
+    const url = URL.createObjectURL(blob);
+    const link = window.document.createElement("a");
+    link.href = url;
+    link.download = document.file_name || document.title || "document";
+    link.click();
+    URL.revokeObjectURL(url);
+    Message.success("已开始下载原文件");
+  } catch (error) {
+    Message.error(formatApiError(error instanceof Error ? error.message : error));
+  }
+}
+
+async function cancelDocumentParse(document: DocumentRead) {
+  try {
+    await kbStore.cancelDocumentParse(document.id);
+    Message.success("用户已取消解析");
+    await refresh();
+  } catch (error) {
+    Message.error(formatApiError(error instanceof Error ? error.message : error));
+  }
+}
+
+async function openMoveDocument(document: DocumentRead) {
+  movingDocumentIds.value = [document.id];
+  targetKnowledgeBaseId.value = "";
+  await kbStore.loadKnowledgeBases();
+  moveDocumentVisible.value = true;
+}
+
+async function submitMoveDocument() {
+  if (!targetKnowledgeBaseId.value) {
+    Message.error("请选择目标知识库");
+    return;
+  }
+  try {
+    const result = await kbStore.moveDocuments(movingDocumentIds.value, targetKnowledgeBaseId.value);
+    moveDocumentVisible.value = false;
+    Message.success(`提交移动成功：已移动 ${result.moved} 个文档`);
+    await refresh();
+  } catch (error) {
+    Message.error(formatApiError(error instanceof Error ? error.message : error));
+  }
+}
+
+function canCancelDocumentParse(document: DocumentRead) {
+  return ["pending", "processing"].includes(document.parse_status);
 }
 
 async function reprocessKb() {
@@ -362,7 +511,44 @@ onMounted(() => {
     </section>
 
     <section class="content-card">
-      <DocumentUpload :uploading="kbStore.uploading" :polling="kbStore.polling" @upload="upload" />
+      <DocumentUpload :uploading="uploadQueueRunning || kbStore.uploading" :polling="kbStore.polling" @upload="uploadFiles" />
+    </section>
+
+    <section v-if="uploadQueue.length" class="content-card upload-queue-panel" data-testid="upload-queue">
+      <div class="section-heading">
+        <div>
+          <h2>上传队列</h2>
+          <p>
+            总计 {{ uploadQueueSummary.total }} 个文件，
+            完成 {{ uploadQueueSummary.completed }}，
+            失败 {{ uploadQueueSummary.failed }}，
+            待处理 {{ uploadQueueSummary.running }}。
+            <span v-if="uploadQueueSummary.partial">部分成功</span>
+          </p>
+        </div>
+        <a-button size="small" :disabled="uploadQueueRunning" @click="uploadQueue = []">清空队列</a-button>
+      </div>
+      <div class="upload-queue-list">
+        <article
+          v-for="queueItem in uploadQueue"
+          :key="queueItem.id"
+          class="upload-queue-item"
+          data-testid="upload-queue-item"
+        >
+          <header>
+            <strong>{{ queueItem.fileName }}</strong>
+            <a-tag :color="uploadQueueStatusColor(queueItem.status)">
+              {{ uploadQueueStatusText(queueItem.status) }}
+            </a-tag>
+          </header>
+          <div class="upload-queue-meta">
+            <span>{{ Math.ceil(queueItem.fileSize / 1024) }} KB</span>
+            <span>Document ID：{{ queueItem.documentId || "-" }}</span>
+            <span>Task ID：{{ queueItem.taskId || "-" }}</span>
+          </div>
+          <p v-if="queueItem.errorMessage" class="inline-error">{{ queueItem.errorMessage }}</p>
+        </article>
+      </div>
     </section>
 
     <section v-if="kbStore.batchOperationResult || kbStore.tasks.length" class="content-card batch-progress-panel">
@@ -488,6 +674,16 @@ onMounted(() => {
                 >
                   处理时间线
                 </a-button>
+                <a-button size="mini" @click="downloadDocument(record)">下载原文件</a-button>
+                <a-popconfirm
+                  v-if="canCancelDocumentParse(record)"
+                  content="确认取消解析？当前已写入的部分结果会保留，可重新处理。"
+                  type="warning"
+                  @ok="cancelDocumentParse(record)"
+                >
+                  <a-button size="mini" status="warning">取消解析</a-button>
+                </a-popconfirm>
+                <a-button size="mini" @click="openMoveDocument(record)">移动到知识库</a-button>
                 <a-button size="mini" data-testid="reprocess-doc" @click="reprocess(record)">重新处理</a-button>
                 <a-popconfirm content="确认删除这个文档？" type="warning" @ok="deleteDocument(record)">
                   <a-button size="mini" status="danger">删除</a-button>
@@ -671,6 +867,23 @@ onMounted(() => {
           </a-select>
         </a-form-item>
         <p class="muted-text">将为 {{ kbStore.selectedDocumentIds.length }} 个文档设置标签；清空选择会移除标签并设为未分类。</p>
+      </div>
+    </a-modal>
+
+    <a-modal v-model:visible="moveDocumentVisible" title="移动到知识库" @ok="submitMoveDocument">
+      <div class="modal-form">
+        <a-alert
+          type="info"
+          content="仅展示同类型且使用相同 Embedding 模型的知识库；移动后来源知识库不再包含该文档。"
+        />
+        <a-form-item label="目标知识库">
+          <a-select v-model="targetKnowledgeBaseId" placeholder="选择目标知识库">
+            <a-option v-for="kb in moveTargetKnowledgeBases" :key="kb.id" :value="kb.id">
+              {{ kb.name }}
+            </a-option>
+          </a-select>
+        </a-form-item>
+        <p class="muted-text">提交移动 {{ movingDocumentIds.length }} 个文档。</p>
       </div>
     </a-modal>
   </main>

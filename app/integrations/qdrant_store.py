@@ -92,6 +92,23 @@ class QdrantVectorStore:
                 ),
             )
 
+    def move_knowledge_to_kb(self, *, knowledge_id: str, target_kb_id: str) -> None:
+        for collection in self.client.get_collections().collections:
+            if not collection.name.startswith(f"{self.base_collection}_"):
+                continue
+            self.client.set_payload(
+                collection_name=collection.name,
+                payload={"knowledge_base_id": target_kb_id, "tag_id": None},
+                points=models.Filter(
+                    must=[
+                        models.FieldCondition(
+                            key="knowledge_id",
+                            match=models.MatchValue(value=knowledge_id),
+                        )
+                    ]
+                ),
+            )
+
     def search(
         self,
         *,

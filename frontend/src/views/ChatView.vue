@@ -62,6 +62,15 @@ const selectedKbAllowsRerank = computed(() => {
   return Boolean(strategy?.enable_rerank);
 });
 const rerankBlockedByKb = computed(() => retrieval.retrievalEnableRerank && selectedKbId.value && !selectedKbAllowsRerank.value);
+const lastRequestState = computed(() => chat.currentSession?.last_request_state || {});
+const lastRequestStatusText = computed(() => {
+  const status = String(lastRequestState.value.status || "");
+  if (status === "completed") return "已完成";
+  if (status === "running") return "生成中";
+  if (status === "cancelled") return "已停止";
+  if (status === "failed") return "失败";
+  return "暂无";
+});
 
 function renderMarkdown(content: string): string {
   return md.render(content || "");
@@ -69,6 +78,15 @@ function renderMarkdown(content: string): string {
 
 function shortTime(value: string): string {
   return new Date(value).toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" });
+}
+
+function lastRequestList(value: unknown): string {
+  return Array.isArray(value) && value.length ? value.join(", ") : "-";
+}
+
+function lastRequestDuration(value: unknown): string {
+  const duration = Number(value || 0);
+  return duration ? `${duration} ms` : "-";
 }
 
 function requestParams() {
@@ -194,6 +212,15 @@ async function askQuestion() {
   }
 }
 
+async function stopGeneration() {
+  try {
+    const response = await chat.stopGeneration();
+    Message.info(response?.message || "用户已停止生成");
+  } catch (error) {
+    Message.error(formatApiError(error instanceof Error ? error.message : error));
+  }
+}
+
 async function searchKnowledge() {
   if (rerankBlockedByKb.value) {
     Message.error("当前知识库未启用重排，请先到知识库列表编辑配置打开 rerank。");
@@ -208,6 +235,11 @@ async function searchKnowledge() {
 
 function messageTrace(message: ChatMessageRead): Record<string, unknown> {
   return message.retrieval_trace || {};
+}
+
+function traceStages(message: ChatMessageRead): Record<string, unknown>[] {
+  const stages = messageTrace(message).stages;
+  return Array.isArray(stages) ? stages as Record<string, unknown>[] : [];
 }
 
 onMounted(() => {
@@ -310,6 +342,21 @@ watch(selectedKbId, (kbId) => {
             </a-popconfirm>
           </a-space>
         </div>
+        <section class="last-request-state" data-testid="last-request-state">
+          <header>
+            <strong>最后一次请求</strong>
+            <a-tag>{{ lastRequestStatusText }}</a-tag>
+          </header>
+          <div class="trace-grid">
+            <span>scope: {{ lastRequestList(lastRequestState.knowledge_base_ids) }}</span>
+            <span>files: {{ lastRequestList(lastRequestState.knowledge_ids) }}</span>
+            <span>mode: {{ lastRequestState.mode || "-" }}</span>
+            <span>top_k: {{ lastRequestState.top_k || "-" }}</span>
+            <span>hit_count: {{ lastRequestState.hit_count ?? "-" }}</span>
+            <span>耗时: {{ lastRequestDuration(lastRequestState.duration_ms) }}</span>
+          </div>
+          <a-alert v-if="lastRequestState.error_message" type="warning" :content="String(lastRequestState.error_message)" />
+        </section>
         <a-alert
           v-if="rerankBlockedByKb"
           type="warning"
@@ -394,6 +441,13 @@ watch(selectedKbId, (kbId) => {
                     <span>retrieval_mode: {{ messageTrace(message).retrieval_mode || "-" }}</span>
                     <span>hit_count: {{ messageTrace(message).hit_count ?? message.sources.length }}</span>
                   </div>
+                  <div v-if="traceStages(message).length" class="trace-stage-list" data-testid="trace-stage-list">
+                    <article v-for="stage in traceStages(message)" :key="String(stage.name)">
+                      <strong>{{ stage.name }}</strong>
+                      <a-tag>{{ stage.status }}</a-tag>
+                      <span>{{ stage.duration_ms ?? 0 }} ms</span>
+                    </article>
+                  </div>
                   <div v-if="message.sources.length" class="source-list">
                     <SourceCard v-for="source in message.sources" :key="source.chunk_id" :source="source" />
                   </div>
@@ -420,6 +474,14 @@ watch(selectedKbId, (kbId) => {
             @click="askQuestion"
           >
             发送
+          </a-button>
+          <a-button
+            v-if="chat.answering"
+            data-testid="stop-generation"
+            status="warning"
+            @click="stopGeneration"
+          >
+            停止生成
           </a-button>
         </div>
 
@@ -612,6 +674,20 @@ watch(selectedKbId, (kbId) => {
   background: #fbfdfc;
 }
 
+.last-request-state {
+  display: grid;
+  gap: 8px;
+  border-bottom: 1px solid var(--km-border);
+  padding: 10px 14px;
+  background: #fff;
+}
+
+.last-request-state header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
 .mention-scope-controls {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -673,6 +749,21 @@ watch(selectedKbId, (kbId) => {
 .source-list {
   display: grid;
   gap: 12px;
+}
+
+.trace-stage-list {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.trace-stage-list article {
+  display: grid;
+  gap: 4px;
+  border: 1px solid var(--km-border);
+  border-radius: var(--km-radius);
+  padding: 8px;
+  background: var(--km-bg-card);
 }
 
 .trace-grid {

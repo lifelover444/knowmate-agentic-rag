@@ -14,6 +14,7 @@ from app.db.session import make_session_factory
 from app.integrations.llm_openai import OpenAICompatibleModelTester
 from app.integrations.vector_store import VectorStoreRegistry
 from app.schemas.document import DocumentRead
+from app.services.chat_stop import ChatStopRegistry
 
 
 def create_app(
@@ -37,6 +38,7 @@ def create_app(
     app.state.vector_store_registry = VectorStoreRegistry(resolved_settings)
     app.state.vector_store = vector_store or app.state.vector_store_registry.build("qdrant")
     app.state.model_tester = model_tester or OpenAICompatibleModelTester()
+    app.state.chat_stop_registry = ChatStopRegistry()
 
     @app.get("/health")
     def health():

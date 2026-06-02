@@ -83,6 +83,7 @@ class ChatSessionRead(BaseModel):
     title: str
     is_pinned: bool
     settings: dict
+    last_request_state: dict = Field(default_factory=dict)
     last_message_at: datetime
     created_at: datetime
     updated_at: datetime

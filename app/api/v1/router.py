@@ -12,6 +12,7 @@ from app.api.v1 import (
     parser_engines,
     quick_answer,
     retrieval_config,
+    runtime_status,
     tags,
     tasks,
     vector_stores,
@@ -28,6 +29,7 @@ api_router.include_router(quick_answer.router, prefix="/quick-answer", tags=["qu
 api_router.include_router(model_config.router, prefix="/model-config", tags=["model-config"])
 api_router.include_router(models.router, prefix="/models", tags=["models"])
 api_router.include_router(retrieval_config.router, prefix="/retrieval-config", tags=["retrieval-config"])
+api_router.include_router(runtime_status.router, prefix="/runtime-status", tags=["runtime-status"])
 api_router.include_router(chunker.router, prefix="/chunker", tags=["chunker"])
 api_router.include_router(parser_engines.router, prefix="/parser-engines", tags=["parser-engines"])
 api_router.include_router(tasks.router, prefix="/tasks", tags=["tasks"])

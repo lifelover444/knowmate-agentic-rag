@@ -6,6 +6,7 @@ import type {
   ChunkRead,
   DocumentPreviewRead,
   DocumentRead,
+  DocumentMoveResponse,
   FAQExportFormat,
   FAQEntryRead,
   FAQImportResult,
@@ -195,6 +196,32 @@ export const useKnowledgeBaseStore = defineStore("knowledgeBase", () => {
       chunks.value = [];
     }
     if (kbId) await loadDocuments(kbId);
+  }
+
+  async function downloadDocument(documentId: string) {
+    return downloadRequest(`/documents/${documentId}/download`);
+  }
+
+  async function cancelDocumentParse(documentId: string) {
+    const document = await postJson<DocumentRead>(`/documents/${documentId}/cancel-parse`);
+    currentDocument.value = document;
+    await Promise.all([
+      loadDocuments(document.knowledge_base_id),
+      loadTasks({ knowledge_base_id: document.knowledge_base_id }),
+      loadDocumentSpans(document.id),
+    ]);
+    return document;
+  }
+
+  async function moveDocuments(documentIds: string[], targetKbId: string) {
+    const result = await postJson<DocumentMoveResponse>("/documents/move", {
+      document_ids: documentIds,
+      target_kb_id: targetKbId,
+    });
+    if (currentKb.value?.id) await loadDocuments(currentKb.value.id);
+    await loadKnowledgeBases();
+    selectedDocumentIds.value = [];
+    return result;
   }
 
   async function reprocessDocument(documentId: string) {
@@ -389,6 +416,9 @@ export const useKnowledgeBaseStore = defineStore("knowledgeBase", () => {
     loadDocumentPreview,
     loadDocumentSpans,
     deleteDocument,
+    downloadDocument,
+    cancelDocumentParse,
+    moveDocuments,
     reprocessDocument,
     reprocessKnowledgeBase,
     batchDeleteDocuments,

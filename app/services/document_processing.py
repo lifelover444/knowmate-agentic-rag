@@ -17,6 +17,10 @@ from app.services.model_config import ModelConfigService
 from app.services.processing_spans import ProcessingSpanService
 
 
+class DocumentProcessingCancelled(RuntimeError):
+    pass
+
+
 class DocumentProcessingService:
     def __init__(self, db: Session, upload_dir: Path, vector_store, settings=None, embedder=None) -> None:
         self.db = db
@@ -32,6 +36,8 @@ class DocumentProcessingService:
         document = self.documents.get(document_id)
         if document is None:
             raise LookupError("document not found")
+        if document.parse_status == "cancelled":
+            return
         kb = self.knowledge_bases.get(document.knowledge_base_id, document.tenant_id)
         if kb is None:
             raise LookupError("knowledge base not found")
@@ -49,6 +55,7 @@ class DocumentProcessingService:
                 current_stage,
                 input_json={"file_path": document.file_path, "file_type": document.file_type},
             )
+            self._raise_if_cancelled(document)
             file_path = Path(document.file_path or "")
             parsed = DocumentParser().parse(
                 file_path,
@@ -58,6 +65,7 @@ class DocumentProcessingService:
             spans.end_stage(document.id, attempt, current_stage, output_json={"pages": parsed.pages})
 
             current_stage = "chunk"
+            self._raise_if_cancelled(document)
             spans.begin_stage(document.id, attempt, current_stage, input_json={"content_length": len(parsed.content)})
             chunking = normalize_chunking_config(kb.chunking_config, self.settings)
             db_chunks, embedding_chunks = _build_db_chunks(
@@ -78,6 +86,7 @@ class DocumentProcessingService:
             )
 
             current_stage = "embed"
+            self._raise_if_cancelled(document)
             spans.begin_stage(document.id, attempt, current_stage, input_json={"chunk_count": len(embedding_chunks)})
             contents = [_embedding_content(chunk) for chunk in embedding_chunks]
             embedder = self.embedder
@@ -91,6 +100,7 @@ class DocumentProcessingService:
             spans.end_stage(document.id, attempt, current_stage, output_json={"vector_count": len(vectors)})
 
             current_stage = "upsert"
+            self._raise_if_cancelled(document)
             spans.begin_stage(document.id, attempt, current_stage, input_json={"vector_count": len(vectors)})
             if hasattr(self.vector_store, "delete_by_knowledge_id"):
                 self.vector_store.delete_by_knowledge_id(document.id)
@@ -117,6 +127,7 @@ class DocumentProcessingService:
             spans.end_stage(document.id, attempt, current_stage, output_json={"payload_count": len(payloads)})
 
             current_stage = "finalize"
+            self._raise_if_cancelled(document)
             spans.begin_stage(document.id, attempt, current_stage)
             document.parse_status = "completed"
             document.error_message = None
@@ -125,6 +136,12 @@ class DocumentProcessingService:
             self.documents.save(document)
             spans.end_stage(document.id, attempt, current_stage, output_json={"parse_status": "completed"})
             spans.finalize_root(document.id, attempt, "done")
+        except DocumentProcessingCancelled as exc:
+            spans.cancel_attempt(document.id, attempt, str(exc))
+            document.parse_status = "cancelled"
+            document.error_message = str(exc)
+            self.documents.save(document)
+            raise
         except Exception as exc:
             if current_stage is not None:
                 spans.fail_stage(document.id, attempt, current_stage, exc)
@@ -133,6 +150,11 @@ class DocumentProcessingService:
             document.error_message = str(exc)
             self.documents.save(document)
             raise
+
+    def _raise_if_cancelled(self, document) -> None:
+        self.db.refresh(document)
+        if document.parse_status == "cancelled":
+            raise DocumentProcessingCancelled(document.error_message or "用户已取消解析")
 
 
 def _select_parser_engine(rules: list | None, file_type: str | None) -> str | None:

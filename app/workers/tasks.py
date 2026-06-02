@@ -2,7 +2,7 @@ from app.core.config import get_settings
 from app.db.repositories.task import ProcessingTaskRepository
 from app.db.session import make_session_factory
 from app.integrations.vector_store import VectorStoreRegistry
-from app.services.document_processing import DocumentProcessingService
+from app.services.document_processing import DocumentProcessingCancelled, DocumentProcessingService
 from app.services.task import TASK_DOCUMENT_REPROCESS, TASK_DOCUMENT_UPLOAD_PROCESS, TASK_KNOWLEDGE_BASE_REBUILD
 from app.workers.celery_app import celery_app
 
@@ -34,6 +34,10 @@ def process_document(document_id: str) -> None:
                 settings=settings,
                 vector_store=VectorStoreRegistry(settings).build("qdrant"),
             ).process(document_id)
+        except DocumentProcessingCancelled as exc:
+            if task is not None:
+                task_repo.mark_cancelled(task, str(exc))
+            return
         except Exception as exc:
             if task is not None:
                 task_repo.mark_failed(task, str(exc))

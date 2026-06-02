@@ -1,5 +1,52 @@
 # AI Done Log
 
+### 2026-06-02 | DOCS | v0.71 当前版本文档归档
+- summary: 将 README、CHANGELOG、AI Task Board 和 WeKnora 差距文档更新为当前 v0.71：归档 TASK-020 到 TASK-024，补充 v0.71 Schema/API 变化、运行状态、Command Palette、文档生命周期和重复上传修复说明，并补齐缺失的 `docs/weknora-local-comparison-v0.71-roadmap.zh-CN.md`。
+- files: `README.md`, `CHANGELOG.md`, `docs/ai-loop/requirements.md`, `docs/ai-loop/done.md`, `docs/weknora-local-comparison-v0.71-roadmap.zh-CN.md`, `docs/weknora-local-comparison-v0.7-roadmap.zh-CN.md`, `docs/weknora-visible-gap-analysis-v0.6-v0.7.zh-CN.md`, `docs/weknora-visible-gap-analysis-v0.6-v0.7.md`
+- verification: 文档版本文本搜索和 v0.71 关键 API/bugfix 文本一致性检查通过。
+- follow_ups: v0.71 P1/P2 和 v0.72 候选继续保留在 `requirements.md` Parking Lot。
+
+### 2026-06-02 | BUGFIX | 软删除后同文件重新上传
+- summary: 修复同一文件首次上传后中止、软删除记录，再次上传时复用 deterministic document id 导致 `knowledges.id` 主键冲突并返回 Internal Server Error 的问题；现在活跃重复文件返回中文 409，已软删除同 hash 文件会生成新的 document id 并允许重新上传。
+- files: `app/api/v1/documents.py`, `app/db/repositories/document.py`, `app/services/document.py`, `tests/test_v05_document_management.py`
+- verification: `python -m pytest tests/test_v05_document_management.py::test_deleted_duplicate_file_can_be_uploaded_again tests/test_v05_document_management.py::test_active_duplicate_file_upload_returns_chinese_error -q` -> 2 passed; `python -m pytest tests/test_v05_document_management.py tests/test_v021_crud_endpoints.py tests/test_v071_document_lifecycle.py -q` -> 13 passed; `ruff check app\api\v1\documents.py app\db\repositories\document.py app\services\document.py tests\test_v05_document_management.py` -> passed; `python -m compileall app tests` -> passed.
+- follow_ups: 无。
+
+### 2026-06-02 | DOCS | v0.71 差距文档和任务规划
+- summary: 重新对照 `D:/myproject/_references/WeKnora` 本地 `VERSION=0.6.0`、commit `e352721` 和迁移 `000057_models_display_name`，新增 v0.71 规划文档；把 v0.71 P0 收敛为上传队列、文档下载/取消/移动、停止生成/自动标题/last-request state、阶段化 retrieval trace + 真实 status API、Command Palette。
+- files: `docs/weknora-local-comparison-v0.71-roadmap.zh-CN.md`, `docs/weknora-local-comparison-v0.7-roadmap.zh-CN.md`, `docs/weknora-visible-gap-analysis-v0.6-v0.7.zh-CN.md`, `docs/ai-loop/requirements.md`, `docs/ai-loop/done.md`
+- follow_ups: 从 `TASK-020` 开始进入 v0.71；生产代码变更前仍按任务看板规则等待用户确认。
+
+### 2026-06-02 | TASK-020 | 上传队列和多文件进度
+- summary: 文档上传组件支持一次选择多个文件；文档页新增本地上传队列，逐文件展示 pending / uploading / queued / processing / completed / failed 状态，上传成功后展示 document id 和匹配到的 task id，并区分上传失败、解析失败和部分成功摘要。
+- files: `frontend/src/components/DocumentUpload.vue`, `frontend/src/views/DocumentsView.vue`, `frontend/src/styles/app.css`, `tests/test_frontend_v071_upload_queue.py`, `frontend/dist/**`, `docs/ai-loop/requirements.md`, `docs/ai-loop/done.md`
+- verification: `python -m pytest tests/test_frontend_v071_upload_queue.py -q` -> 1 passed; `python -m pytest tests/test_frontend_v071_upload_queue.py tests/test_frontend_file_picker.py tests/test_frontend_v07_batch_progress.py -q` -> 3 passed; `python -m pytest (rg --files tests | rg 'test_frontend_.*\\.py$') -q` -> 25 passed; `npm --prefix frontend run build` -> passed with existing Vite large chunk warning.
+- follow_ups: 自动进入 `TASK-021`。
+
+### 2026-06-02 | TASK-021 | 文档下载、取消解析和移动到其他 KB
+- summary: 增加文档原文件下载、queued/processing 取消解析、文档移动到兼容知识库的后端 API 和前端操作；取消会同步任务状态与处理 timeline 为 cancelled；移动会校验 KB 类型和 Embedding 模型兼容，并同步 chunk 与 Qdrant payload 的知识库归属。
+- files: `app/api/v1/documents.py`, `app/db/repositories/document.py`, `app/db/repositories/task.py`, `app/integrations/qdrant_store.py`, `app/schemas/document.py`, `app/services/document.py`, `app/services/document_processing.py`, `app/services/processing_spans.py`, `app/services/task.py`, `app/workers/tasks.py`, `frontend/src/types/api.ts`, `frontend/src/stores/knowledgeBase.ts`, `frontend/src/views/DocumentsView.vue`, `tests/test_v071_document_lifecycle.py`, `tests/test_frontend_v071_document_lifecycle.py`, `tests/conftest.py`, `frontend/dist/**`
+- verification: `python -m pytest tests/test_v071_document_lifecycle.py tests/test_frontend_v071_document_lifecycle.py -q` -> 5 passed; `python -m pytest tests/test_v071_document_lifecycle.py tests/test_v07_processing_spans.py tests/test_v05_document_management.py -q` -> 12 passed; `python -m pytest tests/test_frontend_v071_document_lifecycle.py tests/test_frontend_v071_upload_queue.py tests/test_frontend_v07_batch_progress.py tests/test_frontend_file_picker.py -q` -> 4 passed; `npm --prefix frontend run build` -> passed with existing Vite large chunk warning; `python -m compileall app tests` -> exit 0.
+- follow_ups: 自动进入 `TASK-022`。
+
+### 2026-06-02 | TASK-022 | 停止生成、自动标题和 last-request state
+- summary: Quick Answer stream 增加进程内 stop registry 和 `/chat-sessions/{session_id}/stop`；流式生成在 token 边界响应停止，保存 partial assistant message 为 cancelled；空/占位标题会在首问后生成可读标题；会话 `settings_json.last_request_state` 持久化 scope、检索命中、模型摘要、耗时和状态，前端展示最后一次请求并提供“停止生成”按钮。
+- files: `app/api/v1/quick_answer.py`, `app/api/v1/chat_sessions.py`, `app/main.py`, `app/schemas/chat.py`, `app/services/chat.py`, `app/services/chat_stop.py`, `frontend/src/types/api.ts`, `frontend/src/stores/chat.ts`, `frontend/src/views/ChatView.vue`, `tests/test_v071_chat_generation_lifecycle.py`, `tests/test_frontend_v071_chat_generation_lifecycle.py`, `frontend/dist/**`
+- verification: `python -m pytest tests/test_v071_chat_generation_lifecycle.py tests/test_frontend_v071_chat_generation_lifecycle.py -q` -> 4 passed; `python -m pytest tests/test_v071_chat_generation_lifecycle.py tests/test_v06_quick_answer_stream.py tests/test_v06_chat_sessions.py tests/test_v07_chat_experience.py tests/test_v07_chat_mentioned_items.py -q` -> 13 passed; `python -m pytest tests/test_frontend_v071_chat_generation_lifecycle.py tests/test_frontend_v06_chat.py tests/test_frontend_v07_chat_experience.py tests/test_frontend_v07_chat_mentions.py -q` -> 4 passed; `npm --prefix frontend run build` -> passed with existing Vite large chunk warning; `python -m compileall app tests` -> exit 0.
+- follow_ups: 自动进入 `TASK-023`。
+
+### 2026-06-02 | TASK-023 | Retrieval trace 阶段化和真实运行状态
+- summary: Quick Answer retrieval trace 新增 rewrite/search/rerank/answer 阶段列表，包含状态、耗时和输出摘要；新增 `/api/v1/runtime-status`，返回数据库、本地存储、向量库和 parser registry 的运行状态；设置页从 runtime status 加载 parser/storage/system 状态，Chat trace 面板展示阶段列表。
+- files: `app/api/v1/runtime_status.py`, `app/api/v1/router.py`, `app/api/v1/quick_answer.py`, `app/services/quick_answer.py`, `frontend/src/types/api.ts`, `frontend/src/stores/retrieval.ts`, `frontend/src/views/SettingsView.vue`, `frontend/src/views/ChatView.vue`, `tests/test_v071_observability_status.py`, `tests/test_frontend_v071_observability_status.py`, `frontend/dist/**`
+- verification: `python -m pytest tests/test_v071_observability_status.py tests/test_frontend_v071_observability_status.py -q` -> 3 passed; `python -m pytest tests/test_v071_observability_status.py tests/test_v06_quick_answer_stream.py tests/test_quick_answer.py tests/test_chunker_preview_api.py -q` -> 10 passed; `python -m pytest tests/test_frontend_v071_observability_status.py tests/test_frontend_v07_settings_shell.py tests/test_frontend_v071_chat_generation_lifecycle.py tests/test_frontend_v06_chat.py -q` -> 4 passed; `npm --prefix frontend run build` -> passed with existing Vite large chunk warning; `python -m compileall app tests` -> exit 0.
+- follow_ups: 自动进入 `TASK-024`。
+
+### 2026-06-02 | TASK-024 | Command Palette 最小版
+- summary: 新增全局 `CommandPalette`，支持按钮和 Ctrl/Meta+K 打开、按关键字过滤，并快速跳转快速问答、知识库、文档管理、FAQ 管理、模型配置、检索设置、解析器状态和存储状态；接入 `App.vue` 应用壳，不新增后端能力。
+- files: `frontend/src/components/CommandPalette.vue`, `frontend/src/App.vue`, `tests/test_frontend_v071_command_palette.py`, `frontend/dist/**`
+- verification: `python -m pytest tests/test_frontend_v071_command_palette.py -q` -> 1 passed; `python -m pytest tests/test_frontend_v071_command_palette.py tests/test_frontend_v071_observability_status.py tests/test_frontend_v071_chat_generation_lifecycle.py tests/test_frontend_v07_settings_shell.py tests/test_frontend_v06_chat.py -q` -> 5 passed; `python -m pytest (rg --files tests | rg 'test_frontend_.*\\.py$') -q` -> 29 passed; `npm --prefix frontend run build` -> passed with existing Vite large chunk warning; `python -m compileall app tests` -> exit 0.
+- follow_ups: v0.71 P0 `TASK-020` 到 `TASK-024` 已完成。
+
 ### 2026-05-31 | TASK-000 | 初始化 WeKnora 对齐开发循环
 - summary: 创建 `docs/ai-loop` 任务看板；克隆 Tencent/WeKnora 到项目外只读参考目录；根据现有 gap analysis 和 WeKnora `e352721` README/CHANGELOG/source tree 整理第一批 v0.7 任务队列。未改动业务代码。
 - files: `docs/ai-loop/requirements.md`, `docs/ai-loop/done.md`
@@ -123,13 +170,13 @@
 - summary: 前端接入 TASK-018；FAQ 类型和 store 支持 `similar_questions` 与 `faq_config`；FAQ 管理页展示相似问法、创建/编辑弹窗可输入相似问法并去重过滤、导入说明包含 `similar_questions` 列、检索测试展示 `matched_question`；KB 详情设置区新增 FAQ index mode 和 question index mode 表单并随保存提交。
 - files: `frontend/src/types/api.ts`, `frontend/src/stores/knowledgeBase.ts`, `frontend/src/views/FAQView.vue`, `frontend/src/views/KnowledgeBaseDetailView.vue`, `frontend/src/styles/app.css`, `tests/test_frontend_v07_faq_similar_indexing.py`
 - verification: `python -m pytest tests/test_frontend_v07_faq_similar_indexing.py -q` -> 1 passed; `npm --prefix frontend run build` -> exit 0; `python -m pytest (rg --files tests | rg 'test_frontend_.*\\.py$') -q` -> 24 passed; `ruff check .` -> All checks passed; `python -m compileall app tests` -> exit 0; `python -m pytest -q` -> 125 passed; Playwright with fetch stubs confirmed FAQ list renders similar questions and search drawer renders matched question.
-- follow_ups: v0.7 P0 队列完成；后续进入 v0.71 候选或用户指定的新任务。
+- follow_ups: v0.7 P0 队列完成；后续 v0.71 P0 已在 TASK-020 到 TASK-024 落地。
 
 ### 2026-06-01 | v0.7 | 文档归档
 - summary: 将项目文档更新到当前版本 `v0.7`：README 当前版本、v0.7 Schema/API 变化、CHANGELOG v0.7 条目、AI Task Board 基线、v0.7 对比路线文档和 v0.6-v0.7 差距分析均补充 TASK-010 到 TASK-019 完成状态。
 - files: `README.md`, `CHANGELOG.md`, `docs/ai-loop/requirements.md`, `docs/ai-loop/done.md`, `docs/weknora-local-comparison-v0.7-roadmap.zh-CN.md`, `docs/weknora-visible-gap-analysis-v0.6-v0.7.zh-CN.md`, `docs/weknora-visible-gap-analysis-v0.6-v0.7.md`
 - verification: 文档版本文本搜索、README schema 字段核对和 git diff 范围检查通过。
-- follow_ups: v0.71 候选继续保留在 `docs/ai-loop/requirements.md` Parking Lot。
+- follow_ups: v0.71 P0 已完成；剩余 P1/P2 和 v0.72 候选继续保留在 `docs/ai-loop/requirements.md` Parking Lot。
 
 ## Entry Template
 ### YYYY-MM-DD | TASK-000 | Short summary

@@ -1,5 +1,63 @@
 # Changelog
 
+## v0.71
+
+v0.71 是 v0.7 WeKnora P0 对齐之后的 Quick Q&A 操作闭环与可观测性版本，聚合 TASK-020 到 TASK-024，并补齐软删除后同文件重新上传的稳定性问题。本版本仍不进入 Agent/Wiki/RBAC 大范围，继续保持单租户 Quick Q&A 主线。
+
+### Added
+
+- 新增上传队列和多文件进度：
+  - 文档上传组件支持一次选择多个文件。
+  - 文档页逐文件展示 pending / uploading / queued / processing / completed / failed 状态。
+  - 上传成功后展示 document id 和匹配到的 task id，并区分上传失败、解析失败和部分成功摘要。
+- 新增文档生命周期操作：
+  - 新增文档原文件下载 API 和前端入口。
+  - 新增 queued/processing 文档取消解析，取消后同步任务状态和处理 timeline。
+  - 新增文档移动到其他兼容知识库，校验 KB 类型和 Embedding 模型兼容，并同步 chunk 与 Qdrant payload 归属。
+- 新增会话生成生命周期：
+  - Quick Answer stream 支持 `/api/v1/chat-sessions/{session_id}/stop` 停止生成。
+  - 停止后保存 partial assistant message 为 cancelled。
+  - 空白或占位会话标题在首问后自动生成可读标题。
+  - 会话保存 `settings_json.last_request_state`，记录 scope、检索命中、模型摘要、耗时和状态。
+- 新增阶段化 retrieval trace 和运行状态：
+  - retrieval trace 新增 rewrite / search / rerank / answer 阶段列表，包含状态、耗时和输出摘要。
+  - 新增 `GET /api/v1/runtime-status`，返回 database、local storage、vector store、parser registry 和 system 状态。
+  - 设置页使用 runtime status 展示真实 parser/storage/system 状态。
+- 新增 Command Palette 最小版：
+  - 支持按钮和 Ctrl/Meta+K 打开。
+  - 支持按关键字过滤并跳转快速问答、知识库、文档管理、FAQ 管理、模型配置、检索设置、解析器状态和存储状态。
+
+### Fixed
+
+- 修复同一文件曾上传、解析中止、软删除记录后再次上传会复用 deterministic document id，导致 `knowledges.id` 主键冲突并在前端显示 `上传失败：Internal Server Error` 的问题。
+- 同一知识库内活跃重复文件现在返回 `409 Conflict` 和中文错误 `该文件已上传，请勿重复上传。`；已软删除的同 hash 文件允许重新上传并生成新的 document id。
+
+### Changed
+
+- 文档页上传结果从单次操作提示扩展为队列级状态，便于定位部分成功和单文件失败。
+- Chat trace 面板从原始 trace JSON 展示增强为阶段化可读状态。
+- 设置中心 parser/storage 状态不再依赖静态占位，优先展示后端 runtime status。
+
+### Not Included
+
+- 不实现完整登录、RBAC、多租户 workspace、审计日志。
+- 不实现 Agent Mode、MCP 工具、Wiki Mode、GraphRAG 或外部数据源同步。
+- 不实现附件上下文、文件夹上传、FAQ import progress、FAQ last import result 或字段批量更新；这些保留为 v0.71 P1 / v0.72 候选。
+- 不接入真实 MinerU/OCR、对象存储 provider、Web Search provider 或完整 BM25 引擎。
+
+### Verification
+
+- `python -m pytest tests/test_frontend_v071_upload_queue.py -q`：`1 passed`
+- `python -m pytest tests/test_v071_document_lifecycle.py tests/test_frontend_v071_document_lifecycle.py -q`：`5 passed`
+- `python -m pytest tests/test_v071_chat_generation_lifecycle.py tests/test_frontend_v071_chat_generation_lifecycle.py -q`：`4 passed`
+- `python -m pytest tests/test_v071_observability_status.py tests/test_frontend_v071_observability_status.py -q`：`3 passed`
+- `python -m pytest tests/test_frontend_v071_command_palette.py -q`：`1 passed`
+- `python -m pytest tests/test_v05_document_management.py::test_deleted_duplicate_file_can_be_uploaded_again tests/test_v05_document_management.py::test_active_duplicate_file_upload_returns_chinese_error -q`：`2 passed`
+- `python -m pytest tests/test_v05_document_management.py tests/test_v021_crud_endpoints.py tests/test_v071_document_lifecycle.py -q`：`13 passed`
+- `ruff check app\api\v1\documents.py app\db\repositories\document.py app\services\document.py tests\test_v05_document_management.py`：通过
+- `python -m compileall app tests`：通过
+- `npm --prefix frontend run build`：通过，仍有 Vite 大 chunk 提示。
+
 ## v0.7
 
 v0.7 是在 v0.61 知识管理补强基础上的 WeKnora P0 对齐版本，聚合 TASK-010 到 TASK-019。本版本仍不进入 Agent/Wiki/RBAC 大范围，而是把 Quick Q&A 主链路周边的知识库平台化、范围检索、处理可观测性和 FAQ 高级索引补到更接近 WeKnora 的可用状态。
@@ -55,7 +113,7 @@ v0.7 是在 v0.61 知识管理补强基础上的 WeKnora P0 对齐版本，聚�
 
 - 不实现完整登录、RBAC、多租户 workspace、审计日志。
 - 不实现 Agent Mode、MCP 工具、Wiki Mode、GraphRAG 或外部数据源同步。
-- 不实现停止生成、自动标题、附件上下文、文件夹上传、文档下载、取消解析和文档移动；这些已进入 v0.71 候选。
+- 不实现停止生成、自动标题、附件上下文、文件夹上传、文档下载、取消解析和文档移动；其中停止生成、自动标题、文档下载、取消解析和文档移动已在 v0.71 落地，附件上下文和文件夹上传继续后续规划。
 - 不接入真实 MinerU/OCR、对象存储 provider、Web Search provider 或完整 BM25 引擎。
 
 ### Verification

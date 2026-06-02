@@ -7,18 +7,18 @@ defineProps<{
 }>();
 
 const emit = defineEmits<{
-  upload: [file: File];
+  upload: [files: File[]];
 }>();
 
-const selectedFile = ref<File | null>(null);
+const selectedFiles = ref<File[]>([]);
 
 function handleFileSelected(event: Event) {
   const input = event.target as HTMLInputElement;
-  selectedFile.value = input.files?.[0] || null;
+  selectedFiles.value = Array.from(input.files || []);
 }
 
 function submitUpload() {
-  if (selectedFile.value) emit("upload", selectedFile.value);
+  if (selectedFiles.value.length) emit("upload", selectedFiles.value);
 }
 </script>
 
@@ -29,19 +29,20 @@ function submitUpload() {
         class="native-file-input"
         data-testid="file-input"
         type="file"
+        multiple
         accept=".txt,.md,.pdf,.docx,.csv,.json,.xlsx"
         :disabled="uploading || polling"
         @change="handleFileSelected"
       />
       <span class="file-picker-button" data-testid="choose-file">
-        {{ selectedFile?.name || "选择文件" }}
+        {{ selectedFiles.length ? `已选择 ${selectedFiles.length} 个文件` : "选择文件" }}
       </span>
     </label>
     <a-button
       type="primary"
       data-testid="upload-doc"
       :loading="uploading || polling"
-      :disabled="!selectedFile || uploading || polling"
+      :disabled="!selectedFiles.length || uploading || polling"
       @click="submitUpload"
     >
       上传并解析

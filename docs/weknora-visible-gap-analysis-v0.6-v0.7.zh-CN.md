@@ -4,6 +4,8 @@
 
 范围：本报告是非点击版差距分析，初版依据 Tencent/WeKnora 公开 README、CHANGELOG、DeepWiki 源码索引，以及本地 knowmate v0.5 的 README、CHANGELOG 和前端路由/页面结构整理；2026-05-31 已按 knowmate v0.61 更新当前基线；2026-06-01 已补充 knowmate v0.7 P0 完成状态。由于 Chrome 插件安全策略阻止对 WeKnora 线上生产域名进行自动化点击，本报告不包含线上页面真实点击验证结果。
 
+2026-06-02 更新：已改以 `D:\myproject\_references\WeKnora` 本地源码为主参考，确认 WeKnora `VERSION=0.6.0`、commit `e352721`、迁移到 `000057_models_display_name`。最新 v0.71 完成归档见 `docs/weknora-local-comparison-v0.71-roadmap.zh-CN.md`；本文继续作为 v0.6-v0.7 可见差距归档。
+
 主要参考来源：
 
 - Tencent/WeKnora GitHub：https://github.com/Tencent/WeKnora
@@ -29,7 +31,19 @@ knowmate v0.7 已经把 Quick Q&A 的核心 RAG 主链路、会话化问答、�
 - 文档处理 parse/chunk/embed/upsert/finalize timeline。
 - FAQ 相似问法、FAQ 索引模式和命中问法展示。
 
-因此，本文中原建议放到 v0.7 P0 的项目已经落地。上传队列、停止生成、自动标题、文档下载/取消/移动、retrieval trace 细化、Command Palette、真实 parser/storage status、附件上下文和 RBAC-lite 进入 v0.71 或后续候选。
+因此，本文中原建议放到 v0.7 P0 的项目已经落地。上传队列、停止生成、自动标题、文档下载/取消/移动、retrieval trace 细化、Command Palette 和真实 parser/storage status 已在 v0.71 落地；附件上下文和 RBAC-lite 继续进入后续候选。
+
+## v0.71 完成更新
+
+重新对照本地 WeKnora 0.6.0 后，最大差距已经从 Quick Q&A 主链路转向平台期能力：Tenant RBAC、per-user pin、user preferences/favorites、CLI/MCP server、DataSource、IM、Wiki、Web Search、多 vector store fan-out、对象存储、attachments 和系统运维。为了不打散 knowmate v1 Quick Q&A 主线，v0.71 已完成以下 P0：
+
+1. 上传队列和多文件进度。
+2. 文档下载、取消解析、移动到其他 KB。
+3. 停止生成、自动标题和 last-request state。
+4. Retrieval trace 阶段化，以及真实 parser/storage/system status API。
+5. Command Palette 最小版。
+
+v0.71 还修复了软删除后同一文件重新上传触发主键冲突并显示 Internal Server Error 的问题。RBAC-lite、附件上下文、FAQ import progress、per-user pin/favorites 预留作为 P1/P2；Agent、Wiki、DataSource、IM、CLI/MCP server 继续延后。
 
 ## v0.61 更新说明
 

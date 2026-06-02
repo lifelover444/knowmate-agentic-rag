@@ -12,7 +12,7 @@ TASK_TYPES = {
     TASK_KNOWLEDGE_BASE_REBUILD,
 }
 
-TASK_STATUSES = {"queued", "processing", "completed", "failed"}
+TASK_STATUSES = {"queued", "processing", "completed", "failed", "cancelled"}
 
 
 class ProcessingTaskService:

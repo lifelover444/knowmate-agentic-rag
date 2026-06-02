@@ -1,6 +1,9 @@
+from pathlib import Path
 from typing import Annotated
+from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile, status
+from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
 from app.api.v1.deps import get_db, get_embedder, get_settings
@@ -10,7 +13,16 @@ from app.db.repositories.chunk import ChunkRepository
 from app.db.repositories.document import DocumentRepository
 from app.db.repositories.knowledge_base import KnowledgeBaseRepository
 from app.db.repositories.task import ProcessingTaskRepository
-from app.schemas.document import ChunkRead, DocumentPreviewRead, DocumentRead, ManualTextImportRequest, URLImportRequest
+from app.schemas.document import (
+    ChunkRead,
+    DocumentMoveFailure,
+    DocumentMoveRequest,
+    DocumentMoveResponse,
+    DocumentPreviewRead,
+    DocumentRead,
+    ManualTextImportRequest,
+    URLImportRequest,
+)
 from app.schemas.processing_span import ProcessingSpanTimeline
 from app.services.document import DocumentService
 from app.services.document_preview import DocumentPreviewService
@@ -27,12 +39,77 @@ EmbedderDep = Annotated[object, Depends(get_embedder)]
 UploadDocumentFile = Annotated[UploadFile, File(...)]
 
 
+@router.post("/move", response_model=DocumentMoveResponse)
+def move_documents(payload: DocumentMoveRequest, db: DBSession, settings: AppSettings, request: Request):
+    doc_repo = DocumentRepository(db)
+    service = DocumentService(doc_repo, KnowledgeBaseRepository(db), settings, settings.upload_dir)
+    moved = 0
+    failures: list[DocumentMoveFailure] = []
+    for document_id in payload.document_ids:
+        document = doc_repo.get(document_id)
+        if document is None:
+            failures.append(DocumentMoveFailure(document_id=document_id, reason="文档不存在"))
+            continue
+        try:
+            service.move_to_knowledge_base(document, payload.target_kb_id, vector_store=request.app.state.vector_store)
+        except LookupError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        moved += 1
+    return DocumentMoveResponse(
+        requested=len(payload.document_ids),
+        moved=moved,
+        failed=len(failures),
+        failures=failures,
+        target_kb_id=payload.target_kb_id,
+    )
+
+
 @router.get("/{document_id}", response_model=DocumentRead)
 def get_document(document_id: str, db: DBSession):
     document = DocumentRepository(db).get(document_id)
     if document is None:
         raise HTTPException(status_code=404, detail="document not found")
     return to_document_read(document, db)
+
+
+@router.get("/{document_id}/download")
+def download_document(document_id: str, db: DBSession):
+    document = DocumentRepository(db).get(document_id)
+    if document is None:
+        raise HTTPException(status_code=404, detail="document not found")
+    if not document.file_path:
+        raise HTTPException(status_code=404, detail="原文件不存在")
+    path = Path(document.file_path)
+    if not path.exists() or not path.is_file():
+        raise HTTPException(status_code=404, detail="原文件不存在")
+    filename = document.file_name or path.name
+    response = FileResponse(path, filename=filename, media_type="application/octet-stream")
+    response.headers["Content-Disposition"] = f'attachment; filename="{quote(filename)}"'
+    return response
+
+
+@router.post("/{document_id}/cancel-parse", response_model=DocumentRead)
+def cancel_document_parse(document_id: str, db: DBSession, settings: AppSettings):
+    document = DocumentRepository(db).get(document_id)
+    if document is None:
+        raise HTTPException(status_code=404, detail="document not found")
+    try:
+        cancelled = DocumentService(
+            DocumentRepository(db),
+            KnowledgeBaseRepository(db),
+            settings,
+            settings.upload_dir,
+        ).cancel_parse(document)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    ProcessingTaskRepository(db).cancel_active_for_document(document_id)
+    spans = ProcessingSpanService(db)
+    timeline = spans.get_timeline(document_id)
+    if timeline.attempt > 0:
+        spans.cancel_attempt(document_id, timeline.attempt)
+    return to_document_read(cancelled, db)
 
 
 @router.delete("/{document_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -104,12 +181,15 @@ def create_document_from_file(
             ModelConfigService(db, settings).get_model(kb.embedding_model_id, "Embedding")
         except (LookupError, RuntimeError):
             raise HTTPException(status_code=400, detail=MODEL_CONFIG_REQUIRED_MESSAGE) from None
-    document = DocumentService(
-        DocumentRepository(db),
-        KnowledgeBaseRepository(db),
-        settings,
-        settings.upload_dir,
-    ).create_from_upload(kb_id, file, tag_id=tag_id)
+    try:
+        document = DocumentService(
+            DocumentRepository(db),
+            KnowledgeBaseRepository(db),
+            settings,
+            settings.upload_dir,
+        ).create_from_upload(kb_id, file, tag_id=tag_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     ProcessingTaskService(ProcessingTaskRepository(db), settings).create_for_document(
         document,
         TASK_DOCUMENT_UPLOAD_PROCESS,

@@ -7,6 +7,7 @@ import type {
   ParserEngineRule,
   PreviewChunkingResponse,
   RetrievalConfig,
+  RuntimeStatus,
 } from "../types/api";
 
 function parseList(value: string): string[] {
@@ -35,6 +36,7 @@ export const useRetrievalStore = defineStore("retrieval", () => {
   const retrievalRrfKeywordWeight = ref(0.3);
 
   const parserEngines = ref<ParserEngine[]>([]);
+  const runtimeStatus = ref<RuntimeStatus | null>(null);
   const parserEngineRules = ref<ParserEngineRule[]>([
     { file_types: ["pdf"], engine: "builtin" },
     { file_types: ["docx"], engine: "builtin" },
@@ -133,6 +135,12 @@ export const useRetrievalStore = defineStore("retrieval", () => {
     parserEngines.value = await getJson<ParserEngine[]>("/parser-engines");
   }
 
+  async function loadRuntimeStatus() {
+    runtimeStatus.value = await getJson<RuntimeStatus>("/runtime-status");
+    parserEngines.value = runtimeStatus.value.parser_engines;
+    return runtimeStatus.value;
+  }
+
   async function previewChunking() {
     previewing.value = true;
     try {
@@ -159,6 +167,7 @@ export const useRetrievalStore = defineStore("retrieval", () => {
     retrievalRrfVectorWeight,
     retrievalRrfKeywordWeight,
     parserEngines,
+    runtimeStatus,
     parserEngineRules,
     chunkStrategy,
     chunkSize,
@@ -177,6 +186,7 @@ export const useRetrievalStore = defineStore("retrieval", () => {
     loadRetrievalConfig,
     saveRetrievalConfig,
     loadParserEngines,
+    loadRuntimeStatus,
     previewChunking,
     chunkingPayload,
     parserEngineRulesPayload,

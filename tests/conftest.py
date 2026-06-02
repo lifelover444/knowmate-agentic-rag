@@ -63,6 +63,14 @@ class FakeVectorStore:
         self.points = [item for item in self.points if item["payload"]["knowledge_id"] != knowledge_id]
         self.results = [item for item in self.results if item["knowledge_id"] != knowledge_id]
 
+    def move_knowledge_to_kb(self, *, knowledge_id: str, target_kb_id: str) -> None:
+        for item in self.points:
+            if item["payload"].get("knowledge_id") == knowledge_id:
+                item["payload"]["knowledge_base_id"] = target_kb_id
+        for item in self.results:
+            if item.get("knowledge_id") == knowledge_id:
+                item["knowledge_base_id"] = target_kb_id
+
     def search(
         self,
         *,

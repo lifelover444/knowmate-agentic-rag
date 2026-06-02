@@ -8,6 +8,7 @@ import type {
   ChatSessionListResponse,
   ChatSessionRead,
   ChatSettings,
+  ChatStopResponse,
   KnowledgeSearchResponse,
   MentionedItem,
   QuickAnswerResponse,
@@ -206,6 +207,12 @@ export const useChatStore = defineStore("chat", () => {
             sources: finalMessage.sources || [],
           };
         }
+        if (sse.event === "stopped") {
+          const stoppedMessage = sse.data.assistant_message as unknown as ChatMessageRead;
+          const index = messages.value.findIndex((item) => item.role === "assistant" && item.status === "streaming");
+          if (index >= 0) messages.value.splice(index, 1, stoppedMessage);
+          streamError.value = String(sse.data.error_message || "用户已停止生成");
+        }
         if (sse.event === "error") {
           streamError.value = String(sse.data.error || sse.data.message || "回答失败");
         }
@@ -218,6 +225,13 @@ export const useChatStore = defineStore("chat", () => {
     } finally {
       answering.value = false;
     }
+  }
+
+  async function stopGeneration(sessionId = currentSession.value?.id || "") {
+    if (!sessionId) return null;
+    const response = await postJson<ChatStopResponse>(`/chat-sessions/${sessionId}/stop`, {});
+    streamError.value = response.message || "用户已停止生成";
+    return response;
   }
 
   async function searchKnowledge(params: AskParams) {
@@ -265,6 +279,7 @@ export const useChatStore = defineStore("chat", () => {
     loadRecommendedQuestions,
     useRecommendedQuestion,
     askQuestion,
+    stopGeneration,
     searchKnowledge,
   };
 });

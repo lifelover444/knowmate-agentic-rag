@@ -96,6 +96,16 @@ export interface ParserEngine {
   available: boolean;
   file_types?: string[];
   description?: string | null;
+  status?: string;
+  error_message?: string | null;
+}
+
+export interface RuntimeStatus {
+  system: Record<string, unknown>;
+  database: Record<string, unknown>;
+  storage: Record<string, unknown>;
+  vector_store: Record<string, unknown>;
+  parser_engines: ParserEngine[];
 }
 
 export interface KnowledgeBaseRead {
@@ -225,6 +235,19 @@ export interface BatchDocumentResponse {
   failed: number;
   failures: BatchDocumentFailure[];
   task_ids: string[];
+}
+
+export interface DocumentMoveFailure {
+  document_id: string;
+  reason: string;
+}
+
+export interface DocumentMoveResponse {
+  requested: number;
+  moved: number;
+  failed: number;
+  failures: DocumentMoveFailure[];
+  target_kb_id: string;
 }
 
 export interface VectorStoreRead {
@@ -408,9 +431,16 @@ export interface ChatSessionRead {
   title: string;
   is_pinned: boolean;
   settings: ChatSettings | Record<string, unknown>;
+  last_request_state: Record<string, unknown>;
   last_message_at: string;
   created_at: string;
   updated_at: string;
+}
+
+export interface ChatStopResponse {
+  session_id: string;
+  stopped: boolean;
+  message: string;
 }
 
 export interface ChatSessionDetail extends ChatSessionRead {

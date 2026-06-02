@@ -1,7 +1,9 @@
 import json
+import time
 from typing import Annotated
+from uuid import uuid4
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
@@ -76,6 +78,7 @@ def quick_answer(
 @router.post("/stream")
 def quick_answer_stream(
     payload: QuickAnswerStreamRequest,
+    request: Request,
     db: DBSession,
     settings: AppSettings,
     embedder: EmbedderDep,
@@ -104,6 +107,7 @@ def quick_answer_stream(
         if payload.knowledge_base_id and session.knowledge_base_id != payload.knowledge_base_id:
             raise ValueError("会话绑定的知识库与请求不一致")
         history = repo.list_messages(session.id, settings.default_tenant_id)
+        session = chat_service.maybe_auto_title(session, payload.query, len(history))
         user_message = chat_service.create_user_message(session, payload.query, payload.mentioned_items)
         prepared = QuickAnswerService(db, settings, embedder, chat_model, vector_store).prepare_answer(
             knowledge_base_id=payload.knowledge_base_id,
@@ -119,6 +123,15 @@ def quick_answer_stream(
             system_prompt=payload.system_prompt,
             generate_answer=False,
         )
+        started_at = time.perf_counter()
+        base_state = _last_request_state(
+            payload=payload,
+            prepared=prepared,
+            status="running",
+            started_at=started_at,
+            duration_ms=0,
+        )
+        session = chat_service.update_last_request_state(session, base_state)
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except (RuntimeError, ValueError) as exc:
@@ -126,74 +139,183 @@ def quick_answer_stream(
 
     def event_stream():
         answer_parts: list[str] = []
-        yield _sse("session", to_chat_session_read(session).model_dump(mode="json"))
-        yield _sse("user_message", {"id": user_message.id})
-        yield _sse(
-            "rewrite",
-            {
-                "original_query": payload.query,
-                "rewritten_query": prepared.rewritten_query,
-                "enabled": bool(payload.enable_query_rewrite),
-                "failed": bool(prepared.retrieval_trace.get("rewrite_failed")),
-                "skipped": bool(prepared.retrieval_trace.get("rewrite_skipped")),
-            },
-        )
-        yield _sse(
-            "retrieval",
-            {
-                "hit_count": len(prepared.source_payloads),
-                "sources": prepared.source_payloads,
-                "retrieval_trace": prepared.retrieval_trace,
-            },
-        )
+        generation_id = str(uuid4())
+        registry = request.app.state.chat_stop_registry
+        registry.register(session.id, generation_id)
+        if hasattr(prepared.chat_model, "registry"):
+            prepared.chat_model.registry = registry
         try:
-            if prepared.chat_model is None or prepared.messages is None:
-                for token in prepared.answer or "没有在知识库中找到可引用的内容。":
+            yield _sse("session", to_chat_session_read(session).model_dump(mode="json"))
+            yield _sse("user_message", {"id": user_message.id})
+            yield _sse(
+                "rewrite",
+                {
+                    "original_query": payload.query,
+                    "rewritten_query": prepared.rewritten_query,
+                    "enabled": bool(payload.enable_query_rewrite),
+                    "failed": bool(prepared.retrieval_trace.get("rewrite_failed")),
+                    "skipped": bool(prepared.retrieval_trace.get("rewrite_skipped")),
+                },
+            )
+            yield _sse(
+                "retrieval",
+                {
+                    "hit_count": len(prepared.source_payloads),
+                    "sources": prepared.source_payloads,
+                    "retrieval_trace": prepared.retrieval_trace,
+                },
+            )
+            try:
+                if prepared.chat_model is None or prepared.messages is None:
+                    token_iterable = prepared.answer or "没有在知识库中找到可引用的内容。"
+                else:
+                    token_iterable = stream_complete(prepared.chat_model, prepared.messages, payload.temperature or 0.2)
+                for token in token_iterable:
+                    stopped, reason = registry.is_stopped(session.id, generation_id)
+                    if stopped:
+                        answer = "".join(answer_parts)
+                        _set_trace_stage(prepared.retrieval_trace, "answer", "cancelled", error_message=reason)
+                        assistant_message = chat_service.create_assistant_message(
+                            session,
+                            content=answer,
+                            original_query=payload.query,
+                            rewritten_query=prepared.rewritten_query,
+                            sources=prepared.source_payloads,
+                            retrieval_trace={**prepared.retrieval_trace, "stream_cancelled": True},
+                            model_config=prepared.model_config,
+                            status="cancelled",
+                            error_message=reason or "用户已停止生成",
+                        )
+                        chat_service.update_last_request_state(
+                            session,
+                            _last_request_state(
+                                payload=payload,
+                                prepared=prepared,
+                                status="cancelled",
+                                started_at=started_at,
+                                duration_ms=_duration_ms(started_at),
+                                error_message=assistant_message.error_message,
+                            ),
+                        )
+                        yield _sse(
+                            "stopped",
+                            {
+                                "assistant_message": to_chat_message_read(assistant_message).model_dump(mode="json"),
+                                "answer": answer,
+                                "error_message": assistant_message.error_message,
+                            },
+                        )
+                        yield _sse("done", {})
+                        return
                     answer_parts.append(token)
                     yield _sse("token", {"text": token})
-            else:
-                for token in stream_complete(prepared.chat_model, prepared.messages, payload.temperature or 0.2):
-                    answer_parts.append(token)
-                    yield _sse("token", {"text": token})
-            answer = "".join(answer_parts)
-            assistant_message = chat_service.create_assistant_message(
+                answer = "".join(answer_parts)
+                _set_trace_stage(prepared.retrieval_trace, "answer", "done")
+                assistant_message = chat_service.create_assistant_message(
+                    session,
+                    content=answer,
+                    original_query=payload.query,
+                    rewritten_query=prepared.rewritten_query,
+                    sources=prepared.source_payloads,
+                    retrieval_trace=prepared.retrieval_trace,
+                    model_config=prepared.model_config,
+                )
+            except Exception as exc:
+                error_message = f"回答生成失败：{exc}"
+                _set_trace_stage(prepared.retrieval_trace, "answer", "failed", error_message=error_message)
+                chat_service.create_assistant_message(
+                    session,
+                    content="",
+                    original_query=payload.query,
+                    rewritten_query=prepared.rewritten_query,
+                    sources=prepared.source_payloads,
+                    retrieval_trace={**prepared.retrieval_trace, "stream_failed": True},
+                    model_config=prepared.model_config,
+                    status="failed",
+                    error_message=error_message,
+                )
+                chat_service.update_last_request_state(
+                    session,
+                    _last_request_state(
+                        payload=payload,
+                        prepared=prepared,
+                        status="failed",
+                        started_at=started_at,
+                        duration_ms=_duration_ms(started_at),
+                        error_message=error_message,
+                    ),
+                )
+                yield _sse("error", {"error": error_message})
+                yield _sse("done", {})
+                return
+            chat_service.update_last_request_state(
                 session,
-                content=answer,
-                original_query=payload.query,
-                rewritten_query=prepared.rewritten_query,
-                sources=prepared.source_payloads,
-                retrieval_trace=prepared.retrieval_trace,
-                model_config=prepared.model_config,
+                _last_request_state(
+                    payload=payload,
+                    prepared=prepared,
+                    status="completed",
+                    started_at=started_at,
+                    duration_ms=_duration_ms(started_at),
+                ),
             )
-        except Exception as exc:
-            error_message = f"回答生成失败：{exc}"
-            chat_service.create_assistant_message(
-                session,
-                content="",
-                original_query=payload.query,
-                rewritten_query=prepared.rewritten_query,
-                sources=prepared.source_payloads,
-                retrieval_trace={**prepared.retrieval_trace, "stream_failed": True},
-                model_config=prepared.model_config,
-                status="failed",
-                error_message=error_message,
+            yield _sse(
+                "final",
+                {
+                    "assistant_message": to_chat_message_read(assistant_message).model_dump(mode="json"),
+                    "answer": answer,
+                    "sources": prepared.source_payloads,
+                    "retrieval_trace": prepared.retrieval_trace,
+                },
             )
-            yield _sse("error", {"error": error_message})
             yield _sse("done", {})
-            return
-        yield _sse(
-            "final",
-            {
-                "assistant_message": to_chat_message_read(assistant_message).model_dump(mode="json"),
-                "answer": answer,
-                "sources": prepared.source_payloads,
-                "retrieval_trace": prepared.retrieval_trace,
-            },
-        )
-        yield _sse("done", {})
+        finally:
+            registry.unregister(session.id, generation_id)
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")
 
 
 def _sse(event: str, data: dict) -> str:
     return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+
+
+def _duration_ms(started_at: float) -> int:
+    return max(0, int((time.perf_counter() - started_at) * 1000))
+
+
+def _last_request_state(
+    *,
+    payload: QuickAnswerStreamRequest,
+    prepared,
+    status: str,
+    started_at: float,
+    duration_ms: int,
+    error_message: str | None = None,
+) -> dict:
+    return {
+        "status": status,
+        "query": payload.query,
+        "knowledge_base_id": payload.knowledge_base_id,
+        "knowledge_base_ids": payload.knowledge_base_ids,
+        "knowledge_ids": payload.knowledge_ids,
+        "mentioned_items": payload.mentioned_items,
+        "top_k": payload.top_k,
+        "mode": payload.mode,
+        "enable_rerank": payload.enable_rerank,
+        "enable_query_rewrite": bool(payload.enable_query_rewrite),
+        "temperature": payload.temperature,
+        "system_prompt": payload.system_prompt,
+        "hit_count": len(prepared.source_payloads),
+        "model_config": prepared.model_config,
+        "started_at": started_at,
+        "duration_ms": duration_ms,
+        "error_message": error_message,
+    }
+
+
+def _set_trace_stage(trace: dict, name: str, status: str, error_message: str | None = None) -> None:
+    for stage in trace.get("stages") or []:
+        if stage.get("name") == name:
+            stage["status"] = status
+            if error_message:
+                stage["error_message"] = error_message
+            return

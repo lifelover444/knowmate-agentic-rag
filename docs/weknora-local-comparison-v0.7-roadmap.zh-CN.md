@@ -2,7 +2,9 @@
 
 日期：2026-05-31
 
-状态更新：2026-06-01 已按本文 P0 建议完成 knowmate v0.7。TASK-010 到 TASK-019 已落地，覆盖 KB capabilities / pin、KB 详情一体化设置、多知识库/文件范围检索、Chat mention、文档处理 timeline、FAQ 相似问法和 FAQ 索引模式。P1/P2 仍作为 v0.71 及后续候选。
+2026-06-02 更新：已基于 `D:\myproject\_references\WeKnora` 本地 `VERSION=0.6.0`、commit `e352721` 和迁移 `000057_models_display_name` 重新对照。v0.71 的完成归档已独立整理到 `docs/weknora-local-comparison-v0.71-roadmap.zh-CN.md`。本文件保留 v0.7 归档语境。
+
+状态更新：2026-06-01 已按本文 P0 建议完成 knowmate v0.7。TASK-010 到 TASK-019 已落地，覆盖 KB capabilities / pin、KB 详情一体化设置、多知识库/文件范围检索、Chat mention、文档处理 timeline、FAQ 相似问法和 FAQ 索引模式。2026-06-02 已继续完成 v0.71 P0 操作闭环与可观测性任务包。
 
 对比范围：
 
@@ -24,7 +26,7 @@ knowmate v0.7 已经复刻了 WeKnora Quick Q&A 的主干：模型配置、知�
 - 检索与索引：WeKnora 支持多向量/检索后端、外部 sparse/BM25 类型后端、fan-out/composite retrieve、Web Search 融合、知识图谱/Wiki boost；knowmate 主要是 Qdrant + PostgreSQL FTS fallback。
 - 前端深度：WeKnora 是完整平台 UI；knowmate 是轻量 Vue 测试工作台，视觉和流程已接近，但信息密度、设置项、命令面板、组织空间和 Chat 输入区能力不足。
 
-v0.7 已按“可用知识库平台 Lite”的 P0 范围完成，不直接追完整 Agent/Wiki/RBAC 大范围。后续 v0.71 更适合继续补上传队列、停止生成、自动标题、文档下载/取消/移动、retrieval trace 细化、Command Palette、真实 parser/storage status、附件上下文和 RBAC-lite。
+v0.7 已按“可用知识库平台 Lite”的 P0 范围完成，不直接追完整 Agent/Wiki/RBAC 大范围。v0.71 详见 `docs/weknora-local-comparison-v0.71-roadmap.zh-CN.md`，P0 已完成上传队列、文档下载/取消/移动、停止生成/自动标题/last-request state、retrieval trace 阶段化、真实 parser/storage/system status 和 Command Palette；附件上下文、FAQ import progress、per-user pin/favorites 预留进入 P1/P2，RBAC-lite 单独延后规划。
 
 ## 源码依据
 

@@ -34,7 +34,12 @@ class DocumentService:
 
         data = file.file.read()
         file_hash = hashlib.sha256(data).hexdigest()
-        document_id = file_hash[:8] + "-" + hashlib.sha1((kb_id + file_hash).encode()).hexdigest()[:27]
+        if self.document_repo.find_active_by_file_hash(kb_id, file_hash) is not None:
+            raise ValueError("该文件已上传，请勿重复上传。")
+        base_document_id = file_hash[:8] + "-" + hashlib.sha1((kb_id + file_hash).encode()).hexdigest()[:27]
+        document_id = base_document_id
+        while self.document_repo.get_including_deleted(document_id) is not None:
+            document_id = str(uuid.uuid4())
         target_dir = self.upload_dir / kb_id
         target_dir.mkdir(parents=True, exist_ok=True)
         target_path = target_dir / f"{document_id}_{file.filename}"
@@ -128,6 +133,33 @@ class DocumentService:
         if vector_store is not None and hasattr(vector_store, "delete_by_knowledge_id"):
             vector_store.delete_by_knowledge_id(document.id)
         return deleted
+
+    def cancel_parse(self, document: Knowledge) -> Knowledge:
+        if document.parse_status == "cancelled":
+            return document
+        if document.parse_status in {"completed", "failed"}:
+            raise ValueError("解析已结束，无法取消")
+        document.parse_status = "cancelled"
+        document.error_message = "用户已取消解析"
+        return self.document_repo.save(document)
+
+    def move_to_knowledge_base(self, document: Knowledge, target_kb_id: str, vector_store=None) -> Knowledge:
+        target_kb = self.kb_repo.get(target_kb_id, document.tenant_id)
+        if target_kb is None:
+            raise LookupError("目标知识库不存在")
+        source_kb = self.kb_repo.get(document.knowledge_base_id, document.tenant_id)
+        if source_kb is None:
+            raise LookupError("源知识库不存在")
+        if source_kb.id == target_kb.id:
+            raise ValueError("源知识库和目标知识库不能相同")
+        if source_kb.kb_type != target_kb.kb_type:
+            raise ValueError("目标知识库类型必须与源知识库一致")
+        if source_kb.embedding_model_id != target_kb.embedding_model_id:
+            raise ValueError("目标知识库必须使用相同的 Embedding 模型")
+        moved = self.document_repo.move_to_knowledge_base(document, target_kb.id, target_kb.embedding_model_id)
+        if vector_store is not None and hasattr(vector_store, "move_knowledge_to_kb"):
+            vector_store.move_knowledge_to_kb(knowledge_id=document.id, target_kb_id=target_kb.id)
+        return moved
 
 
 def fetch_url_html(url: str) -> str:

@@ -1,3 +1,4 @@
+import time
 from dataclasses import dataclass
 
 from sqlalchemy.orm import Session
@@ -71,6 +72,8 @@ class QuickAnswerService:
         generate_answer: bool = True,
     ) -> QuickAnswerPrepared:
         primary_kb_id = knowledge_base_id or _primary_knowledge_base_id(knowledge_base_ids, knowledge_ids, self.db)
+        stages: list[dict] = []
+        rewrite_started = time.perf_counter()
         rewritten_query, rewrite_trace = self._rewrite_query(
             knowledge_base_id=primary_kb_id,
             query=query,
@@ -78,7 +81,24 @@ class QuickAnswerService:
             enable_query_rewrite=enable_query_rewrite,
             temperature=temperature,
         )
+        rewrite_status = "skipped"
+        if enable_query_rewrite and not rewrite_trace.get("rewrite_skipped"):
+            rewrite_status = "failed" if rewrite_trace.get("rewrite_failed") else "done"
+        stages.append(
+            _trace_stage(
+                "rewrite",
+                rewrite_status,
+                rewrite_started,
+                output={
+                    "enabled": enable_query_rewrite,
+                    "rewritten_query": rewritten_query,
+                    "failed": rewrite_trace.get("rewrite_failed"),
+                    "skipped": rewrite_trace.get("rewrite_skipped"),
+                },
+            )
+        )
         search_query = rewritten_query or query
+        search_started = time.perf_counter()
         hits = KnowledgeSearchService(self.db, self.settings, self.embedder, self.vector_store).search(
             knowledge_base_id=knowledge_base_id,
             knowledge_base_ids=knowledge_base_ids,
@@ -88,15 +108,37 @@ class QuickAnswerService:
             top_k=top_k,
             enable_rerank=enable_rerank,
         )
+        stages.append(
+            _trace_stage(
+                "search",
+                "done",
+                search_started,
+                output={"hit_count": len(hits), "mode": mode, "top_k": top_k},
+            )
+        )
         model_config = self._model_config_payload(primary_kb_id)
+        should_rerank = bool(enable_rerank)
+        stages.append(
+            _trace_stage(
+                "rerank",
+                "done" if should_rerank else "skipped",
+                None,
+                output={"enabled": should_rerank},
+            )
+        )
+        answer_started = time.perf_counter()
         retrieval_trace = {
             **rewrite_trace,
             "retrieval_mode": mode,
             "top_k": top_k,
             "enable_rerank": enable_rerank,
             "hit_count": len(hits),
+            "stages": stages,
         }
         if not hits:
+            retrieval_trace["stages"].append(
+                _trace_stage("answer", "skipped", answer_started, output={"reason": "no_hits"})
+            )
             return QuickAnswerPrepared(
                 answer="没有在知识库中找到可引用的内容。",
                 sources=[],
@@ -119,6 +161,14 @@ class QuickAnswerService:
             system_prompt=system_prompt,
         )
         answer = _complete(chat_model, messages, temperature or 0.2) if generate_answer else ""
+        retrieval_trace["stages"].append(
+            _trace_stage(
+                "answer",
+                "done" if generate_answer else "pending",
+                answer_started,
+                output={"streaming": not generate_answer},
+            )
+        )
         source_payloads = [_source_to_read(source).model_dump() for source in sources]
         return QuickAnswerPrepared(
             answer=answer,
@@ -287,3 +337,21 @@ def _primary_knowledge_base_id(
         if document is not None:
             return document.knowledge_base_id
     raise ValueError("至少提供一个 knowledge_base_id、knowledge_base_ids 或 knowledge_ids")
+
+
+def _trace_stage(
+    name: str,
+    status: str,
+    started_at: float | None,
+    *,
+    output: dict | None = None,
+    error_message: str | None = None,
+) -> dict:
+    duration_ms = 0 if started_at is None else max(0, int((time.perf_counter() - started_at) * 1000))
+    return {
+        "name": name,
+        "status": status,
+        "duration_ms": duration_ms,
+        "output": output or {},
+        "error_message": error_message,
+    }

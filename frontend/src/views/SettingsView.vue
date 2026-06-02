@@ -1,14 +1,16 @@
 <script setup lang="ts">
-import { computed } from "vue";
+import { computed, onMounted } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import ModelSettingsView from "./ModelSettingsView.vue";
 import RetrievalSettingsView from "./RetrievalSettingsView.vue";
 import VectorStoreSettingsView from "./VectorStoreSettingsView.vue";
+import { useRetrievalStore } from "../stores/retrieval";
 
 type SettingsSection = "models" | "vector-stores" | "retrieval" | "parser" | "storage";
 
 const route = useRoute();
 const router = useRouter();
+const retrieval = useRetrievalStore();
 
 const settingsGroups = [
   {
@@ -51,36 +53,36 @@ const activeComponent = computed(() => {
   return undefined;
 });
 
-const parserEngines = [
-  {
-    name: "Builtin Parser",
-    status: "已启用",
-    description: "当前默认本地解析链路，覆盖 txt、markdown、csv、pdf/docx 基础文本抽取。",
-  },
-  {
-    name: "Local Parser Registry",
-    status: "已启用",
-    description: "由检索与分块配置选择 parser_engine，按知识库规则参与文档处理。",
-  },
-  {
-    name: "MinerU OCR",
-    status: "暂未启用",
-    description: "保留 WeKnora-style 高级 PDF/OCR provider 占位，未接入前不要求凭证。",
-  },
-];
+const parserEngines = computed(() => retrieval.runtimeStatus?.parser_engines || retrieval.parserEngines);
 
-const storageProviders = [
-  { name: "Local Storage", status: "已启用", description: "开发环境使用本地上传目录保存原始文件。" },
+const storageProviders = computed(() => [
+  {
+    name: "Local Storage",
+    status: retrieval.runtimeStatus?.storage?.status === "ok" ? "已启用" : "不可用",
+    description: String(retrieval.runtimeStatus?.storage?.path || "开发环境使用本地上传目录保存原始文件。"),
+  },
   { name: "MinIO", status: "暂未启用", description: "S3-compatible 对象存储占位。" },
   { name: "S3", status: "暂未启用", description: "AWS S3 provider 占位。" },
   { name: "OSS", status: "暂未启用", description: "阿里云 OSS provider 占位。" },
   { name: "COS", status: "暂未启用", description: "腾讯云 COS provider 占位。" },
   { name: "OBS", status: "暂未启用", description: "华为云 OBS provider 占位。" },
-];
+]);
+
+const systemStatusText = computed(() => retrieval.runtimeStatus?.system?.status || "unknown");
 
 function selectSection(section: SettingsSection) {
   router.replace({ path: "/settings", query: { section } });
 }
+
+function parserDisplayName(name: string): string {
+  if (name === "builtin") return "Builtin Parser";
+  if (name === "ocr") return "MinerU OCR";
+  return name || "Local Parser Registry";
+}
+
+onMounted(() => {
+  retrieval.loadRuntimeStatus().catch(() => undefined);
+});
 </script>
 
 <template>
@@ -116,16 +118,18 @@ function selectSection(section: SettingsSection) {
           <div class="section-heading">
             <div>
               <h2>解析器</h2>
-              <p>当前先暴露 builtin/local 状态，后续再按 provider 接入 MinerU/OCR。</p>
+              <p>系统状态：{{ systemStatusText }}。当前 parser_engine_status 来自后端运行状态。</p>
             </div>
           </div>
           <div class="settings-status-grid">
             <article v-for="engine in parserEngines" :key="engine.name" class="settings-status-card">
               <header>
-                <strong>{{ engine.name }}</strong>
-                <a-tag :color="engine.status === '已启用' ? 'green' : 'gray'">{{ engine.status }}</a-tag>
+                <strong>{{ parserDisplayName(engine.name) }}</strong>
+                <a-tag :color="engine.status === 'ok' ? 'green' : 'gray'">
+                  {{ engine.status === 'ok' ? '已启用' : '暂未启用' }}
+                </a-tag>
               </header>
-              <p>{{ engine.description }}</p>
+              <p>{{ engine.description || engine.error_message }}</p>
             </article>
           </div>
         </section>
@@ -134,7 +138,7 @@ function selectSection(section: SettingsSection) {
           <div class="section-heading">
             <div>
               <h2>存储</h2>
-              <p>只展示当前 local storage 和对象存储 provider 占位，不提前保存未实现 provider 凭证。</p>
+              <p>系统状态：{{ systemStatusText }}。Local storage、向量库和数据库状态来自后端运行检查。</p>
             </div>
           </div>
           <div class="settings-status-grid">

@@ -4,6 +4,8 @@ Date: 2026-05-30
 
 Scope: non-click analysis based on Tencent/WeKnora public README, changelog, DeepWiki source index, and the local knowmate README / CHANGELOG / frontend routes. The first draft used the v0.5 baseline; the baseline was updated to knowmate v0.61 on 2026-05-31 and supplemented with knowmate v0.7 P0 completion status on 2026-06-01. This is not a live UI test report because Chrome automation is blocked by policy on the WeKnora production domain.
 
+2026-06-02 update: the primary comparison reference is now the local `D:\myproject\_references\WeKnora` checkout, with `VERSION=0.6.0`, commit `e352721`, and migrations through `000057_models_display_name`. The current v0.71 completion archive is documented in `docs/weknora-local-comparison-v0.71-roadmap.zh-CN.md`; this file remains an archive of the v0.6-v0.7 visible-gap baseline.
+
 Primary sources:
 
 - Tencent/WeKnora GitHub: https://github.com/Tencent/WeKnora
@@ -29,7 +31,19 @@ As of 2026-06-01, TASK-010 through TASK-019 are consolidated as knowmate `v0.7`.
 - Document-processing parse/chunk/embed/upsert/finalize timeline.
 - FAQ similar questions, FAQ indexing modes, and matched-question display.
 
-Therefore, the original v0.7 P0 recommendations in this document are now delivered. Upload queue, stop generation, automatic title generation, document download/cancel/move, retrieval trace deepening, command palette, real parser/storage status, attachment context, and RBAC-lite move to v0.71 or later candidates.
+Therefore, the original v0.7 P0 recommendations in this document are now delivered. Upload queue, stop generation, automatic title generation, document download/cancel/move, retrieval trace deepening, command palette, and real parser/storage status are delivered in v0.71; attachment context and RBAC-lite remain later candidates.
+
+## v0.71 Completion Update
+
+After comparing against the local WeKnora 0.6.0 source, the largest remaining gaps have shifted from the Quick Q&A core flow to platform-stage capabilities: Tenant RBAC, per-user pinning, user preferences/favorites, CLI/MCP server, DataSource, IM, Wiki, Web Search, multi-vector-store fan-out, object storage, attachments, and operations visibility. To keep knowmate's v1 Quick Q&A path focused, v0.71 delivered:
+
+1. Upload queue and per-file progress.
+2. Document download, cancel parsing, and move to another KB.
+3. Stop generation, automatic session titles, and last-request state.
+4. Stage-level retrieval trace plus real parser/storage/system status APIs.
+5. A minimal Command Palette.
+
+v0.71 also fixed the soft-delete re-upload conflict that could surface as an Internal Server Error after uploading, interrupting, deleting, and re-uploading the same file. RBAC-lite, attachment context, FAQ import progress, and per-user pin/favorites preparation remain P1/P2; Agent, Wiki, DataSource, IM, and CLI/MCP server remain deferred.
 
 ## v0.61 Update
 
