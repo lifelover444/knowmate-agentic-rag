@@ -1,4 +1,5 @@
 from datetime import datetime
+from typing import Any
 
 from pydantic import BaseModel, Field
 
@@ -31,6 +32,24 @@ class VectorStoreTestRequest(BaseModel):
 class VectorStoreTestResponse(BaseModel):
     ok: bool
     message: str
+
+
+class VectorStoreFieldSpec(BaseModel):
+    name: str
+    label: str
+    field_type: str = "string"
+    required: bool = False
+    sensitive: bool = False
+    default: Any = None
+
+
+class VectorStoreTypeRead(BaseModel):
+    type: str
+    label: str
+    status: str
+    description: str
+    connection_fields: list[VectorStoreFieldSpec]
+    index_fields: list[VectorStoreFieldSpec]
 
 
 class VectorStoreRead(BaseModel):

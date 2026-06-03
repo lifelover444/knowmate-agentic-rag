@@ -1,14 +1,22 @@
 import uuid
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.config import Settings
-from app.db.models import Chunk, FAQEntry, Knowledge
+from app.db.models import Chunk, FAQEntry, Knowledge, KnowledgeTag
 from app.db.repositories.chunk import ChunkRepository
 from app.db.repositories.faq import FAQEntryRepository
 from app.db.repositories.knowledge_base import KnowledgeBaseRepository
 from app.integrations.llm_openai import OpenAIEmbedder
-from app.schemas.faq import FAQEntryCreate, FAQEntryUpdate
+from app.schemas.faq import (
+    FAQEntryCreate,
+    FAQEntryUpdate,
+    FAQFieldBatchFailure,
+    FAQFieldBatchUpdateRequest,
+    FAQFieldBatchUpdateResponse,
+    FAQFieldUpdate,
+)
 from app.services.model_config import ModelConfigService
 
 
@@ -37,6 +45,7 @@ class FAQEntryService:
                 faq_metadata=payload.metadata or {},
                 tag_id=payload.tag_id,
                 enabled=payload.enabled,
+                is_recommended=payload.is_recommended,
             )
         )
         self.rebuild_index(entry)
@@ -57,9 +66,60 @@ class FAQEntryService:
             entry.tag_id = data["tag_id"]
         if "enabled" in data and data["enabled"] is not None:
             entry.enabled = data["enabled"]
+        if "is_recommended" in data and data["is_recommended"] is not None:
+            entry.is_recommended = data["is_recommended"]
         entry = self.repo.save(entry)
         self.rebuild_index(entry)
         return entry
+
+    def batch_update_fields(
+        self,
+        knowledge_base_id: str,
+        payload: FAQFieldBatchUpdateRequest,
+    ) -> FAQFieldBatchUpdateResponse:
+        kb = self._faq_kb(knowledge_base_id)
+        requested = 0
+        succeeded = 0
+        failures: list[FAQFieldBatchFailure] = []
+
+        updates: list[tuple[str, FAQFieldUpdate]] = list(payload.by_id.items())
+        excluded = set(payload.exclude_ids or [])
+        for tag_id, update in payload.by_tag.items():
+            try:
+                normalized_tag_id = self._validated_tag_id(kb.id, tag_id)
+            except LookupError:
+                failures.append(FAQFieldBatchFailure(faq_id=f"tag:{tag_id}", reason="标签不存在"))
+                continue
+            entries = self._list_entries_by_tag(kb.id, normalized_tag_id, excluded)
+            updates.extend((entry.id, update) for entry in entries)
+
+        seen: set[str] = set()
+        for faq_id, update in updates:
+            requested += 1
+            if faq_id in seen:
+                continue
+            seen.add(faq_id)
+            entry = self.repo.get(faq_id, kb.tenant_id)
+            if entry is None or entry.knowledge_base_id != kb.id:
+                failures.append(FAQFieldBatchFailure(faq_id=faq_id, reason="FAQ 条目不存在或不属于当前知识库"))
+                continue
+            try:
+                self._apply_field_update(entry, update, kb.id)
+            except (LookupError, ValueError) as exc:
+                failures.append(FAQFieldBatchFailure(faq_id=faq_id, reason=str(exc)))
+                continue
+            self.repo.save(entry)
+            self.rebuild_index(entry)
+            succeeded += 1
+
+        failed = len(failures)
+        return FAQFieldBatchUpdateResponse(
+            requested=requested,
+            succeeded=succeeded,
+            failed=failed,
+            failures=failures,
+            error_summary=f"{failed} 条 FAQ 字段更新失败" if failed else None,
+        )
 
     def delete(self, entry: FAQEntry) -> None:
         self.repo.soft_delete(entry)
@@ -116,6 +176,7 @@ class FAQEntryService:
                     "knowledge_base_id": entry.knowledge_base_id,
                     "title": entry.question,
                     "is_enabled": True,
+                    "is_recommended": entry.is_recommended,
                     "parent_chunk_id": None,
                     "tag_id": entry.tag_id,
                     "chunk_type": "faq",
@@ -146,6 +207,55 @@ class FAQEntryService:
             "Embedding",
         )
         return OpenAIEmbedder(runtime_config)
+
+    def _apply_field_update(self, entry: FAQEntry, update: FAQFieldUpdate, knowledge_base_id: str) -> None:
+        changed = False
+        enabled = update.effective_enabled()
+        if enabled is not None:
+            entry.enabled = enabled
+            changed = True
+        recommended = update.effective_recommended()
+        if recommended is not None:
+            entry.is_recommended = recommended
+            changed = True
+        if update.has_tag_update():
+            entry.tag_id = self._validated_tag_id(knowledge_base_id, update.tag_id)
+            changed = True
+        if not changed:
+            raise ValueError("没有可更新的 FAQ 字段")
+
+    def _validated_tag_id(self, knowledge_base_id: str, tag_id: str | None) -> str | None:
+        if tag_id is None or str(tag_id).strip() == "":
+            return None
+        tag = self.db.scalar(
+            select(KnowledgeTag).where(
+                KnowledgeTag.id == str(tag_id),
+                KnowledgeTag.tenant_id == self.settings.default_tenant_id,
+                KnowledgeTag.knowledge_base_id == knowledge_base_id,
+            )
+        )
+        if tag is None:
+            raise LookupError("标签不存在")
+        return tag.id
+
+    def _list_entries_by_tag(
+        self,
+        knowledge_base_id: str,
+        tag_id: str | None,
+        excluded_ids: set[str],
+    ) -> list[FAQEntry]:
+        query = select(FAQEntry).where(
+            FAQEntry.tenant_id == self.settings.default_tenant_id,
+            FAQEntry.knowledge_base_id == knowledge_base_id,
+            FAQEntry.deleted_at.is_(None),
+        )
+        if tag_id is None:
+            query = query.where(FAQEntry.tag_id.is_(None))
+        else:
+            query = query.where(FAQEntry.tag_id == tag_id)
+        if excluded_ids:
+            query = query.where(FAQEntry.id.not_in(excluded_ids))
+        return list(self.db.scalars(query.order_by(FAQEntry.created_at.asc(), FAQEntry.id.asc())).all())
 
 
 def _normalize_similar_questions(question: str, values: list[str] | None) -> list[str]:
@@ -215,6 +325,7 @@ def _faq_index_item(
         "matched_question": matched,
         "question_role": question_role,
         "index_mode": index_mode,
+        "is_recommended": entry.is_recommended,
     }
     return {"content": content, "search_text": content, "metadata": metadata}
 

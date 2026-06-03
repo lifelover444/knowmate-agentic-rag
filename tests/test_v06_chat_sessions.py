@@ -1,7 +1,7 @@
 from conftest import create_bound_models
 from fastapi.testclient import TestClient
 
-from app.db.models import ChatSession
+from app.db.models import ChatMessage, ChatSession
 
 
 def create_kb(client: TestClient, name: str = "chat session KB") -> str:
@@ -74,3 +74,64 @@ def test_chat_session_list_filters_by_tenant(client, db_session):
 
     assert response.status_code == 200, response.text
     assert response.json()["items"] == []
+
+
+def test_message_search_groups_history_as_qa_pairs_and_stats(client, db_session):
+    kb_id = create_kb(client, name="history search KB")
+    create_response = client.post(
+        "/api/v1/chat-sessions",
+        json={"knowledge_base_id": kb_id, "title": "Redis 排障"},
+    )
+    assert create_response.status_code == 201, create_response.text
+    session = create_response.json()
+
+    user_message = ChatMessage(
+        tenant_id=10000,
+        session_id=session["id"],
+        role="user",
+        content="如何排查 Redis 连接错误？",
+        original_query="如何排查 Redis 连接错误？",
+        status="completed",
+    )
+    assistant_message = ChatMessage(
+        tenant_id=10000,
+        session_id=session["id"],
+        role="assistant",
+        content="可以检查 Redis URL、网络连通性和服务日志。",
+        original_query="如何排查 Redis 连接错误？",
+        status="completed",
+    )
+    db_session.add_all([user_message, assistant_message])
+    db_session.commit()
+
+    search_response = client.post("/api/v1/messages/search", json={"query": "服务日志", "limit": 10})
+
+    assert search_response.status_code == 200, search_response.text
+    payload = search_response.json()
+    assert payload["total"] == 1
+    item = payload["items"][0]
+    assert item["session_id"] == session["id"]
+    assert item["session_title"] == "Redis 排障"
+    assert item["query_content"] == "如何排查 Redis 连接错误？"
+    assert "服务日志" in item["answer_content"]
+    assert "服务日志" in item["answer_snippet"]
+    assert item["created_at"]
+    assert item["match_type"] == "keyword"
+
+    stats_response = client.get("/api/v1/messages/chat-history-stats")
+    assert stats_response.status_code == 200, stats_response.text
+    stats = stats_response.json()
+    assert stats["session_count"] == 1
+    assert stats["message_count"] == 2
+    assert stats["searchable"] is True
+    assert stats["last_message_at"] is not None
+
+
+def test_message_search_empty_result_and_bad_query_are_user_friendly(client):
+    empty_response = client.post("/api/v1/messages/search", json={"query": "不存在的关键词"})
+    assert empty_response.status_code == 200, empty_response.text
+    assert empty_response.json() == {"items": [], "total": 0}
+
+    bad_response = client.post("/api/v1/messages/search", json={"query": "   "})
+    assert bad_response.status_code == 400
+    assert "搜索关键词不能为空" in bad_response.text

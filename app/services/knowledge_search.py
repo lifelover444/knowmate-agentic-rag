@@ -1,4 +1,5 @@
-from dataclasses import replace
+import time
+from dataclasses import dataclass, replace
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -23,6 +24,14 @@ from app.services.model_config import ModelConfigService
 from app.services.retrieval_config import RetrievalConfigService
 
 RERANK_REQUIRED_MESSAGE = "启用重排需要先配置可用的 Rerank 模型"
+FAQ_BOOST_MIN_SCORE = 0.8
+FAQ_BOOST_FACTOR = 1.2
+
+
+@dataclass
+class KnowledgeSearchResult:
+    hits: list[RetrievalHit]
+    diagnostics: dict
 
 
 class KnowledgeSearchService:
@@ -32,6 +41,7 @@ class KnowledgeSearchService:
         self.embedder = embedder
         self.vector_store = vector_store
         self.reranker = reranker
+        self._last_rerank_diagnostics: dict = {}
 
     def search(
         self,
@@ -44,6 +54,27 @@ class KnowledgeSearchService:
         top_k: int | None = None,
         enable_rerank: bool | None = None,
     ) -> list[RetrievalHit]:
+        return self.search_with_diagnostics(
+            knowledge_base_id=knowledge_base_id,
+            knowledge_base_ids=knowledge_base_ids,
+            knowledge_ids=knowledge_ids,
+            query=query,
+            mode=mode,
+            top_k=top_k,
+            enable_rerank=enable_rerank,
+        ).hits
+
+    def search_with_diagnostics(
+        self,
+        *,
+        knowledge_base_id: str | None = None,
+        knowledge_base_ids: list[str] | None = None,
+        knowledge_ids: list[str] | None = None,
+        query: str,
+        mode: str | None = None,
+        top_k: int | None = None,
+        enable_rerank: bool | None = None,
+    ) -> KnowledgeSearchResult:
         repo = KnowledgeBaseRepository(self.db)
         scope = self._resolve_scope(repo, knowledge_base_id, knowledge_base_ids or [], knowledge_ids or [])
         if not scope:
@@ -59,29 +90,277 @@ class KnowledgeSearchService:
         if resolved_mode not in RETRIEVAL_MODES:
             raise ValueError("不支持的检索模式")
         limit = top_k or config.rerank_top_k
+        should_rerank = enable_rerank if enable_rerank is not None else config.enable_rerank
+        diagnostics = _DiagnosticsBuilder(
+            query=query,
+            mode=resolved_mode,
+            requested_top_k=top_k,
+            effective_top_k=limit,
+            knowledge_base_ids=[kb.id for kb in resolved_kbs],
+            knowledge_ids=knowledge_ids or [],
+            enable_rerank=should_rerank,
+        )
         hits: list[RetrievalHit] = []
         knowledge_ids_by_kb = _knowledge_ids_by_kb(self.db, knowledge_ids or [])
+        composite_retriever = self._build_composite_retriever()
         for kb in resolved_kbs:
             strategy = normalize_indexing_strategy(kb.indexing_strategy)
             _validate_mode_allowed(resolved_mode, strategy)
-            retriever = self._build_retriever(kb.embedding_model_id, config, resolved_mode)
             scoped_knowledge_ids = knowledge_ids_by_kb.get(kb.id) if knowledge_ids else None
             if knowledge_ids and not scoped_knowledge_ids:
                 continue
-            kb_hits = retriever.search(
-                query,
+            retriever_started = time.perf_counter()
+            try:
+                kb_hits = composite_retriever.search_kb(
+                    query,
+                    kb=kb,
+                    config=config,
+                    mode=resolved_mode,
+                    diagnostics=diagnostics,
+                    knowledge_ids=scoped_knowledge_ids,
+                )
+            except Exception as exc:
+                diagnostics.add_retriever(
+                    knowledge_base_id=kb.id,
+                    knowledge_base_name=kb.name,
+                    engine=composite_retriever.engine,
+                    vector_engine=composite_retriever.vector_engine,
+                    keyword_engine=composite_retriever.keyword_engine,
+                    mode=resolved_mode,
+                    status="failed",
+                    hit_count=0,
+                    duration_ms=_duration_ms(retriever_started),
+                    error_message=str(exc),
+                )
+                raise
+            diagnostics.add_retriever(
                 knowledge_base_id=kb.id,
-                limit=config.embedding_top_k,
-                knowledge_ids=scoped_knowledge_ids,
+                knowledge_base_name=kb.name,
+                engine=composite_retriever.engine,
+                vector_engine=composite_retriever.vector_engine,
+                keyword_engine=composite_retriever.keyword_engine,
+                mode=resolved_mode,
+                status="done",
+                hit_count=len(kb_hits),
+                duration_ms=_duration_ms(retriever_started),
             )
             hits.extend(replace(hit, knowledge_base_name=kb.name) for hit in kb_hits)
-        hits = ParentChildExpander(ChunkRepository(self.db)).expand(hits)
-        should_rerank = enable_rerank if enable_rerank is not None else config.enable_rerank
+        parent_input_count = len(hits)
+        hits = diagnostics.run_stage(
+            "parent_expand",
+            "done",
+            input_summary={"hit_count": parent_input_count},
+            action=lambda: ParentChildExpander(ChunkRepository(self.db)).expand(hits),
+            output_summary=lambda expanded: {
+                "input_count": parent_input_count,
+                "output_count": len(expanded),
+                "expanded_count": sum(1 for hit in expanded if hit.context_chunk_id),
+            },
+        )
+        deduplicate_input_count = len(hits)
+        hits = diagnostics.run_stage(
+            "deduplicate",
+            "done",
+            input_summary={"hit_count": deduplicate_input_count},
+            action=lambda: _deduplicate_hits(hits),
+            output_summary=lambda deduplicated: {
+                "input_count": deduplicate_input_count,
+                "output_count": len(deduplicated),
+                "removed_count": max(0, deduplicate_input_count - len(deduplicated)),
+            },
+        )
+        faq_merge_input_count = len(hits)
+        hits = diagnostics.run_stage(
+            "faq_merge",
+            "done",
+            input_summary={
+                "candidate_count": faq_merge_input_count,
+                "faq_count": sum(1 for hit in hits if _is_faq_hit(hit)),
+                "min_boost_score": FAQ_BOOST_MIN_SCORE,
+                "boost_factor": FAQ_BOOST_FACTOR,
+            },
+            action=lambda: _merge_faq_hits(hits),
+            output_summary=lambda merged: {
+                "input_count": faq_merge_input_count,
+                "output_count": len(merged),
+                "faq_count": sum(1 for hit in merged if _is_faq_hit(hit)),
+                "boost_count": sum(1 for hit in merged if (hit.metadata or {}).get("faq_boosted") is True),
+                "max_boost_factor": max(
+                    [
+                        float((hit.metadata or {}).get("faq_boost_factor") or 1)
+                        for hit in merged
+                        if (hit.metadata or {}).get("faq_boosted") is True
+                    ],
+                    default=1,
+                ),
+            },
+        )
         if should_rerank:
             if any(not normalize_indexing_strategy(kb.indexing_strategy)["enable_rerank"] for kb in resolved_kbs):
                 raise ValueError("当前知识库未启用重排")
-            hits = self._rerank(query, hits, config)
-        return _deduplicate_hits(hits)[:limit]
+            if hits:
+                rerank_input_count = len(hits)
+                rerank_started = time.perf_counter()
+                rerank_input = {"candidate_count": rerank_input_count, "threshold": config.rerank_threshold}
+                try:
+                    hits = self._rerank(query, hits, config)
+                except Exception as exc:
+                    if isinstance(exc, RuntimeError) and str(exc) == RERANK_REQUIRED_MESSAGE:
+                        raise
+                    if isinstance(exc, LookupError):
+                        raise
+                    diagnostics.add_stage(
+                        "rerank",
+                        "failed",
+                        duration_ms=_duration_ms(rerank_started),
+                        input_summary=rerank_input,
+                        output_summary={
+                            "input_count": rerank_input_count,
+                            "output_count": rerank_input_count,
+                            "fallback": True,
+                        },
+                        error_message=f"重排失败，已回退原始检索结果：{exc}",
+                    )
+                else:
+                    rerank_diagnostics = dict(self._last_rerank_diagnostics)
+                    diagnostics.add_stage(
+                        "rerank",
+                        "done",
+                        duration_ms=_duration_ms(rerank_started),
+                        input_summary=rerank_input,
+                        output_summary={
+                            "input_count": rerank_input_count,
+                            "output_count": len(hits),
+                            "threshold": config.rerank_threshold,
+                            "fallback": False,
+                            **rerank_diagnostics,
+                        },
+                    )
+            else:
+                diagnostics.add_stage(
+                    "rerank",
+                    "skipped",
+                    input_summary={"candidate_count": 0},
+                    output_summary={"reason": "no_hits"},
+                )
+        else:
+            diagnostics.add_stage(
+                "rerank",
+                "skipped",
+                input_summary={"candidate_count": len(hits)},
+                output_summary={"enabled": False},
+            )
+        final_hits = hits[:limit]
+        diagnostics.finish(final_hit_count=len(final_hits))
+        return KnowledgeSearchResult(hits=final_hits, diagnostics=diagnostics.to_dict())
+
+    def _search_kb_with_diagnostics(
+        self,
+        query: str,
+        *,
+        kb,
+        config: RetrievalConfigSchema,
+        mode: str,
+        diagnostics,
+        knowledge_ids: list[str] | None,
+    ) -> list[RetrievalHit]:
+        vector_hits: list[RetrievalHit] = []
+        keyword_hits: list[RetrievalHit] = []
+        if mode in {"vector_only", "hybrid"}:
+            vector = _ThresholdRetriever(
+                VectorRetriever(embedder=self._embedder(kb.embedding_model_id), vector_store=self.vector_store),
+                config.vector_threshold,
+            )
+            vector_hits = diagnostics.run_stage(
+                "vector",
+                "done",
+                input_summary={
+                    "knowledge_base_id": kb.id,
+                    "limit": config.embedding_top_k,
+                    "threshold": config.vector_threshold,
+                    "knowledge_ids": knowledge_ids or [],
+                },
+                action=lambda: vector.search(
+                    query,
+                    knowledge_base_id=kb.id,
+                    limit=config.embedding_top_k,
+                    knowledge_ids=knowledge_ids,
+                ),
+                output_summary=lambda found: {"hit_count": len(found), "knowledge_base_id": kb.id},
+                aggregate_output_keys=("hit_count",),
+            )
+        else:
+            diagnostics.add_stage(
+                "vector",
+                "skipped",
+                input_summary={"knowledge_base_id": kb.id, "mode": mode},
+                output_summary={"reason": "mode_not_applicable"},
+            )
+
+        if mode in {"keyword_only", "hybrid"}:
+            keyword = _ThresholdRetriever(KeywordRetriever(ChunkRepository(self.db)), config.keyword_threshold)
+            keyword_hits = diagnostics.run_stage(
+                "keyword",
+                "done",
+                input_summary={
+                    "knowledge_base_id": kb.id,
+                    "limit": config.embedding_top_k,
+                    "threshold": config.keyword_threshold,
+                    "knowledge_ids": knowledge_ids or [],
+                },
+                action=lambda: keyword.search(
+                    query,
+                    knowledge_base_id=kb.id,
+                    limit=config.embedding_top_k,
+                    knowledge_ids=knowledge_ids,
+                ),
+                output_summary=lambda found: {"hit_count": len(found), "knowledge_base_id": kb.id},
+                aggregate_output_keys=("hit_count",),
+            )
+        else:
+            diagnostics.add_stage(
+                "keyword",
+                "skipped",
+                input_summary={"knowledge_base_id": kb.id, "mode": mode},
+                output_summary={"reason": "mode_not_applicable"},
+            )
+
+        if mode == "hybrid":
+            return diagnostics.run_stage(
+                "rrf",
+                "done",
+                input_summary={
+                    "knowledge_base_id": kb.id,
+                    "vector_count": len(vector_hits),
+                    "keyword_count": len(keyword_hits),
+                    "rrf_k": config.rrf_k,
+                },
+                action=lambda: _merge_rrf(
+                    vector_hits,
+                    keyword_hits,
+                    rrf_k=config.rrf_k,
+                    vector_weight=config.rrf_vector_weight,
+                    keyword_weight=config.rrf_keyword_weight,
+                    limit=config.embedding_top_k,
+                ),
+                output_summary=lambda merged: {
+                    "input_count": len(vector_hits) + len(keyword_hits),
+                    "output_count": len(merged),
+                    "knowledge_base_id": kb.id,
+                },
+                aggregate_output_keys=("input_count", "output_count"),
+            )
+        diagnostics.add_stage(
+            "rrf",
+            "skipped",
+            input_summary={
+                "knowledge_base_id": kb.id,
+                "vector_count": len(vector_hits),
+                "keyword_count": len(keyword_hits),
+            },
+            output_summary={"reason": "mode_not_applicable"},
+        )
+        return vector_hits if mode == "vector_only" else keyword_hits
 
     def _resolve_scope(
         self,
@@ -131,6 +410,9 @@ class KnowledgeSearchService:
             keyword_weight=config.rrf_keyword_weight,
         )
 
+    def _build_composite_retriever(self):
+        return CompositeKnowledgeRetriever(self)
+
     def _embedder(self, embedding_model_id: str):
         if self.embedder is not None:
             return self.embedder
@@ -150,7 +432,10 @@ class KnowledgeSearchService:
                 "Rerank",
             )
             reranker = RerankerClient(runtime_config)
-        return RerankPipeline(reranker, threshold=config.rerank_threshold, top_k=config.rerank_top_k).apply(query, hits)
+        pipeline = RerankPipeline(reranker, threshold=config.rerank_threshold, top_k=config.rerank_top_k)
+        result = pipeline.apply(query, hits)
+        self._last_rerank_diagnostics = pipeline.diagnostics
+        return result
 
 
 def _deduplicate_hits(hits: list[RetrievalHit]) -> list[RetrievalHit]:
@@ -169,6 +454,226 @@ def _deduplicate_hits(hits: list[RetrievalHit]) -> list[RetrievalHit]:
     return sorted(by_chunk.values(), key=lambda item: float(item.score or 0), reverse=True)
 
 
+def _merge_faq_hits(hits: list[RetrievalHit]) -> list[RetrievalHit]:
+    merged: list[RetrievalHit] = []
+    for hit in hits:
+        if not _is_faq_hit(hit) or float(hit.score or 0) < FAQ_BOOST_MIN_SCORE:
+            merged.append(hit)
+            continue
+        original_score = float(hit.score or 0)
+        boosted_score = min(original_score * FAQ_BOOST_FACTOR, 1.0)
+        metadata = dict(hit.metadata or {})
+        metadata.update(
+            {
+                "faq_boosted": True,
+                "faq_original_score": round(original_score, 6),
+                "faq_boost_factor": FAQ_BOOST_FACTOR,
+            }
+        )
+        merged.append(replace(hit, score=boosted_score, metadata=metadata))
+    return sorted(merged, key=lambda item: float(item.score or 0), reverse=True)
+
+
+def _is_faq_hit(hit: RetrievalHit) -> bool:
+    metadata = hit.metadata or {}
+    return hit.chunk_type == "faq" or metadata.get("source_type") == "faq"
+
+
+def _merge_rrf(
+    vector_hits: list[RetrievalHit],
+    keyword_hits: list[RetrievalHit],
+    *,
+    rrf_k: int,
+    vector_weight: float,
+    keyword_weight: float,
+    limit: int,
+) -> list[RetrievalHit]:
+    merged: dict[str, RetrievalHit] = {}
+    rrf_scores: dict[str, float] = {}
+
+    for rank, hit in enumerate(vector_hits, start=1):
+        merged[hit.chunk_id] = hit
+        rrf_scores[hit.chunk_id] = rrf_scores.get(hit.chunk_id, 0.0) + vector_weight / (rrf_k + rank)
+    for rank, hit in enumerate(keyword_hits, start=1):
+        existing = merged.get(hit.chunk_id)
+        if existing is None:
+            merged[hit.chunk_id] = hit
+        else:
+            merged[hit.chunk_id] = replace(existing, keyword_score=hit.keyword_score or hit.score)
+        rrf_scores[hit.chunk_id] = rrf_scores.get(hit.chunk_id, 0.0) + keyword_weight / (rrf_k + rank)
+
+    results = [
+        replace(
+            hit,
+            retrieval_method="hybrid" if hit.chunk_id in rrf_scores else hit.retrieval_method,
+            score=rrf_scores.get(hit.chunk_id, hit.score),
+            rrf_score=rrf_scores.get(hit.chunk_id),
+            vector_score=hit.vector_score,
+            keyword_score=hit.keyword_score,
+        )
+        for hit in merged.values()
+    ]
+    results.sort(key=lambda item: float(item.rrf_score or item.score or 0), reverse=True)
+    return results[:limit]
+
+
+class _DiagnosticsBuilder:
+    def __init__(
+        self,
+        *,
+        query: str,
+        mode: str,
+        requested_top_k: int | None,
+        effective_top_k: int,
+        knowledge_base_ids: list[str],
+        knowledge_ids: list[str],
+        enable_rerank: bool,
+    ) -> None:
+        self.payload = {
+            "query": query,
+            "mode": mode,
+            "requested_top_k": requested_top_k,
+            "effective_top_k": effective_top_k,
+            "knowledge_base_ids": knowledge_base_ids,
+            "knowledge_ids": knowledge_ids,
+            "enable_rerank": enable_rerank,
+            "retrievers": [],
+            "stages": [],
+        }
+        self._stage_index: dict[str, dict] = {}
+
+    def add_retriever(
+        self,
+        *,
+        knowledge_base_id: str,
+        knowledge_base_name: str,
+        engine: str,
+        vector_engine: str | None = None,
+        keyword_engine: str | None = None,
+        mode: str,
+        status: str,
+        hit_count: int,
+        duration_ms: int,
+        error_message: str | None = None,
+    ) -> None:
+        item = {
+            "knowledge_base_id": knowledge_base_id,
+            "knowledge_base_name": knowledge_base_name,
+            "engine": engine,
+            "vector_engine": vector_engine,
+            "keyword_engine": keyword_engine,
+            "mode": mode,
+            "status": status,
+            "hit_count": hit_count,
+            "duration_ms": duration_ms,
+        }
+        if error_message:
+            item["error_message"] = error_message
+        self.payload["retrievers"].append(item)
+
+    def run_stage(
+        self,
+        name: str,
+        status: str,
+        *,
+        input_summary: dict,
+        action,
+        output_summary,
+        aggregate_output_keys: tuple[str, ...] = (),
+    ):
+        started_at = time.perf_counter()
+        try:
+            result = action()
+        except Exception as exc:
+            self.add_stage(
+                name,
+                "failed",
+                duration_ms=_duration_ms(started_at),
+                input_summary=input_summary,
+                output_summary={},
+                error_message=str(exc),
+                aggregate_output_keys=aggregate_output_keys,
+            )
+            raise
+        self.add_stage(
+            name,
+            status,
+            duration_ms=_duration_ms(started_at),
+            input_summary=input_summary,
+            output_summary=output_summary(result),
+            aggregate_output_keys=aggregate_output_keys,
+        )
+        return result
+
+    def add_stage(
+        self,
+        name: str,
+        status: str,
+        *,
+        input_summary: dict,
+        output_summary: dict,
+        duration_ms: int = 0,
+        error_message: str | None = None,
+        aggregate_output_keys: tuple[str, ...] = (),
+    ) -> None:
+        existing = self._stage_index.get(name)
+        if existing is None:
+            stage = {
+                "name": name,
+                "status": status,
+                "duration_ms": duration_ms,
+                "input": input_summary,
+                "output": output_summary,
+                "error_message": error_message,
+            }
+            self.payload["stages"].append(stage)
+            self._stage_index[name] = stage
+            return
+        existing["duration_ms"] = int(existing.get("duration_ms") or 0) + duration_ms
+        existing["status"] = _merge_stage_status(existing.get("status"), status)
+        existing["input"] = _merge_summary(existing.get("input") or {}, input_summary)
+        existing["output"] = _merge_summary(
+            existing.get("output") or {},
+            output_summary,
+            aggregate_keys=aggregate_output_keys,
+        )
+        if error_message:
+            existing["error_message"] = error_message
+
+    def finish(self, *, final_hit_count: int) -> None:
+        self.payload["hit_count"] = final_hit_count
+
+    def to_dict(self) -> dict:
+        return self.payload
+
+
+def _duration_ms(started_at: float) -> int:
+    return max(0, int((time.perf_counter() - started_at) * 1000))
+
+
+def _merge_stage_status(current: str | None, new: str) -> str:
+    if current == "failed" or new == "failed":
+        return "failed"
+    if current == "done" or new == "done":
+        return "done"
+    return new or current or "skipped"
+
+
+def _merge_summary(existing: dict, new: dict, *, aggregate_keys: tuple[str, ...] = ()) -> dict:
+    merged = dict(existing)
+    for key, value in new.items():
+        if key in aggregate_keys and isinstance(value, int | float):
+            merged[key] = merged.get(key, 0) + value
+        elif key in merged and merged[key] != value:
+            values = merged[key] if isinstance(merged[key], list) else [merged[key]]
+            if value not in values:
+                values.append(value)
+            merged[key] = values
+        else:
+            merged[key] = value
+    return merged
+
+
 def _validate_mode_allowed(mode: str, strategy: dict) -> None:
     if mode == "vector_only" and not strategy["enable_vector"]:
         raise ValueError("当前知识库未启用向量检索")
@@ -176,6 +681,34 @@ def _validate_mode_allowed(mode: str, strategy: dict) -> None:
         raise ValueError("当前知识库未启用关键词检索")
     if mode == "hybrid" and not (strategy["enable_vector"] and strategy["enable_keyword"]):
         raise ValueError("混合检索需要同时启用向量检索和关键词检索")
+
+
+class CompositeKnowledgeRetriever:
+    engine = "qdrant+postgres"
+    vector_engine = "qdrant"
+    keyword_engine = "postgres"
+
+    def __init__(self, service: KnowledgeSearchService) -> None:
+        self.service = service
+
+    def search_kb(
+        self,
+        query: str,
+        *,
+        kb,
+        config: RetrievalConfigSchema,
+        mode: str,
+        diagnostics: _DiagnosticsBuilder,
+        knowledge_ids: list[str] | None,
+    ) -> list[RetrievalHit]:
+        return self.service._search_kb_with_diagnostics(
+            query,
+            kb=kb,
+            config=config,
+            mode=mode,
+            diagnostics=diagnostics,
+            knowledge_ids=knowledge_ids,
+        )
 
 
 class _ThresholdRetriever:

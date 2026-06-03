@@ -15,6 +15,18 @@ class FakeStreamingChatModel:
         yield "式"
 
 
+class RewriteFailingHistoryChatModel:
+    def __init__(self) -> None:
+        self.last_stream_messages = []
+
+    def complete(self, messages, temperature=0.2):
+        raise RuntimeError("rewrite failed")
+
+    def stream_complete(self, messages, temperature=0.2):
+        self.last_stream_messages = messages
+        yield "历史回答"
+
+
 def create_kb(client: TestClient) -> str:
     chat_id, embedding_id = create_bound_models(client)
     response = client.post(
@@ -77,7 +89,79 @@ def test_quick_answer_stream_creates_session_messages_and_final_sources(client, 
     assert messages[0].content == "流式回答是什么？"
     assert messages[1].status == "completed"
     assert messages[1].sources_json[0]["chunk_id"] == "chunk-stream"
+    assert messages[1].prompt_context_summary
+    assert "流式文档" in messages[1].prompt_context_summary
+    assert messages[1].rendered_context
     assert "sk-test" not in json.dumps(messages[1].model_config_json, ensure_ascii=False)
+
+
+def test_quick_answer_stream_saves_attachment_metadata_and_truncation(client, fake_vector_store, db_session):
+    kb_id = create_kb(client)
+    fake_vector_store.results = []
+    attachment_text = "\n".join(f"第 {index} 行附件内容" for index in range(260))
+
+    response = client.post(
+        "/api/v1/quick-answer/stream",
+        json={
+            "knowledge_base_id": kb_id,
+            "query": "附件中有哪些内容？",
+            "mode": "vector_only",
+            "attachments": [
+                {
+                    "filename": "meeting.md",
+                    "mime_type": "text/markdown",
+                    "content": attachment_text,
+                }
+            ],
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    final = dict(parse_sse_events(response.text))["final"]
+    trace = final["retrieval_trace"]
+    assert trace["attachments_used"] is True
+    assert trace["attachments_truncated"] is True
+    assert trace["attachments"][0]["filename"] == "meeting.md"
+    assert trace["attachments"][0]["truncated"] is True
+    assert final["sources"] == []
+    assert "第 0 行附件内容" in final["answer"]
+    assert "<attachments>" in final["assistant_message"]["rendered_context"]
+
+    messages = db_session.query(ChatMessage).order_by(ChatMessage.created_at).all()
+    assert messages[0].model_config_json["attachments"][0]["filename"] == "meeting.md"
+    assert messages[0].model_config_json["attachments"][0]["truncated"] is True
+    assert messages[1].retrieval_trace_json["attachments_used"] is True
+    assert messages[1].sources_json == []
+    assert fake_vector_store.points == []
+
+
+def test_quick_answer_stream_trace_marks_inapplicable_retrieval_stages_skipped(client, fake_vector_store):
+    kb_id = create_kb(client)
+    fake_vector_store.results = [
+        {
+            "chunk_id": "chunk-stream-vector",
+            "knowledge_id": "doc-stream-vector",
+            "knowledge_base_id": kb_id,
+            "content": "流式向量检索返回来源。",
+            "title": "流式向量文档",
+            "score": 0.93,
+        }
+    ]
+
+    response = client.post(
+        "/api/v1/quick-answer/stream",
+        json={"knowledge_base_id": kb_id, "query": "流式向量检索是什么？", "mode": "vector_only", "top_k": 5},
+    )
+
+    assert response.status_code == 200, response.text
+    trace = dict(parse_sse_events(response.text))["final"]["retrieval_trace"]
+    stages = {stage["name"]: stage for stage in trace["stages"]}
+    assert stages["vector"]["status"] == "done"
+    assert stages["keyword"]["status"] == "skipped"
+    assert stages["rrf"]["status"] == "skipped"
+    assert stages["parent_expand"]["status"] == "done"
+    assert stages["deduplicate"]["status"] == "done"
+    assert stages["rerank"]["status"] == "skipped"
 
 
 def test_quick_answer_stream_missing_model_config_returns_chinese_error(client, fake_vector_store, db_session):
@@ -151,6 +235,48 @@ def test_quick_answer_stream_query_rewrite_trace_enabled_with_history(client, fa
     assert trace["rewrite_skipped"] is False
     assert trace["rewrite_failed"] is False
     assert trace["rewritten_query"] == "fake answer"
+
+
+def test_quick_answer_stream_merges_recent_history_when_rewrite_fails(client, fake_vector_store):
+    kb_id = create_kb(client)
+    model = RewriteFailingHistoryChatModel()
+    client.app.state.chat_model = model
+    fake_vector_store.results = [
+        {
+            "chunk_id": "chunk-history",
+            "knowledge_id": "doc-history",
+            "knowledge_base_id": kb_id,
+            "content": "知友支持多轮追问。",
+            "score": 0.91,
+        }
+    ]
+    first = client.post(
+        "/api/v1/quick-answer/stream",
+        json={"knowledge_base_id": kb_id, "query": "第一轮问题是什么？", "mode": "vector_only"},
+    )
+    session_id = dict(parse_sse_events(first.text))["session"]["id"]
+
+    second = client.post(
+        "/api/v1/quick-answer/stream",
+        json={
+            "session_id": session_id,
+            "knowledge_base_id": kb_id,
+            "query": "那它怎么继续？",
+            "mode": "vector_only",
+            "enable_query_rewrite": True,
+        },
+    )
+
+    assert second.status_code == 200, second.text
+    final = dict(parse_sse_events(second.text))["final"]
+    trace = final["retrieval_trace"]
+    prompt = model.last_stream_messages[-1]["content"]
+    assert trace["rewrite_failed"] is True
+    assert trace["history_used"] is True
+    assert trace["history_message_count"] == 2
+    assert "Conversation history:" in prompt
+    assert "第一轮问题是什么？" in prompt
+    assert "历史回答" in prompt
 
 
 def test_quick_answer_stream_uses_streaming_chat_client(client, fake_vector_store):

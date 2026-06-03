@@ -15,3 +15,4 @@ class KnowledgeSearchRequest(BaseModel):
 
 class KnowledgeSearchResponse(BaseModel):
     hits: list[SourceRead]
+    diagnostics: dict | None = None

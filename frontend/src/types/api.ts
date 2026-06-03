@@ -30,6 +30,24 @@ export interface ModelPayload {
   status?: string;
 }
 
+export interface ModelProviderCredentialField {
+  name: string;
+  label: string;
+  sensitive: boolean;
+  required: boolean;
+}
+
+export interface ModelProviderPreset {
+  value: string;
+  label: string;
+  description: string;
+  model_types: string[];
+  default_urls: Record<string, string>;
+  default_models: Record<string, string>;
+  embedding_dimensions: Record<string, number>;
+  credential_fields: ModelProviderCredentialField[];
+}
+
 export interface ModelTestPayload extends ModelPayload {
   model_id?: string;
 }
@@ -98,14 +116,58 @@ export interface ParserEngine {
   description?: string | null;
   status?: string;
   error_message?: string | null;
+  fix_suggestion?: string | null;
 }
 
 export interface RuntimeStatus {
   system: Record<string, unknown>;
   database: Record<string, unknown>;
   storage: Record<string, unknown>;
+  storage_providers?: RuntimeProviderStatus[];
   vector_store: Record<string, unknown>;
+  vector_stores?: RuntimeVectorStoreStatus;
+  model_configs?: RuntimeModelConfigStatus;
   parser_engines: ParserEngine[];
+  fix_suggestions?: string[];
+}
+
+export interface RuntimeProviderStatus {
+  provider: string;
+  label?: string;
+  status: string;
+  available?: boolean;
+  description?: string | null;
+  path?: string | null;
+  fix_suggestion?: string | null;
+}
+
+export interface RuntimeVectorStoreStatus {
+  registered_count: number;
+  items: Array<Record<string, unknown>>;
+  default?: Record<string, unknown> | null;
+  fix_suggestion?: string | null;
+}
+
+export interface RuntimeModelConfigStatus {
+  summary: {
+    total: number;
+    active: number;
+    api_key_configured: number;
+  };
+  required_types: Record<
+    string,
+    {
+      status: string;
+      count: number;
+      active_model_id?: string | null;
+      provider?: string | null;
+      model_name?: string | null;
+      api_key_configured: boolean;
+      api_key_last4?: string | null;
+      fix_suggestion?: string | null;
+    }
+  >;
+  items: Array<Record<string, unknown>>;
 }
 
 export interface KnowledgeBaseRead {
@@ -270,6 +332,24 @@ export interface VectorStorePayload {
   is_default?: boolean;
 }
 
+export interface VectorStoreFieldSpec {
+  name: string;
+  label: string;
+  field_type: string;
+  required: boolean;
+  sensitive: boolean;
+  default?: unknown;
+}
+
+export interface VectorStoreTypeRead {
+  type: string;
+  label: string;
+  status: "available" | "planned" | "unavailable" | string;
+  description: string;
+  connection_fields: VectorStoreFieldSpec[];
+  index_fields: VectorStoreFieldSpec[];
+}
+
 export interface FAQEntryRead {
   id: string;
   tenant_id: number;
@@ -281,11 +361,39 @@ export interface FAQEntryRead {
   metadata?: Record<string, unknown> | null;
   tag_id?: string | null;
   enabled: boolean;
+  is_recommended: boolean;
   created_at: string;
   updated_at: string;
 }
 
 export type FAQExportFormat = "csv" | "xlsx";
+
+export interface FAQFieldUpdate {
+  enabled?: boolean;
+  is_enabled?: boolean;
+  recommended?: boolean;
+  is_recommended?: boolean;
+  tag_id?: string | null;
+}
+
+export interface FAQFieldBatchUpdateRequest {
+  by_id?: Record<string, FAQFieldUpdate>;
+  by_tag?: Record<string, FAQFieldUpdate>;
+  exclude_ids?: string[];
+}
+
+export interface FAQFieldBatchFailure {
+  faq_id: string;
+  reason: string;
+}
+
+export interface FAQFieldBatchUpdateResponse {
+  requested: number;
+  succeeded: number;
+  failed: number;
+  failures: FAQFieldBatchFailure[];
+  error_summary?: string | null;
+}
 
 export interface FAQImportFailure {
   row: number;
@@ -294,11 +402,33 @@ export interface FAQImportFailure {
 }
 
 export interface FAQImportResult {
+  task_id?: string;
+  knowledge_base_id?: string;
+  status?: string;
+  progress?: number;
   total: number;
+  processed?: number;
+  succeeded?: number;
   imported: number;
   failed: number;
+  errors?: FAQImportFailure[];
   mode: "append" | "replace";
+  import_mode?: "append" | "replace" | string;
+  display_status?: "open" | "close" | string;
+  error_summary?: string | null;
+  processing_time_ms?: number;
+  imported_at?: string | null;
   failures: FAQImportFailure[];
+}
+
+export interface FAQImportProgress extends FAQImportResult {
+  task_id: string;
+  knowledge_base_id: string;
+  status: string;
+  progress: number;
+  processed: number;
+  succeeded: number;
+  display_status: "open" | "close" | string;
 }
 
 export interface ChunkRead {
@@ -307,6 +437,7 @@ export interface ChunkRead {
   knowledge_base_id: string;
   knowledge_id: string;
   content: string;
+  search_text?: string | null;
   chunk_index: number;
   is_enabled: boolean;
   start_at: number;
@@ -320,6 +451,23 @@ export interface ChunkRead {
   metadata?: Record<string, unknown> | null;
   images?: unknown[] | null;
   created_at: string;
+}
+
+export interface GeneratedQuestion {
+  id: string;
+  question: string;
+}
+
+export interface ChunkUpdatePayload {
+  content?: string;
+  search_text?: string | null;
+  metadata?: Record<string, unknown> | null;
+  is_enabled?: boolean;
+}
+
+export interface ChunkUpdateResponse {
+  chunk: ChunkRead;
+  requires_reindex: boolean;
 }
 
 export interface DocumentPreviewChunk {
@@ -391,6 +539,27 @@ export interface SourceRead {
   context_content?: string | null;
 }
 
+export interface RetrievalTraceStage {
+  name: string;
+  status: string;
+  duration_ms?: number | null;
+  input?: Record<string, unknown> | null;
+  output?: Record<string, unknown> | null;
+  error_message?: string | null;
+}
+
+export interface RetrievalDiagnostics {
+  query?: string;
+  mode?: string | null;
+  requested_top_k?: number | null;
+  effective_top_k?: number | null;
+  knowledge_base_ids?: string[];
+  knowledge_ids?: string[];
+  enable_rerank?: boolean;
+  hit_count?: number;
+  stages: RetrievalTraceStage[];
+}
+
 export interface ChatSettings {
   mode?: string | null;
   top_k?: number | null;
@@ -407,6 +576,14 @@ export interface MentionedItem {
   kb_type?: string | null;
 }
 
+export interface AttachmentInput {
+  filename: string;
+  content: string;
+  mime_type?: string | null;
+  size?: number | null;
+  truncated?: boolean;
+}
+
 export interface ChatMessageRead {
   id: string;
   tenant_id: number;
@@ -416,8 +593,11 @@ export interface ChatMessageRead {
   original_query?: string | null;
   rewritten_query?: string | null;
   mentioned_items?: MentionedItem[];
+  attachments?: AttachmentInput[];
   sources: SourceRead[];
-  retrieval_trace?: Record<string, unknown> | null;
+  retrieval_trace?: (Record<string, unknown> & { stages?: RetrievalTraceStage[]; diagnostics?: RetrievalDiagnostics }) | null;
+  rendered_context?: string | null;
+  prompt_context_summary?: string | null;
   model_config?: Record<string, unknown> | null;
   status: string;
   error_message?: string | null;
@@ -467,6 +647,33 @@ export interface ChatMessageListResponse {
   items: ChatMessageRead[];
 }
 
+export interface MessageSearchResultItem {
+  session_id: string;
+  session_title: string;
+  query_content: string;
+  answer_content: string;
+  answer_snippet: string;
+  score: number;
+  match_type: string;
+  created_at: string;
+  message_ids: string[];
+}
+
+export interface MessageSearchResponse {
+  items: MessageSearchResultItem[];
+  total: number;
+}
+
+export interface ChatHistoryStats {
+  enabled: boolean;
+  searchable: boolean;
+  session_count: number;
+  message_count: number;
+  last_message_at?: string | null;
+  indexed_message_count: number;
+  has_indexed_messages: boolean;
+}
+
 export interface RecommendedQuestionRead {
   question: string;
   source_type: string;
@@ -484,10 +691,12 @@ export interface RecommendedQuestionListResponse {
 export interface QuickAnswerResponse {
   answer: string;
   sources: SourceRead[];
+  retrieval_trace?: (Record<string, unknown> & { stages?: RetrievalTraceStage[]; diagnostics?: RetrievalDiagnostics }) | null;
 }
 
 export interface KnowledgeSearchResponse {
   hits: SourceRead[];
+  diagnostics?: RetrievalDiagnostics | null;
 }
 
 export interface FAQSearchTestResult extends SourceRead {
@@ -504,11 +713,49 @@ export interface PreviewChunk {
   content: string;
 }
 
+export interface ChunkerDocProfile {
+  total_chars: number;
+  total_lines: number;
+  avg_line_len: number;
+  std_line_len: number;
+  md_heading_counts: Record<string, number>;
+  md_heading_total: number;
+  numbered_section_count: number;
+  all_caps_short_line_count: number;
+  blank_paragraph_breaks: number;
+  form_feed_count: number;
+  visual_sep_count: number;
+  german_chapter_count: number;
+  english_chapter_count: number;
+  chinese_chapter_count: number;
+  repeated_footer_count: number;
+  has_tables: boolean;
+  has_code: boolean;
+  code_ratio: number;
+  detected_langs: string[];
+}
+
+export interface ChunkerProtectedBlocks {
+  formula: number;
+  image: number;
+  markdown_link: number;
+  table: number;
+  code: number;
+  total: number;
+  total_chars: number;
+}
+
 export interface PreviewChunkingResponse {
   selected_tier: string;
   tier_chain: string[];
   rejected: Record<string, unknown>[];
-  profile: Record<string, number>;
+  profile: ChunkerDocProfile;
+  protected_blocks: ChunkerProtectedBlocks;
+  token_limit_applied: boolean;
+  token_limit_reason: string;
+  requested_chunk_size: number;
+  effective_chunk_size: number;
+  fallback_tier?: string | null;
   chunks: PreviewChunk[];
   stats: {
     count: number;
@@ -516,6 +763,12 @@ export interface PreviewChunkingResponse {
     min_chars: number;
     max_chars: number;
     stddev_chars: number;
+    avg_tokens: number;
+    min_tokens: number;
+    max_tokens: number;
+    stddev_tokens: number;
+    token_limit?: number | null;
+    size_distribution: Record<string, number>;
     truncated_to?: number | null;
   };
 }

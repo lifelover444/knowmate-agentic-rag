@@ -62,6 +62,147 @@ def test_knowledge_search_supports_keyword_only_and_returns_method_scores(client
     assert hits[0]["keyword_score"] > 0
 
 
+def test_knowledge_search_returns_hybrid_retrieval_diagnostics(client, db_session, fake_vector_store):
+    kb_id = create_kb(client)
+    add_completed_document(db_session, kb_id)
+    fake_vector_store.results = [
+        {
+            "chunk_id": "chunk-keyword",
+            "knowledge_id": "doc-v03",
+            "knowledge_base_id": kb_id,
+            "content": "知友支持混合检索和来源展示",
+            "title": "检索文档",
+            "score": 0.88,
+        }
+    ]
+
+    response = client.post(
+        "/api/v1/knowledge-search",
+        json={"knowledge_base_id": kb_id, "query": "混合检索", "mode": "hybrid", "top_k": 5},
+    )
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    stages = {stage["name"]: stage for stage in payload["diagnostics"]["stages"]}
+    assert stages["vector"]["status"] == "done"
+    assert stages["vector"]["output"]["hit_count"] == 1
+    assert stages["keyword"]["status"] == "done"
+    assert stages["keyword"]["output"]["hit_count"] == 1
+    assert stages["rrf"]["status"] == "done"
+    assert stages["parent_expand"]["status"] == "done"
+    assert stages["deduplicate"]["status"] == "done"
+    assert stages["rerank"]["status"] == "skipped"
+    assert stages["rrf"]["output"]["output_count"] == 1
+    retriever = payload["diagnostics"]["retrievers"][0]
+    assert retriever["knowledge_base_id"] == kb_id
+    assert retriever["engine"] == "qdrant+postgres"
+    assert retriever["vector_engine"] == "qdrant"
+    assert retriever["keyword_engine"] == "postgres"
+    assert retriever["mode"] == "hybrid"
+    assert retriever["hit_count"] == 1
+
+
+def test_knowledge_search_faq_merge_boosts_high_confidence_faq_and_traces_stage(
+    client,
+    fake_vector_store,
+):
+    kb_id = create_kb(client)
+    fake_vector_store.results = [
+        {
+            "chunk_id": "chunk-doc-policy",
+            "knowledge_id": "doc-policy",
+            "knowledge_base_id": kb_id,
+            "content": "普通文档说明退款流程需要三个工作日。",
+            "title": "退款文档",
+            "chunk_type": "text",
+            "score": 0.9,
+            "metadata": {},
+        },
+        {
+            "chunk_id": "chunk-faq-refund",
+            "knowledge_id": "faq-refund",
+            "knowledge_base_id": kb_id,
+            "content": "怎么申请退款？\n在订单页面提交退款申请。",
+            "title": "怎么申请退款？",
+            "chunk_type": "faq",
+            "score": 0.82,
+            "metadata": {
+                "source_type": "faq",
+                "standard_question": "怎么申请退款？",
+                "matched_question": "退款怎么操作？",
+                "question_role": "similar",
+                "index_mode": "question_answer",
+            },
+        },
+    ]
+
+    response = client.post(
+        "/api/v1/knowledge-search",
+        json={"knowledge_base_id": kb_id, "query": "退款怎么操作？", "mode": "vector_only", "top_k": 2},
+    )
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert [hit["chunk_id"] for hit in payload["hits"]] == ["chunk-faq-refund", "chunk-doc-policy"]
+    faq = payload["hits"][0]
+    assert faq["score"] > 0.9
+    assert faq["metadata"]["matched_question"] == "退款怎么操作？"
+    assert faq["metadata"]["standard_question"] == "怎么申请退款？"
+    assert faq["metadata"]["question_role"] == "similar"
+    stages = {stage["name"]: stage for stage in payload["diagnostics"]["stages"]}
+    assert stages["faq_merge"]["status"] == "done"
+    assert stages["faq_merge"]["input"]["candidate_count"] == 2
+    assert stages["faq_merge"]["output"]["output_count"] == 2
+    assert stages["faq_merge"]["output"]["boost_count"] == 1
+    assert stages["faq_merge"]["output"]["max_boost_factor"] > 1
+
+
+def test_knowledge_search_faq_merge_does_not_promote_low_confidence_faq(
+    client,
+    fake_vector_store,
+):
+    kb_id = create_kb(client)
+    fake_vector_store.results = [
+        {
+            "chunk_id": "chunk-doc-low",
+            "knowledge_id": "doc-low",
+            "knowledge_base_id": kb_id,
+            "content": "文档命中内容。",
+            "title": "文档",
+            "chunk_type": "text",
+            "score": 0.45,
+            "metadata": {},
+        },
+        {
+            "chunk_id": "chunk-faq-low",
+            "knowledge_id": "faq-low",
+            "knowledge_base_id": kb_id,
+            "content": "低置信 FAQ。",
+            "title": "FAQ",
+            "chunk_type": "faq",
+            "score": 0.3,
+            "metadata": {
+                "source_type": "faq",
+                "standard_question": "标准问",
+                "matched_question": "相似问",
+                "question_role": "similar",
+                "index_mode": "question_only",
+            },
+        },
+    ]
+
+    response = client.post(
+        "/api/v1/knowledge-search",
+        json={"knowledge_base_id": kb_id, "query": "低置信问题", "mode": "vector_only", "top_k": 2},
+    )
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert [hit["chunk_id"] for hit in payload["hits"]] == ["chunk-doc-low", "chunk-faq-low"]
+    stages = {stage["name"]: stage for stage in payload["diagnostics"]["stages"]}
+    assert stages["faq_merge"]["output"]["boost_count"] == 0
+
+
 def test_quick_answer_uses_hybrid_pipeline_and_keeps_source_metadata(client, db_session, fake_vector_store):
     kb_id = create_kb(client)
     add_completed_document(db_session, kb_id)

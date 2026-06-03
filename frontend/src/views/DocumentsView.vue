@@ -5,7 +5,7 @@ import { useRoute, useRouter } from "vue-router";
 import DocumentUpload from "../components/DocumentUpload.vue";
 import { useKnowledgeBaseStore } from "../stores/knowledgeBase";
 import { formatApiError } from "../utils/api";
-import type { DocumentRead } from "../types/api";
+import type { ChunkRead, DocumentRead, GeneratedQuestion } from "../types/api";
 
 type UploadQueueStatus = "pending" | "uploading" | "queued" | "processing" | "completed" | "failed";
 
@@ -23,6 +23,9 @@ const route = useRoute();
 const router = useRouter();
 const kbStore = useKnowledgeBaseStore();
 const drawerVisible = ref(false);
+const chunkDetailVisible = ref(false);
+const chunkDetailSaving = ref(false);
+const generatedQuestionSaving = ref(false);
 const timelineVisible = ref(false);
 const timelineLoading = ref(false);
 const importVisible = ref(false);
@@ -40,6 +43,13 @@ const uploadQueueRunning = ref(false);
 const moveDocumentVisible = ref(false);
 const targetKnowledgeBaseId = ref("");
 const movingDocumentIds = ref<string[]>([]);
+const chunkForm = ref({
+  content: "",
+  search_text: "",
+  metadataText: "{}",
+  is_enabled: true,
+  generatedQuestion: "",
+});
 
 function statusColor(status: string) {
   return (
@@ -107,6 +117,24 @@ const moveTargetKnowledgeBases = computed(() => {
     if (!current || kb.id === current.id) return false;
     return kb.kb_type === current.kb_type && kb.embedding_model_id === current.embedding_model_id;
   });
+});
+
+const currentChunkGeneratedQuestions = computed<GeneratedQuestion[]>(() => {
+  const raw = kbStore.currentChunkDetail?.metadata?.generated_questions;
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .map((item) => {
+      if (typeof item === "string") return { id: item, question: item };
+      if (item && typeof item === "object") {
+        const record = item as Record<string, unknown>;
+        return {
+          id: String(record.id || record.question || ""),
+          question: String(record.question || record.content || ""),
+        };
+      }
+      return { id: "", question: "" };
+    })
+    .filter((item) => item.id && item.question);
 });
 
 function timelineStageText(name: string) {
@@ -246,6 +274,93 @@ async function openProcessingTimeline(document: DocumentRead) {
 async function jumpToPreviewChunk(chunkId: string) {
   await nextTick();
   document.getElementById(`preview-chunk-${chunkId}`)?.scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+function fillChunkForm(chunk: ChunkRead) {
+  chunkForm.value.content = chunk.content || "";
+  chunkForm.value.search_text = chunk.search_text || "";
+  chunkForm.value.metadataText = JSON.stringify(chunk.metadata || {}, null, 2);
+  chunkForm.value.is_enabled = chunk.is_enabled;
+  chunkForm.value.generatedQuestion = "";
+}
+
+async function openChunkDetail(chunkId: string) {
+  try {
+    const chunk = await kbStore.loadChunkById(chunkId);
+    fillChunkForm(chunk);
+    chunkDetailVisible.value = true;
+  } catch (error) {
+    Message.error(formatApiError(error instanceof Error ? error.message : error));
+  }
+}
+
+function chunkMetadataPayload() {
+  try {
+    return JSON.parse(chunkForm.value.metadataText || "{}");
+  } catch {
+    throw new Error("metadata 必须是合法 JSON");
+  }
+}
+
+async function submitChunkUpdate() {
+  const chunk = kbStore.currentChunkDetail;
+  if (!chunk) return;
+  chunkDetailSaving.value = true;
+  try {
+    const result = await kbStore.updateChunk(chunk.knowledge_id, chunk.id, {
+      content: chunkForm.value.content,
+      search_text: chunkForm.value.search_text || null,
+      metadata: chunkMetadataPayload(),
+      is_enabled: chunkForm.value.is_enabled,
+    });
+    fillChunkForm(result.chunk);
+    if (activeDocument.value) {
+      await Promise.all([
+        kbStore.loadDocumentPreview(activeDocument.value.id),
+        kbStore.loadChunks(activeDocument.value.id),
+      ]);
+    }
+    if (result.requires_reindex) {
+      Message.warning("内容变化后需要重建 embedding");
+    } else {
+      Message.success("Chunk 已保存");
+    }
+  } catch (error) {
+    Message.error(formatApiError(error instanceof Error ? error.message : error));
+  } finally {
+    chunkDetailSaving.value = false;
+  }
+}
+
+async function addGeneratedQuestion() {
+  const chunk = kbStore.currentChunkDetail;
+  const question = chunkForm.value.generatedQuestion.trim();
+  if (!chunk || !question) {
+    Message.warning("请输入生成问题");
+    return;
+  }
+  generatedQuestionSaving.value = true;
+  try {
+    const updated = await kbStore.addGeneratedQuestion(chunk.id, question);
+    fillChunkForm(updated);
+    Message.success("新增生成问题成功");
+  } catch (error) {
+    Message.error(formatApiError(error instanceof Error ? error.message : error));
+  } finally {
+    generatedQuestionSaving.value = false;
+  }
+}
+
+async function deleteGeneratedQuestion(questionId: string) {
+  const chunk = kbStore.currentChunkDetail;
+  if (!chunk) return;
+  try {
+    const updated = await kbStore.deleteGeneratedQuestion(chunk.id, questionId);
+    fillChunkForm(updated);
+    Message.success("删除生成问题成功");
+  } catch (error) {
+    Message.error(formatApiError(error instanceof Error ? error.message : error));
+  }
 }
 
 async function reprocess(document: DocumentRead) {
@@ -763,6 +878,7 @@ onMounted(() => {
             <header>
               <strong>#{{ chunk.chunk_index }}</strong>
               <a-tag color="green">{{ chunk.chunk_type }}</a-tag>
+              <a-button size="mini" @click="openChunkDetail(chunk.id)">Chunk 详情</a-button>
             </header>
             <small v-if="chunk.context_header">{{ chunk.context_header }}</small>
             <p>{{ chunk.content_preview }}</p>
@@ -771,6 +887,65 @@ onMounted(() => {
         </section>
       </div>
       <a-empty v-else description="暂无预览" />
+    </a-drawer>
+
+    <a-drawer
+      v-model:visible="chunkDetailVisible"
+      :width="680"
+      :title="kbStore.currentChunkDetail ? `Chunk #${kbStore.currentChunkDetail.chunk_index}` : 'Chunk 详情'"
+      data-testid="chunk-detail-drawer"
+    >
+      <div v-if="kbStore.currentChunkDetail" class="modal-form">
+        <a-alert
+          type="warning"
+          content="内容变化后需要重建 embedding；保存会立即更新 chunk、关键词检索文本和启停状态。"
+        />
+        <div class="table-stack">
+          <span>Chunk ID：{{ kbStore.currentChunkDetail.id }}</span>
+          <span>Document ID：{{ kbStore.currentChunkDetail.knowledge_id }}</span>
+        </div>
+        <a-form-item label="启用 chunk">
+          <a-switch v-model="chunkForm.is_enabled" />
+        </a-form-item>
+        <a-form-item label="内容">
+          <a-textarea v-model="chunkForm.content" :auto-size="{ minRows: 6, maxRows: 12 }" />
+        </a-form-item>
+        <a-form-item label="search_text">
+          <a-textarea v-model="chunkForm.search_text" :auto-size="{ minRows: 4, maxRows: 8 }" />
+        </a-form-item>
+        <a-form-item label="metadata">
+          <a-textarea v-model="chunkForm.metadataText" :auto-size="{ minRows: 4, maxRows: 8 }" />
+        </a-form-item>
+        <a-button type="primary" :loading="chunkDetailSaving" @click="submitChunkUpdate">保存 chunk</a-button>
+
+        <section class="chunk-question-panel">
+          <div class="section-heading">
+            <div>
+              <h3>生成问题</h3>
+              <p>这些问题会写入 chunk metadata，并进入关键词检索文本。</p>
+            </div>
+          </div>
+          <div class="form-grid form-grid--compact">
+            <a-form-item label="问题">
+              <a-input v-model="chunkForm.generatedQuestion" placeholder="输入一个用户可能会问的问题" />
+            </a-form-item>
+            <a-button :loading="generatedQuestionSaving" @click="addGeneratedQuestion">新增生成问题</a-button>
+          </div>
+          <div class="task-list">
+            <article v-for="question in currentChunkGeneratedQuestions" :key="question.id" class="task-list-item">
+              <header>
+                <strong>{{ question.question }}</strong>
+                <a-popconfirm content="确认删除这个生成问题？" @ok="deleteGeneratedQuestion(question.id)">
+                  <a-button size="mini" status="danger">删除生成问题</a-button>
+                </a-popconfirm>
+              </header>
+              <small>{{ question.id }}</small>
+            </article>
+          </div>
+          <a-empty v-if="!currentChunkGeneratedQuestions.length" description="暂无生成问题" />
+        </section>
+      </div>
+      <a-empty v-else description="未选择 chunk" />
     </a-drawer>
 
     <a-drawer

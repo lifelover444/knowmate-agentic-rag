@@ -13,6 +13,8 @@ from app.schemas.models import (
     ModelCreate,
     ModelCredentialPayload,
     ModelCredentialsRead,
+    ModelProviderCredentialField,
+    ModelProviderPreset,
     ModelRead,
     ModelTestPayload,
     ModelUpdate,
@@ -20,6 +22,54 @@ from app.schemas.models import (
 
 MODEL_CONFIG_REQUIRED_MESSAGE = "请先配置并测试模型"
 MODEL_NOT_AVAILABLE_MESSAGE = "模型不存在或不可用"
+
+PROVIDER_PRESETS = [
+    ModelProviderPreset(
+        value="qwen",
+        label="Qwen / DashScope",
+        description="阿里云百炼 OpenAI-compatible chat、embedding 和 rerank。",
+        model_types=["KnowledgeQA", "Embedding", "Rerank"],
+        default_urls={
+            "KnowledgeQA": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+            "Embedding": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+            "Rerank": "https://dashscope.aliyuncs.com/compatible-api/v1/reranks",
+        },
+        default_models={
+            "KnowledgeQA": "qwen-plus",
+            "Embedding": "text-embedding-v4",
+            "Rerank": "qwen3-rerank",
+        },
+        embedding_dimensions={"Embedding": 1024},
+        credential_fields=[ModelProviderCredentialField(name="api_key", label="API Key")],
+    ),
+    ModelProviderPreset(
+        value="deepseek",
+        label="DeepSeek",
+        description="DeepSeek OpenAI-compatible chat provider。",
+        model_types=["KnowledgeQA"],
+        default_urls={"KnowledgeQA": "https://api.deepseek.com/v1"},
+        default_models={"KnowledgeQA": "deepseek-chat"},
+        credential_fields=[ModelProviderCredentialField(name="api_key", label="API Key")],
+    ),
+    ModelProviderPreset(
+        value="openai-compatible",
+        label="OpenAI 兼容",
+        description="任意 OpenAI-compatible 服务，需手动填写模型名和 Base URL。",
+        model_types=["KnowledgeQA", "Embedding", "Rerank"],
+        default_urls={
+            "KnowledgeQA": "https://api.openai.com/v1",
+            "Embedding": "https://api.openai.com/v1",
+            "Rerank": "",
+        },
+        default_models={
+            "KnowledgeQA": "gpt-4o-mini",
+            "Embedding": "text-embedding-3-small",
+            "Rerank": "",
+        },
+        embedding_dimensions={"Embedding": 1536},
+        credential_fields=[ModelProviderCredentialField(name="api_key", label="API Key")],
+    ),
+]
 
 
 @dataclass(frozen=True)
@@ -45,6 +95,12 @@ class ModelConfigService:
 
     def list_models(self, model_type: str | None = None) -> list[ModelRead]:
         return [self.to_model_read(item) for item in self.repo.list(self.settings.default_tenant_id, model_type)]
+
+    def list_provider_presets(self, model_type: str | None = None) -> list[ModelProviderPreset]:
+        normalized_type = _normalize_model_type(model_type)
+        if not normalized_type:
+            return PROVIDER_PRESETS
+        return [preset for preset in PROVIDER_PRESETS if normalized_type in preset.model_types]
 
     def get_model_read(self, model_id: str) -> ModelRead:
         model = self._get_model(model_id)
@@ -330,3 +386,16 @@ class ModelConfigService:
         if model.status != "active":
             raise ValueError("模型已停用，无法测试")
         return self._runtime_config_from_model_payload(payload, self.decrypt_api_key(model))
+
+
+def _normalize_model_type(model_type: str | None) -> str | None:
+    if not model_type:
+        return None
+    aliases = {
+        "chat": "KnowledgeQA",
+        "qa": "KnowledgeQA",
+        "knowledgeqa": "KnowledgeQA",
+        "embedding": "Embedding",
+        "rerank": "Rerank",
+    }
+    return aliases.get(model_type.strip().lower(), model_type)

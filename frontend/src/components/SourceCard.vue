@@ -13,6 +13,15 @@ function metadataText(metadata?: Record<string, unknown> | null): string {
   if (!metadata || Object.keys(metadata).length === 0) return "";
   return JSON.stringify(metadata, null, 2);
 }
+
+function retrievalMethodText(value?: string | null): string {
+  const labels: Record<string, string> = {
+    vector: "向量",
+    keyword: "关键词",
+    hybrid: "混合",
+  };
+  return labels[value || ""] || value || "未知";
+}
 </script>
 
 <template>
@@ -23,7 +32,7 @@ function metadataText(metadata?: Record<string, unknown> | null): string {
         <small v-if="source.knowledge_base_name">真实来源：{{ source.knowledge_base_name }}</small>
         <small>{{ source.document_id }} / {{ source.chunk_id }}</small>
       </div>
-      <a-tag color="green">{{ source.retrieval_method || "unknown" }}</a-tag>
+      <a-tag color="green">{{ retrievalMethodText(source.retrieval_method) }}</a-tag>
     </header>
     <div class="source-card__scores">
       <span>score {{ score(source.score) }}</span>

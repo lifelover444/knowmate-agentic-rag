@@ -26,7 +26,7 @@ def knowledge_search(
     vector_store: VectorStoreDep,
 ):
     try:
-        hits = KnowledgeSearchService(db, settings, embedder, vector_store).search(
+        result = KnowledgeSearchService(db, settings, embedder, vector_store).search_with_diagnostics(
             knowledge_base_id=payload.knowledge_base_id,
             knowledge_base_ids=payload.knowledge_base_ids,
             knowledge_ids=payload.knowledge_ids,
@@ -39,7 +39,7 @@ def knowledge_search(
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except (RuntimeError, ValueError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return KnowledgeSearchResponse(hits=[_to_source(hit) for hit in hits])
+    return KnowledgeSearchResponse(hits=[_to_source(hit) for hit in result.hits], diagnostics=result.diagnostics)
 
 
 def _to_source(hit) -> SourceRead:

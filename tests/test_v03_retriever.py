@@ -1,3 +1,4 @@
+from app.integrations.opensearch_store import OpenSearchSparseStore
 from app.rag.retriever import (
     HybridRetriever,
     ParentChildExpander,
@@ -24,6 +25,16 @@ class FakeVectorRetriever(FakeKeywordRetriever):
 class FakeReranker:
     def rerank(self, *, query: str, documents: list[str], top_n: int):
         return [(1, 0.91), (0, 0.42)][:top_n]
+
+
+class FixedScoreReranker:
+    def __init__(self, scores):
+        self.scores = scores
+        self.calls = 0
+
+    def rerank(self, *, query: str, documents: list[str], top_n: int):
+        self.calls += 1
+        return self.scores[:top_n]
 
 
 class FakeChunkRepo:
@@ -100,6 +111,60 @@ def test_rerank_pipeline_cleans_passages_filters_and_maps_scores():
     assert result[0].rerank_score == 0.91
     assert "```" not in clean_rerank_passage(hits[0].content)
     assert "|" not in clean_rerank_passage(hits[1].content)
+
+
+def test_rerank_pipeline_degrades_high_threshold_before_returning_empty_results():
+    reranker = FixedScoreReranker([(0, 0.6), (1, 0.4)])
+    hits = [
+        RetrievalHit("first", "doc-1", "kb-1", "相关内容 A", 0.2),
+        RetrievalHit("second", "doc-2", "kb-1", "相关内容 B", 0.1),
+    ]
+
+    pipeline = RerankPipeline(reranker, threshold=0.8, top_k=2)
+    result = pipeline.apply("问题", hits)
+
+    assert [hit.chunk_id for hit in result] == ["first"]
+    assert reranker.calls == 2
+    assert pipeline.diagnostics["original_threshold"] == 0.8
+    assert pipeline.diagnostics["degraded_threshold"] == 0.56
+
+
+def test_rerank_pipeline_applies_mmr_to_reduce_redundant_chunks():
+    reranker = FixedScoreReranker([(0, 0.95), (1, 0.94), (2, 0.7)])
+    hits = [
+        RetrievalHit("first", "doc-1", "kb-1", "重复 内容 关键能力 平台 检索", 0.9),
+        RetrievalHit("duplicate", "doc-2", "kb-1", "重复 内容 关键能力 平台 检索", 0.88),
+        RetrievalHit("different", "doc-3", "kb-1", "完全不同 主题 运维 状态 追踪", 0.7),
+    ]
+
+    pipeline = RerankPipeline(reranker, threshold=0.2, top_k=2)
+    result = pipeline.apply("问题", hits)
+
+    assert [hit.chunk_id for hit in result] == ["first", "different"]
+    assert pipeline.diagnostics["mmr_input_count"] == 3
+    assert pipeline.diagnostics["mmr_output_count"] == 2
+
+
+def test_clean_rerank_passage_removes_markdown_links_tables_code_and_raw_urls():
+    content = """
+    # 标题
+    [产品文档](https://example.com/docs) 说明关键能力。
+    https://example.com/raw
+    ```python
+    print("noise")
+    ```
+    | a | b |
+    | - | - |
+    | c | d |
+    """
+
+    cleaned = clean_rerank_passage(content)
+
+    assert "产品文档" in cleaned
+    assert "https://example.com" not in cleaned
+    assert "```" not in cleaned
+    assert "|" not in cleaned
+    assert "print" not in cleaned
 
 
 def test_parent_child_expander_uses_parent_context_but_keeps_matched_child_identity():
@@ -183,3 +248,66 @@ def test_fake_vector_store_applies_score_threshold(fake_vector_store):
     )
 
     assert [hit["chunk_id"] for hit in hits] == ["high"]
+
+
+def test_opensearch_sparse_store_fake_indexes_searches_and_syncs_payload_state():
+    store = OpenSearchSparseStore(config={"fake": True, "index_name": "knowmate-test"})
+    store.test_connection()
+    store.upsert_chunks(
+        vectors=[[], []],
+        payloads=[
+            {
+                "chunk_id": "chunk-refund",
+                "knowledge_id": "doc-refund",
+                "knowledge_base_id": "kb-1",
+                "content": "退款政策支持七天无理由退款",
+                "search_text": "refund policy 七天 退款",
+                "title": "退款文档",
+                "is_enabled": True,
+                "metadata": {"section": "policy"},
+            },
+            {
+                "chunk_id": "chunk-shipping",
+                "knowledge_id": "doc-shipping",
+                "knowledge_base_id": "kb-1",
+                "content": "发货通常需要两个工作日",
+                "search_text": "shipping delivery 发货",
+                "title": "发货文档",
+                "is_enabled": True,
+            },
+        ],
+    )
+
+    hits = store.search_text(knowledge_base_id="kb-1", query="refund policy", limit=5)
+
+    assert [hit["chunk_id"] for hit in hits] == ["chunk-refund"]
+    assert hits[0]["score"] > 0
+    assert hits[0]["metadata"]["section"] == "policy"
+
+    store.set_enabled_for_chunk_ids(chunk_ids=["chunk-refund"], is_enabled=False)
+    assert store.search_text(knowledge_base_id="kb-1", query="refund policy", limit=5) == []
+
+    store.set_enabled_for_chunk_ids(chunk_ids=["chunk-refund"], is_enabled=True)
+    store.set_tag_for_knowledge_ids(knowledge_ids=["doc-refund"], tag_id="tag-policy")
+    store.set_payload_for_chunk_ids(chunk_ids=["chunk-refund"], payload={"metadata": {"section": "updated"}})
+    tagged = store.search_text(knowledge_base_id="kb-1", query="refund", limit=5)[0]
+    assert tagged["tag_id"] == "tag-policy"
+    assert tagged["metadata"]["section"] == "updated"
+
+    store.move_knowledge_to_kb(knowledge_id="doc-refund", target_kb_id="kb-2")
+    assert store.search_text(knowledge_base_id="kb-1", query="refund", limit=5) == []
+    assert store.search_text(knowledge_base_id="kb-2", query="refund", limit=5)[0]["chunk_id"] == "chunk-refund"
+
+    store.delete_by_knowledge_id("doc-refund")
+    assert store.search_text(knowledge_base_id="kb-2", query="refund", limit=5) == []
+
+
+def test_opensearch_sparse_store_requires_configuration_without_fake_client():
+    store = OpenSearchSparseStore(config={})
+
+    try:
+        store.test_connection()
+    except ValueError as exc:
+        assert "OpenSearch/Elasticsearch sparse 检索服务未配置" in str(exc)
+    else:
+        raise AssertionError("expected unconfigured OpenSearch sparse store to fail clearly")

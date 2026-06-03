@@ -22,6 +22,17 @@ function Test-RequiredCommand {
     }
 }
 
+function Invoke-CheckedNative {
+    param(
+        [string]$FilePath,
+        [string[]]$ArgumentList
+    )
+    & $FilePath @ArgumentList
+    if ($LASTEXITCODE -ne 0) {
+        throw "Command failed with exit code $LASTEXITCODE`: $FilePath $($ArgumentList -join ' ')"
+    }
+}
+
 function Stop-RecordedProcess {
     param([string]$Name)
     $PidFile = Join-Path $LogDir "$Name.pid"
@@ -98,11 +109,13 @@ Test-RequiredCommand "npm.cmd"
 if (-not $SkipDocker) {
     Test-RequiredCommand "docker"
     Write-Step "Starting PostgreSQL / Redis / Qdrant"
-    docker compose up -d postgres redis qdrant
+    # Equivalent command: docker compose up -d postgres redis qdrant
+    Invoke-CheckedNative -FilePath "docker" -ArgumentList @("compose", "up", "-d", "postgres", "redis", "qdrant")
 }
 
 Write-Step "Running database migrations"
-alembic upgrade head
+# Equivalent command: alembic upgrade head
+Invoke-CheckedNative -FilePath "alembic" -ArgumentList @("upgrade", "head")
 
 Write-Step "Starting FastAPI"
 # Equivalent command: uvicorn app.main:app --reload

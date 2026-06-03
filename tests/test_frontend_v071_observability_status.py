@@ -20,6 +20,13 @@ def test_frontend_loads_runtime_status_and_shows_stage_trace():
     assert "runtimeStatus" in app
     assert "parser_engine_status" in app
     assert "storage-provider-status" in app
+    assert "model-runtime-status" in app
+    assert "vector-store-runtime-status" in app
+    assert "fix_suggestions" in app
+    assert "修复建议" in app
+    assert "对象存储" in app
+    assert "MinerU" in app
+    assert "DocReader" in app
     assert "系统状态" in app
 
     assert "traceStages" in app

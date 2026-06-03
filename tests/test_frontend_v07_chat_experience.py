@@ -27,3 +27,19 @@ def test_frontend_exposes_chat_search_batch_delete_and_recommendations():
     assert "/chat-sessions/recommended-questions" in app
     assert "recommended-question-list" in app
     assert "推荐问题" in app
+
+
+def test_frontend_exposes_message_history_search_and_stats():
+    app = frontend_source()
+
+    assert "messageSearchQuery" in app
+    assert "messageSearchResults" in app
+    assert "chatHistoryStats" in app
+    assert "searchMessageHistory" in app
+    assert "/messages/search" in app
+    assert "/messages/chat-history-stats" in app
+    assert "历史问答搜索" in app
+    assert "搜索历史回答" in app
+    assert "暂无历史问答命中" in app
+    assert "可检索消息" in app
+    assert "answer_snippet" in app

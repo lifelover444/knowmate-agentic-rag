@@ -163,3 +163,21 @@ def test_rerank_model_test_uses_rerank_endpoint_not_embedding(model_client: Test
     payload = response.json()
     assert payload["rerank_ok"] is True
     assert payload["message"] == "重排模型连接测试通过"
+
+
+def test_model_provider_presets_are_stable_and_filterable(model_client: TestClient):
+    response = model_client.get("/api/v1/models/providers")
+
+    assert response.status_code == 200, response.text
+    providers = response.json()
+    qwen = next(item for item in providers if item["value"] == "qwen")
+    assert {"KnowledgeQA", "Embedding", "Rerank"} <= set(qwen["model_types"])
+    assert qwen["default_urls"]["KnowledgeQA"] == "https://dashscope.aliyuncs.com/compatible-mode/v1"
+    assert qwen["default_models"]["Embedding"] == "text-embedding-v4"
+    assert qwen["embedding_dimensions"]["Embedding"] == 1024
+    assert qwen["credential_fields"][0]["name"] == "api_key"
+    assert qwen["credential_fields"][0]["sensitive"] is True
+
+    embedding_response = model_client.get("/api/v1/models/providers?model_type=Embedding")
+    assert embedding_response.status_code == 200, embedding_response.text
+    assert all("Embedding" in item["model_types"] for item in embedding_response.json())

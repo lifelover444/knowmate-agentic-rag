@@ -43,6 +43,40 @@ class ChatSessionBatchDeleteResponse(BaseModel):
     failures: list[ChatSessionBatchDeleteFailure] = Field(default_factory=list)
 
 
+class MessageSearchRequest(BaseModel):
+    query: str = Field(min_length=1, max_length=1000)
+    mode: str = "keyword"
+    limit: int = Field(default=20, ge=1, le=100)
+    session_ids: list[str] = Field(default_factory=list)
+
+
+class MessageSearchResultItem(BaseModel):
+    session_id: str
+    session_title: str
+    query_content: str
+    answer_content: str
+    answer_snippet: str
+    score: float
+    match_type: str
+    created_at: datetime
+    message_ids: list[str] = Field(default_factory=list)
+
+
+class MessageSearchResponse(BaseModel):
+    items: list[MessageSearchResultItem]
+    total: int
+
+
+class ChatHistoryStats(BaseModel):
+    enabled: bool = True
+    searchable: bool
+    session_count: int
+    message_count: int
+    last_message_at: datetime | None = None
+    indexed_message_count: int = 0
+    has_indexed_messages: bool = False
+
+
 class RecommendedQuestionRead(BaseModel):
     question: str
     source_type: str
@@ -68,8 +102,11 @@ class ChatMessageRead(BaseModel):
     original_query: str | None = None
     rewritten_query: str | None = None
     mentioned_items: list[dict] = Field(default_factory=list)
+    attachments: list[dict] = Field(default_factory=list)
     sources: list[SourceRead] = Field(default_factory=list)
     retrieval_trace: dict | None = None
+    rendered_context: str | None = None
+    prompt_context_summary: str | None = None
     model_config_info: dict | None = Field(default=None, alias="model_config")
     status: str
     error_message: str | None = None

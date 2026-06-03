@@ -4,11 +4,16 @@ import { deleteRequest, downloadRequest, getJson, postForm, postJson, putJson } 
 import type {
   BatchDocumentResponse,
   ChunkRead,
+  ChunkUpdatePayload,
+  ChunkUpdateResponse,
   DocumentPreviewRead,
   DocumentRead,
   DocumentMoveResponse,
   FAQExportFormat,
   FAQEntryRead,
+  FAQFieldBatchUpdateRequest,
+  FAQFieldBatchUpdateResponse,
+  FAQImportProgress,
   FAQImportResult,
   FAQSearchTestResult,
   KnowledgeBasePayload,
@@ -28,10 +33,13 @@ export const useKnowledgeBaseStore = defineStore("knowledgeBase", () => {
   const chunks = ref<ChunkRead[]>([]);
   const currentDocument = ref<DocumentRead | null>(null);
   const currentDocumentPreview = ref<DocumentPreviewRead | null>(null);
+  const currentChunkDetail = ref<ChunkRead | null>(null);
   const currentProcessingTimeline = ref<ProcessingSpanTimeline | null>(null);
   const selectedDocumentIds = ref<string[]>([]);
+  const selectedFaqIds = ref<string[]>([]);
   const faqs = ref<FAQEntryRead[]>([]);
   const batchOperationResult = ref<BatchDocumentResponse | null>(null);
+  const faqBatchOperationResult = ref<FAQFieldBatchUpdateResponse | null>(null);
   const latestFaqImportResult = ref<FAQImportResult | null>(null);
   const faqSearchHits = ref<FAQSearchTestResult[]>([]);
   const tags = ref<KnowledgeTagRead[]>([]);
@@ -131,6 +139,16 @@ export const useKnowledgeBaseStore = defineStore("knowledgeBase", () => {
     return result;
   }
 
+  async function batchUpdateFaqFields(kbId: string, payload: FAQFieldBatchUpdateRequest) {
+    faqBatchOperationResult.value = await putJson<FAQFieldBatchUpdateResponse, FAQFieldBatchUpdateRequest>(
+      `/knowledge-bases/${kbId}/faqs/fields`,
+      payload,
+    );
+    await Promise.all([loadFaqs(kbId), loadTags(kbId)]);
+    selectedFaqIds.value = [];
+    return faqBatchOperationResult.value;
+  }
+
   async function uploadDocument(kbId: string, file: File) {
     uploading.value = true;
     try {
@@ -174,6 +192,36 @@ export const useKnowledgeBaseStore = defineStore("knowledgeBase", () => {
   async function loadChunks(documentId: string) {
     chunks.value = await getJson<ChunkRead[]>(`/documents/${documentId}/chunks`);
     return chunks.value;
+  }
+
+  async function loadChunkById(chunkId: string) {
+    currentChunkDetail.value = await getJson<ChunkRead>(`/chunks/by-id/${chunkId}`);
+    return currentChunkDetail.value;
+  }
+
+  async function updateChunk(knowledgeId: string, chunkId: string, payload: ChunkUpdatePayload) {
+    const result = await putJson<ChunkUpdateResponse, ChunkUpdatePayload>(`/chunks/${knowledgeId}/${chunkId}`, payload);
+    currentChunkDetail.value = result.chunk;
+    if (currentDocument.value?.id === knowledgeId) await loadChunks(knowledgeId);
+    return result;
+  }
+
+  async function addGeneratedQuestion(chunkId: string, question: string) {
+    currentChunkDetail.value = await postJson<ChunkRead, { question: string }>(
+      `/chunks/by-id/${chunkId}/questions`,
+      { question },
+    );
+    if (currentChunkDetail.value?.knowledge_id) await loadChunks(currentChunkDetail.value.knowledge_id);
+    return currentChunkDetail.value;
+  }
+
+  async function deleteGeneratedQuestion(chunkId: string, questionId: string) {
+    currentChunkDetail.value = await deleteRequest<ChunkRead>(
+      `/chunks/by-id/${chunkId}/questions`,
+      { question_id: questionId },
+    );
+    if (currentChunkDetail.value?.knowledge_id) await loadChunks(currentChunkDetail.value.knowledge_id);
+    return currentChunkDetail.value;
   }
 
   async function loadDocumentPreview(documentId: string) {
@@ -306,6 +354,7 @@ export const useKnowledgeBaseStore = defineStore("knowledgeBase", () => {
       answer: string;
       metadata?: Record<string, unknown>;
       enabled: boolean;
+      is_recommended?: boolean;
       tag_id?: string | null;
     },
   ) {
@@ -323,6 +372,7 @@ export const useKnowledgeBaseStore = defineStore("knowledgeBase", () => {
       answer: string;
       metadata: Record<string, unknown>;
       enabled: boolean;
+      is_recommended: boolean;
       tag_id: string | null;
     }>,
   ) {
@@ -346,19 +396,34 @@ export const useKnowledgeBaseStore = defineStore("knowledgeBase", () => {
     const form = new FormData();
     form.append("file", file);
     form.append("mode", mode);
-    const result = await postForm<{ imported: number; failed: number; errors?: Array<{ row: number; error: string }> }>(`/knowledge-bases/${kbId}/faqs/import`, form);
+    const result = await postForm<FAQImportProgress>(`/knowledge-bases/${kbId}/faqs/import`, form);
     latestFaqImportResult.value = {
-      total: Number(result.imported || 0) + Number(result.failed || 0),
-      imported: Number(result.imported || 0),
+      ...result,
+      total: Number(result.total ?? Number(result.imported || 0) + Number(result.failed || 0)),
+      imported: Number(result.imported || result.succeeded || 0),
       failed: Number(result.failed || 0),
-      mode,
-      failures: (result.errors || []).map((error) => ({
-        row: error.row,
-        question: null,
-        error: error.error,
-      })),
+      mode: result.mode || mode,
+      failures: result.failures || result.errors || [],
     };
     await Promise.all([loadFaqs(kbId), loadTags(kbId)]);
+    return latestFaqImportResult.value;
+  }
+
+  async function loadFaqImportLastResult(kbId: string) {
+    try {
+      latestFaqImportResult.value = await getJson<FAQImportProgress>(`/knowledge-bases/${kbId}/faqs/import-last-result`);
+      return latestFaqImportResult.value;
+    } catch {
+      latestFaqImportResult.value = null;
+      return null;
+    }
+  }
+
+  async function closeFaqImportLastResult(kbId: string) {
+    latestFaqImportResult.value = await putJson<FAQImportProgress, { display_status: string }>(
+      `/knowledge-bases/${kbId}/faqs/import-last-result/display-status`,
+      { display_status: "close" },
+    );
     return latestFaqImportResult.value;
   }
 
@@ -385,10 +450,13 @@ export const useKnowledgeBaseStore = defineStore("knowledgeBase", () => {
     chunks,
     currentDocument,
     currentDocumentPreview,
+    currentChunkDetail,
     currentProcessingTimeline,
     selectedDocumentIds,
+    selectedFaqIds,
     faqs,
     batchOperationResult,
+    faqBatchOperationResult,
     latestFaqImportResult,
     faqSearchHits,
     tags,
@@ -409,10 +477,15 @@ export const useKnowledgeBaseStore = defineStore("knowledgeBase", () => {
     deleteTag,
     assignDocumentTags,
     assignFaqTags,
+    batchUpdateFaqFields,
     loadDocuments,
     uploadDocument,
     pollDocument,
     loadChunks,
+    loadChunkById,
+    updateChunk,
+    addGeneratedQuestion,
+    deleteGeneratedQuestion,
     loadDocumentPreview,
     loadDocumentSpans,
     deleteDocument,
@@ -433,6 +506,8 @@ export const useKnowledgeBaseStore = defineStore("knowledgeBase", () => {
     deleteFaq,
     rebuildFaq,
     importFaqs,
+    loadFaqImportLastResult,
+    closeFaqImportLastResult,
     exportFaqs,
     searchFaqKnowledge,
   };

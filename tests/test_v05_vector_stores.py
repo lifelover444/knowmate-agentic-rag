@@ -1,6 +1,10 @@
 from conftest import create_bound_models
 from fastapi.testclient import TestClient
 
+from app.core.config import Settings
+from app.integrations.opensearch_store import OpenSearchSparseStore
+from app.integrations.vector_store import VectorStoreRegistry
+
 
 def test_vector_store_crud_masks_secret_config_and_sets_default(client: TestClient):
     create_response = client.post(
@@ -68,3 +72,54 @@ def test_vector_store_test_endpoint_uses_registered_qdrant_provider(client: Test
     assert response.status_code == 200
     assert response.json()["ok"] is True
     assert "Qdrant" in response.json()["message"]
+
+
+def test_vector_store_types_api_lists_availability_and_field_metadata(client: TestClient):
+    response = client.get("/api/v1/vector-stores/types")
+
+    assert response.status_code == 200, response.text
+    items = response.json()
+    qdrant = next(item for item in items if item["type"] == "qdrant")
+    opensearch = next(item for item in items if item["type"] == "opensearch")
+    tencent = next(item for item in items if item["type"] == "tencent_vectordb")
+
+    assert qdrant["status"] == "available"
+    assert qdrant["connection_fields"][0]["name"] == "host"
+    assert any(field["name"] == "api_key" and field["sensitive"] for field in qdrant["connection_fields"])
+    assert any(field["name"] == "collection_name" for field in qdrant["index_fields"])
+    assert opensearch["status"] == "planned"
+    assert tencent["status"] == "planned"
+
+
+def test_non_qdrant_vector_store_create_fails_clearly_without_echoing_secret(client: TestClient):
+    response = client.post(
+        "/api/v1/vector-stores",
+        json={
+            "name": "OpenSearch",
+            "provider": "opensearch",
+            "config_json": {"endpoint": "https://search.example.com", "api_key": "secret-opensearch-key"},
+        },
+    )
+
+    assert response.status_code == 400
+    assert "当前版本仅支持 Qdrant VectorStore" in response.text
+    assert "opensearch" in response.text
+    assert "secret-opensearch-key" not in response.text
+
+
+def test_vector_store_registry_builds_fake_opensearch_sparse_store():
+    settings = Settings()
+    store = VectorStoreRegistry(settings).build("opensearch", {"fake": True, "index_name": "knowmate-test"})
+
+    assert isinstance(store, OpenSearchSparseStore)
+    store.test_connection()
+
+
+def test_vector_store_registry_rejects_unconfigured_opensearch_provider():
+    settings = Settings()
+    try:
+        VectorStoreRegistry(settings).build("opensearch", {})
+    except ValueError as exc:
+        assert "OpenSearch/Elasticsearch VectorStore 未配置" in str(exc)
+    else:
+        raise AssertionError("expected unconfigured OpenSearch provider to fail clearly")

@@ -18,6 +18,13 @@ const commandPaletteQuery = ref("");
 const currentKbId = computed(() => String(route.params.kbId || ""));
 const commands = computed<CommandItem[]>(() => [
   { id: "chat", label: "快速问答", description: "进入 Chat / Quick Q&A", keywords: "chat qa 问答", to: "/chat" },
+  {
+    id: "history-search",
+    label: "历史问答搜索",
+    description: "进入 Chat 侧栏搜索历史回答",
+    keywords: "message history search answer 历史 回答",
+    to: "/chat",
+  },
   { id: "kb", label: "知识库", description: "创建和管理知识库", keywords: "kb knowledge base", to: "/knowledge-bases" },
   {
     id: "documents",

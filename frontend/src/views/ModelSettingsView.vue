@@ -61,6 +61,7 @@ onMounted(() => {
             title="QA 模型"
             model-type="KnowledgeQA"
             :models="modelStore.chatModels"
+            :provider-presets="modelStore.providerPresets"
             :selected-model-id="modelStore.selectedChatModelId"
             :saving="modelStore.saving"
             :testing="modelStore.testing"
@@ -75,6 +76,7 @@ onMounted(() => {
             title="Embedding 模型"
             model-type="Embedding"
             :models="modelStore.embeddingModels"
+            :provider-presets="modelStore.providerPresets"
             :selected-model-id="modelStore.selectedEmbeddingModelId"
             :saving="modelStore.saving"
             :testing="modelStore.testing"
@@ -89,6 +91,7 @@ onMounted(() => {
             title="Rerank 模型"
             model-type="Rerank"
             :models="modelStore.rerankModels"
+            :provider-presets="modelStore.providerPresets"
             :selected-model-id="modelStore.selectedRerankModelId"
             :saving="modelStore.saving"
             :testing="modelStore.testing"
@@ -108,28 +111,44 @@ onMounted(() => {
           <p>后端不会返回 API Key 明文，只展示是否已配置和尾号。</p>
         </div>
       </div>
-      <a-table :data="modelStore.models" :loading="modelStore.loading" :pagination="false" row-key="id">
-        <template #columns>
-          <a-table-column title="类型" data-index="type" />
-          <a-table-column title="名称" data-index="name" />
-          <a-table-column title="模型" data-index="model_name" />
-          <a-table-column title="供应商" data-index="provider" />
-          <a-table-column title="API Key">
-            <template #cell="{ record }">
-              <a-tag :color="record.api_key_configured ? 'green' : 'gray'">
-                {{ record.api_key_configured ? `已配置 ****${record.api_key_last4 || ""}` : "未配置" }}
-              </a-tag>
-            </template>
-          </a-table-column>
-          <a-table-column title="操作">
-            <template #cell="{ record }">
-              <a-popconfirm content="确认删除这个模型？" type="warning" @ok="deleteModel(record)">
-                <a-button size="mini" status="danger">删除</a-button>
-              </a-popconfirm>
-            </template>
-          </a-table-column>
-        </template>
-      </a-table>
+      <section v-for="group in modelStore.modelGroups" :key="group.type" class="model-group">
+        <h3>{{ group.label }}</h3>
+        <a-table :data="group.models" :loading="modelStore.loading" :pagination="false" row-key="id">
+          <template #columns>
+            <a-table-column title="名称" data-index="name" />
+            <a-table-column title="模型" data-index="model_name" />
+            <a-table-column title="供应商" data-index="provider" />
+            <a-table-column title="API Key">
+              <template #cell="{ record }">
+                <a-tag :color="record.api_key_configured ? 'green' : 'gray'">
+                  {{ record.api_key_configured ? `已配置 ****${record.api_key_last4 || ""}` : "未配置" }}
+                </a-tag>
+              </template>
+            </a-table-column>
+            <a-table-column title="操作">
+              <template #cell="{ record }">
+                <a-popconfirm content="确认删除这个模型？" type="warning" @ok="deleteModel(record)">
+                  <a-button size="mini" status="danger">删除</a-button>
+                </a-popconfirm>
+              </template>
+            </a-table-column>
+          </template>
+        </a-table>
+      </section>
     </section>
   </main>
 </template>
+
+<style scoped>
+.model-group {
+  display: grid;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.model-group h3 {
+  margin: 0;
+  color: var(--km-text-primary);
+  font-size: 15px;
+}
+</style>

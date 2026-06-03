@@ -12,6 +12,7 @@ from app.schemas.vector_store import (
     VectorStoreRead,
     VectorStoreTestRequest,
     VectorStoreTestResponse,
+    VectorStoreTypeRead,
     VectorStoreUpdate,
 )
 from app.services.vector_store import VectorStoreService, to_safe_vector_store
@@ -34,6 +35,11 @@ def create_vector_store(payload: VectorStoreCreate, db: DBSession, settings: App
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return to_safe_vector_store(store)
+
+
+@router.get("/types", response_model=list[VectorStoreTypeRead])
+def list_vector_store_types(db: DBSession, settings: AppSettings):
+    return VectorStoreService(VectorStoreRepository(db), settings).list_types()
 
 
 @router.post("/test", response_model=VectorStoreTestResponse)
@@ -82,4 +88,3 @@ def delete_vector_store(store_id: str, db: DBSession, settings: AppSettings):
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return None
-

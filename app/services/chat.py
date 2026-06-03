@@ -5,12 +5,16 @@ from app.db.models import ChatMessage, ChatSession, Chunk, FAQEntry, Knowledge
 from app.db.repositories.chat import ChatRepository
 from app.db.repositories.knowledge_base import KnowledgeBaseRepository
 from app.schemas.chat import (
+    ChatHistoryStats,
     ChatMessageRead,
     ChatSessionBatchDeleteFailure,
     ChatSessionBatchDeleteResponse,
     ChatSessionCreate,
     ChatSessionRead,
     ChatSessionUpdate,
+    MessageSearchRequest,
+    MessageSearchResponse,
+    MessageSearchResultItem,
     RecommendedQuestionRead,
 )
 from app.schemas.quick_answer import SourceRead
@@ -43,8 +47,11 @@ def to_chat_message_read(message: ChatMessage) -> ChatMessageRead:
         rewritten_query=message.rewritten_query,
         sources=[SourceRead.model_validate(source) for source in (message.sources_json or [])],
         retrieval_trace=message.retrieval_trace_json,
+        rendered_context=message.rendered_context,
+        prompt_context_summary=message.prompt_context_summary,
         model_config_info=message.model_config_json,
         mentioned_items=(message.model_config_json or {}).get("mentioned_items") or [],
+        attachments=(message.model_config_json or {}).get("attachments") or [],
         status=message.status,
         error_message=message.error_message,
         created_at=message.created_at,
@@ -129,6 +136,44 @@ class ChatService:
             failures=failures,
         )
 
+    def search_messages(self, payload: MessageSearchRequest) -> MessageSearchResponse:
+        query = " ".join(payload.query.split())
+        if not query:
+            raise ValueError("搜索关键词不能为空")
+        tenant_id = self.settings.default_tenant_id
+        matches = self.repo.search_messages_by_keyword(
+            tenant_id=tenant_id,
+            keyword=query,
+            session_ids=payload.session_ids,
+            limit=payload.limit * 3,
+        )
+        items: list[MessageSearchResultItem] = []
+        seen: set[str] = set()
+        session_messages: dict[str, list[ChatMessage]] = {}
+        for message, session in matches:
+            messages = session_messages.setdefault(
+                session.id,
+                self.repo.list_messages(session.id, tenant_id),
+            )
+            item = self._search_result_item(message, session, messages)
+            dedupe_key = "|".join([item.session_id, item.query_content, item.answer_content])
+            if dedupe_key in seen:
+                continue
+            seen.add(dedupe_key)
+            items.append(item)
+            if len(items) >= payload.limit:
+                break
+        return MessageSearchResponse(items=items, total=len(items))
+
+    def chat_history_stats(self) -> ChatHistoryStats:
+        session_count, message_count, last_message_at = self.repo.chat_history_stats(self.settings.default_tenant_id)
+        return ChatHistoryStats(
+            searchable=message_count > 0,
+            session_count=session_count,
+            message_count=message_count,
+            last_message_at=last_message_at,
+        )
+
     def recommended_questions(self, knowledge_base_id: str, limit: int = 6) -> list[RecommendedQuestionRead]:
         tenant_id = self.settings.default_tenant_id
         if KnowledgeBaseRepository(self.repo.db).get(knowledge_base_id, tenant_id) is None:
@@ -162,6 +207,7 @@ class ChatService:
         session: ChatSession,
         content: str,
         mentioned_items: list[dict] | None = None,
+        attachments: list[dict] | None = None,
     ) -> ChatMessage:
         now = datetime.now(UTC)
         session.last_message_at = now
@@ -174,10 +220,37 @@ class ChatService:
                 role="user",
                 content=content,
                 original_query=content,
-                model_config_json={"mentioned_items": mentioned_items or []},
+                model_config_json={"mentioned_items": mentioned_items or [], "attachments": attachments or []},
                 status="completed",
                 created_at=now,
             )
+        )
+
+    def _search_result_item(
+        self,
+        message: ChatMessage,
+        session: ChatSession,
+        session_messages: list[ChatMessage],
+    ) -> MessageSearchResultItem:
+        query_message, answer_message = _pair_message(message, session_messages)
+        query_content = query_message.content if query_message else (message.original_query or message.content)
+        answer_content = ""
+        if answer_message:
+            answer_content = answer_message.content
+        elif message.role == "assistant":
+            answer_content = message.content
+        created_at = (query_message or answer_message or message).created_at
+        message_ids = [item.id for item in (query_message, answer_message) if item is not None]
+        return MessageSearchResultItem(
+            session_id=session.id,
+            session_title=session.title,
+            query_content=query_content,
+            answer_content=answer_content,
+            answer_snippet=_snippet(answer_content),
+            score=1.0,
+            match_type="keyword",
+            created_at=created_at,
+            message_ids=message_ids or [message.id],
         )
 
     def _question_from_faq(self, faq: FAQEntry) -> RecommendedQuestionRead:
@@ -238,6 +311,8 @@ class ChatService:
         sources: list[dict],
         retrieval_trace: dict,
         model_config: dict,
+        rendered_context: str | None = None,
+        prompt_context_summary: str | None = None,
         status: str = "completed",
         error_message: str | None = None,
     ) -> ChatMessage:
@@ -255,6 +330,8 @@ class ChatService:
                 rewritten_query=rewritten_query,
                 sources_json=sources,
                 retrieval_trace_json=retrieval_trace,
+                rendered_context=rendered_context,
+                prompt_context_summary=prompt_context_summary,
                 model_config_json=model_config,
                 status=status,
                 error_message=error_message,
@@ -267,3 +344,53 @@ def _title_from_query(query: str) -> str:
     title = " ".join((query or "").strip().split())
     title = title.rstrip("？?。.!！；;：:")
     return title[:28] or "新会话"
+
+
+def _pair_message(
+    message: ChatMessage,
+    session_messages: list[ChatMessage],
+) -> tuple[ChatMessage | None, ChatMessage | None]:
+    if message.role == "assistant":
+        query = _find_query_for_assistant(message, session_messages)
+        return query, message
+    if message.role == "user":
+        answer = _find_answer_for_user(message, session_messages)
+        return message, answer
+    return message, None
+
+
+def _find_query_for_assistant(message: ChatMessage, session_messages: list[ChatMessage]) -> ChatMessage | None:
+    original_query = (message.original_query or "").strip()
+    if original_query:
+        for candidate in session_messages:
+            if candidate.role == "user" and candidate.content.strip() == original_query:
+                return candidate
+    previous_users = [
+        candidate
+        for candidate in session_messages
+        if candidate.role == "user" and candidate.created_at <= message.created_at
+    ]
+    return previous_users[-1] if previous_users else None
+
+
+def _find_answer_for_user(message: ChatMessage, session_messages: list[ChatMessage]) -> ChatMessage | None:
+    for candidate in session_messages:
+        if (
+            candidate.role == "assistant"
+            and candidate.original_query
+            and candidate.original_query.strip() == message.content.strip()
+        ):
+            return candidate
+    following = [
+        candidate
+        for candidate in session_messages
+        if candidate.role == "assistant" and candidate.created_at >= message.created_at
+    ]
+    return following[0] if following else None
+
+
+def _snippet(text: str, limit: int = 180) -> str:
+    compact = " ".join((text or "").split())
+    if len(compact) <= limit:
+        return compact
+    return f"{compact[:limit].rstrip()}..."

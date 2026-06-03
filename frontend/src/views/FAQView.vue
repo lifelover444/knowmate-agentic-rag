@@ -21,6 +21,12 @@ const searching = ref(false);
 const importMode = ref<"append" | "replace">("append");
 const selectedImportFile = ref<File | null>(null);
 const filters = ref({ tag_id: "" });
+const batchTagId = ref("");
+const batchUpdating = ref(false);
+const selectedFaqIdSet = computed(() => new Set(kbStore.selectedFaqIds));
+const allVisibleFaqsSelected = computed(() => (
+  kbStore.faqs.length > 0 && kbStore.faqs.every((item) => selectedFaqIdSet.value.has(item.id))
+));
 const form = reactive({
   question: "",
   similarQuestionsText: "",
@@ -28,6 +34,7 @@ const form = reactive({
   metadataText: "{}",
   tag_id: "",
   enabled: true,
+  is_recommended: false,
 });
 const searchForm = reactive({
   query: "",
@@ -43,6 +50,7 @@ function openCreate() {
   form.metadataText = "{}";
   form.tag_id = filters.value.tag_id;
   form.enabled = true;
+  form.is_recommended = false;
   modalVisible.value = true;
 }
 
@@ -54,6 +62,7 @@ function openEdit(record: FAQEntryRead) {
   form.metadataText = JSON.stringify(record.metadata || {}, null, 2);
   form.tag_id = record.tag_id || "";
   form.enabled = record.enabled;
+  form.is_recommended = record.is_recommended;
   modalVisible.value = true;
 }
 
@@ -87,6 +96,7 @@ async function submit() {
       metadata: metadataPayload(),
       tag_id: form.tag_id || null,
       enabled: form.enabled,
+      is_recommended: form.is_recommended,
     };
     if (editing.value) {
       await kbStore.updateFaq(kbId.value, editing.value.id, payload);
@@ -109,6 +119,47 @@ async function toggle(record: FAQEntryRead) {
   } catch (error) {
     Message.error(formatApiError(error instanceof Error ? error.message : error));
   }
+}
+
+function toggleFaqSelected(record: FAQEntryRead, checked: boolean) {
+  const next = new Set(kbStore.selectedFaqIds);
+  if (checked) {
+    next.add(record.id);
+  } else {
+    next.delete(record.id);
+  }
+  kbStore.selectedFaqIds = Array.from(next);
+}
+
+function toggleAllFaqs(checked: boolean) {
+  kbStore.selectedFaqIds = checked ? kbStore.faqs.map((item) => item.id) : [];
+}
+
+async function batchUpdateSelected(fields: { enabled?: boolean; is_recommended?: boolean; tag_id?: string | null }, message: string) {
+  if (!kbStore.selectedFaqIds.length) {
+    Message.warning("请先选择 FAQ 条目");
+    return;
+  }
+  batchUpdating.value = true;
+  try {
+    const byId = Object.fromEntries(kbStore.selectedFaqIds.map((id) => [id, fields]));
+    const result = await kbStore.batchUpdateFaqFields(kbId.value, { by_id: byId });
+    await refreshFaqs();
+    if (result.failed) {
+      Message.warning(result.error_summary || `已更新 ${result.succeeded} 条，失败 ${result.failed} 条`);
+    } else {
+      Message.success(message);
+    }
+  } catch (error) {
+    Message.error(formatApiError(error instanceof Error ? error.message : error));
+  } finally {
+    batchUpdating.value = false;
+  }
+}
+
+async function batchSetTag() {
+  await batchUpdateSelected({ tag_id: batchTagId.value || null }, "FAQ 标签已批量更新");
+  batchTagId.value = "";
 }
 
 async function rebuild(record: FAQEntryRead) {
@@ -142,6 +193,7 @@ async function refreshFaqs() {
     kbStore.loadKnowledgeBase(kbId.value),
     kbStore.loadTags(kbId.value),
     kbStore.loadFaqs(kbId.value, filters.value),
+    kbStore.loadFaqImportLastResult(kbId.value),
   ]);
 }
 
@@ -183,6 +235,15 @@ async function submitImport() {
     Message.error(formatApiError(error instanceof Error ? error.message : error));
   } finally {
     importing.value = false;
+  }
+}
+
+async function closeImportResult() {
+  try {
+    await kbStore.closeFaqImportLastResult(kbId.value);
+    Message.success("导入结果提示已关闭");
+  } catch (error) {
+    Message.error(formatApiError(error instanceof Error ? error.message : error));
   }
 }
 
@@ -240,7 +301,11 @@ onMounted(() => {
       </template>
     </a-page-header>
 
-    <section v-if="kbStore.latestFaqImportResult" class="content-card faq-import-summary">
+    <section
+      v-if="kbStore.latestFaqImportResult && kbStore.latestFaqImportResult.display_status !== 'close'"
+      class="content-card faq-import-summary"
+      data-testid="last-import-result"
+    >
       <div class="section-heading">
         <div>
           <h2>导入结果</h2>
@@ -253,6 +318,7 @@ onMounted(() => {
         <a-tag :color="kbStore.latestFaqImportResult.mode === 'append' ? 'green' : 'orange'">
           {{ kbStore.latestFaqImportResult.mode === "append" ? "追加" : "替换" }}
         </a-tag>
+        <a-button size="small" @click="closeImportResult">关闭提示</a-button>
       </div>
       <div v-if="kbStore.latestFaqImportResult.failures.length" class="faq-import-failures">
         <div v-for="failure in kbStore.latestFaqImportResult.failures" :key="failure.row" class="faq-import-failure">
@@ -273,8 +339,50 @@ onMounted(() => {
           <a-option v-for="tag in kbStore.tags" :key="tag.id" :value="tag.id">{{ tag.name }}</a-option>
         </a-select>
       </div>
+      <div class="faq-batch-toolbar" data-testid="batch-update-faq-fields">
+        <span>已选 {{ kbStore.selectedFaqIds.length }} 条</span>
+        <a-button size="small" :loading="batchUpdating" @click="batchUpdateSelected({ enabled: true }, 'FAQ 已批量启用')">
+          批量启用
+        </a-button>
+        <a-button size="small" :loading="batchUpdating" @click="batchUpdateSelected({ enabled: false }, 'FAQ 已批量停用')">
+          批量停用
+        </a-button>
+        <a-button
+          size="small"
+          :loading="batchUpdating"
+          @click="batchUpdateSelected({ is_recommended: true }, 'FAQ 已批量推荐')"
+        >
+          批量推荐
+        </a-button>
+        <a-button
+          size="small"
+          :loading="batchUpdating"
+          @click="batchUpdateSelected({ is_recommended: false }, 'FAQ 已取消推荐')"
+        >
+          取消推荐
+        </a-button>
+        <a-select v-model="batchTagId" allow-clear size="small" placeholder="批量标签" class="compact-select">
+          <a-option value="">未分类</a-option>
+          <a-option v-for="tag in kbStore.tags" :key="tag.id" :value="tag.id">{{ tag.name }}</a-option>
+        </a-select>
+        <a-button size="small" :loading="batchUpdating" @click="batchSetTag">批量标签</a-button>
+      </div>
       <a-table :data="kbStore.faqs" :pagination="false" row-key="id">
+        <template #empty>
+          <a-empty description="暂无 FAQ 条目" />
+        </template>
         <template #columns>
+          <a-table-column title="选择" :width="76">
+            <template #title>
+              <a-checkbox :model-value="allVisibleFaqsSelected" @change="(checked) => toggleAllFaqs(Boolean(checked))" />
+            </template>
+            <template #cell="{ record }">
+              <a-checkbox
+                :model-value="selectedFaqIdSet.has(record.id)"
+                @change="(checked) => toggleFaqSelected(record, Boolean(checked))"
+              />
+            </template>
+          </a-table-column>
           <a-table-column title="问题" data-index="question" />
           <a-table-column title="相似问法">
             <template #cell="{ record }">
@@ -307,6 +415,13 @@ onMounted(() => {
           <a-table-column title="状态">
             <template #cell="{ record }">
               <a-tag :color="record.enabled ? 'green' : 'gray'">{{ record.enabled ? "启用" : "停用" }}</a-tag>
+            </template>
+          </a-table-column>
+          <a-table-column title="推荐">
+            <template #cell="{ record }">
+              <a-tag :color="record.is_recommended ? 'orange' : 'gray'">
+                {{ record.is_recommended ? "推荐" : "普通" }}
+              </a-tag>
             </template>
           </a-table-column>
           <a-table-column title="操作">
@@ -345,6 +460,7 @@ onMounted(() => {
         </a-form-item>
         <a-form-item label="metadata"><a-textarea v-model="form.metadataText" :auto-size="{ minRows: 3, maxRows: 6 }" /></a-form-item>
         <a-form-item label="启用"><a-switch v-model="form.enabled" /></a-form-item>
+        <a-form-item label="推荐"><a-switch v-model="form.is_recommended" /></a-form-item>
       </div>
     </a-modal>
 
@@ -393,3 +509,21 @@ onMounted(() => {
     </a-drawer>
   </main>
 </template>
+
+<style scoped>
+.faq-batch-toolbar {
+  align-items: center;
+  border-top: 1px solid #e5e7eb;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+  padding-top: 12px;
+}
+
+.similar-question-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+</style>

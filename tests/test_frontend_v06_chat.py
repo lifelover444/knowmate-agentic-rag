@@ -24,3 +24,43 @@ def test_frontend_exposes_v06_sessions_streaming_and_trace():
     assert "message-trace" in app
     assert "knowledge-search-panel" in app
     assert "html: false" in app
+
+
+def test_frontend_chat_trace_uses_chinese_stage_labels_and_safe_summary():
+    app = frontend_source()
+
+    assert "traceStageLabel" in app
+    assert "traceStatusText" in app
+    assert "traceStageSummary" in app
+    assert "mode_not_applicable" in app
+    assert "不适用于当前检索模式" in app
+    assert "向量检索" in app
+    assert "关键词检索" in app
+    assert "RRF 合并" in app
+    assert "父子块扩展" in app
+    assert "去重" in app
+    assert "FAQ 合并" in app
+    assert "重排" in app
+    assert "已跳过" in app
+    assert "已完成" in app
+    assert "失败" in app
+    assert "knowledge-search-trace" in app
+
+
+def test_frontend_chat_trace_shows_prompt_context_summary():
+    app = frontend_source()
+
+    assert "promptContextSummary" in app
+    assert "本次送入模型的上下文摘要" in app
+    assert "prompt-context-summary" in app
+
+
+def test_frontend_chat_supports_text_attachments():
+    app = frontend_source()
+
+    assert "chat-attachment-input" in app
+    assert "临时附件" in app
+    assert "attachments" in app
+    assert "txt/md/csv/json" in app
+    assert "附件内容已截断" in app
+    assert "不支持的附件类型" in app

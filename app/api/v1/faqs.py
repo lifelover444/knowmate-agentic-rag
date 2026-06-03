@@ -7,7 +7,15 @@ from sqlalchemy.orm import Session
 from app.api.v1.deps import get_db, get_settings
 from app.core.config import Settings
 from app.db.repositories.faq import FAQEntryRepository
-from app.schemas.faq import FAQEntryCreate, FAQEntryRead, FAQEntryUpdate
+from app.schemas.faq import (
+    FAQEntryCreate,
+    FAQEntryRead,
+    FAQEntryUpdate,
+    FAQFieldBatchUpdateRequest,
+    FAQFieldBatchUpdateResponse,
+    FAQImportDisplayStatusUpdate,
+    FAQImportProgressRead,
+)
 from app.services.faq import FAQEntryService
 from app.services.faq_import_export import FAQImportExportService
 
@@ -59,6 +67,53 @@ async def import_faq_entries(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+@router.get("/import-progress/{task_id}", response_model=FAQImportProgressRead)
+def get_faq_import_progress(kb_id: str, task_id: str, db: DBSession, settings: AppSettings, request: Request):
+    result = FAQImportExportService(
+        db,
+        settings,
+        vector_store=request.app.state.vector_store,
+        embedder=request.app.state.embedder,
+    ).get_import_progress(kb_id=kb_id, task_id=task_id)
+    if result is None:
+        raise HTTPException(status_code=404, detail="FAQ 导入任务不存在")
+    return result
+
+
+@router.get("/import-last-result", response_model=FAQImportProgressRead)
+def get_faq_import_last_result(kb_id: str, db: DBSession, settings: AppSettings, request: Request):
+    result = FAQImportExportService(
+        db,
+        settings,
+        vector_store=request.app.state.vector_store,
+        embedder=request.app.state.embedder,
+    ).get_last_import_result(kb_id=kb_id)
+    if result is None:
+        raise HTTPException(status_code=404, detail="FAQ 导入结果不存在")
+    return result
+
+
+@router.put("/import-last-result/display-status", response_model=FAQImportProgressRead)
+def update_faq_import_last_result_display_status(
+    kb_id: str,
+    payload: FAQImportDisplayStatusUpdate,
+    db: DBSession,
+    settings: AppSettings,
+    request: Request,
+):
+    try:
+        return FAQImportExportService(
+            db,
+            settings,
+            vector_store=request.app.state.vector_store,
+            embedder=request.app.state.embedder,
+        ).update_last_import_display_status(kb_id=kb_id, display_status=payload.display_status)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @router.get("/export")
 def export_faq_entries(
     kb_id: str,
@@ -86,6 +141,27 @@ def export_faq_entries(
             headers={"Content-Disposition": "attachment; filename=faqs.xlsx"},
         )
     raise HTTPException(status_code=400, detail="导出格式必须是 csv 或 xlsx")
+
+
+@router.put("/fields", response_model=FAQFieldBatchUpdateResponse)
+def batch_update_faq_fields(
+    kb_id: str,
+    payload: FAQFieldBatchUpdateRequest,
+    db: DBSession,
+    settings: AppSettings,
+    request: Request,
+):
+    try:
+        return FAQEntryService(
+            db,
+            settings,
+            vector_store=request.app.state.vector_store,
+            embedder=request.app.state.embedder,
+        ).batch_update_fields(kb_id, payload)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.put("/{faq_id}", response_model=FAQEntryRead)

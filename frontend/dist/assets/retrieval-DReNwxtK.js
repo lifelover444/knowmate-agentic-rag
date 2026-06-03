@@ -1,4 +1,4 @@
-import{i as A,y as e,n as g,w as D,u as F}from"./index-CbiJx7dq.js";function J(r){return r.split(",").map(a=>a.replaceAll("\\n",`
+import{i as A,y as e,n as g,w as D,u as F}from"./index-C80UBBUV.js";function J(r){return r.split(",").map(a=>a.replaceAll("\\n",`
 `).trim()).filter(Boolean)}function y(r,a){const t=Number(r);return Number.isFinite(t)&&t>0?t:a}const q=A("retrieval",()=>{const r=e("hybrid"),a=e(50),t=e(.15),i=e(.3),s=e(10),o=e(.2),l=e(""),v=e(!1),c=e(60),_=e(.7),d=e(.3),h=e([]),u=e(null),b=e([{file_types:["pdf"],engine:"builtin"},{file_types:["docx"],engine:"builtin"},{file_types:["md","markdown"],engine:"builtin"},{file_types:["txt"],engine:"builtin"},{file_types:["csv","json","xlsx"],engine:"builtin"}]),w=e("auto"),R=e(512),N=e(80),x=e("\\n\\n,\\n,。"),S=e(0),C=e(""),T=e(!1),z=e(4096),E=e(384),K=e(`# 产品手册
 
 ## 安装

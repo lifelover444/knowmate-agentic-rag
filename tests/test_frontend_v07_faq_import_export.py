@@ -15,9 +15,14 @@ def test_task_006_faq_import_export_and_search_panel_wiring():
 
     assert "downloadRequest" in api
     assert "FAQImportResult" in types
+    assert "FAQImportProgress" in types
     assert "FAQSearchTestResult" in types
     assert "importFaqs" in store
     assert "/knowledge-bases/${kbId}/faqs/import" in store
+    assert "loadFaqImportLastResult" in store
+    assert "/knowledge-bases/${kbId}/faqs/import-last-result" in store
+    assert "closeFaqImportLastResult" in store
+    assert "/knowledge-bases/${kbId}/faqs/import-last-result/display-status" in store
     assert "exportFaqs" in store
     assert "/knowledge-bases/${kbId}/faqs/export" in store
     assert "searchFaqKnowledge" in store
@@ -26,6 +31,8 @@ def test_task_006_faq_import_export_and_search_panel_wiring():
     assert "append" in view
     assert "replace" in view
     assert "导入结果" in view
+    assert "关闭提示" in view
+    assert "last-import-result" in view
     assert "失败行" in view
     assert "导出 CSV" in view
     assert "导出 XLSX" in view

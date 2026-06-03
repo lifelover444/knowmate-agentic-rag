@@ -84,6 +84,7 @@ class ChunkRead(BaseModel):
     knowledge_base_id: str
     knowledge_id: str
     content: str
+    search_text: str | None = None
     chunk_index: int
     is_enabled: bool
     start_at: int

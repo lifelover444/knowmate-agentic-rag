@@ -2,7 +2,7 @@
 
 knowmate 知友是一个参考 [Tencent/WeKnora](https://github.com/Tencent/WeKnora) 核心思路实现的知识库 RAG 项目。后端技术栈从 WeKnora 的 Go 实现改为 Python / FastAPI；项目不是 Tencent/WeKnora 官方项目。
 
-当前版本为 v0.71，主线仍聚焦 WeKnora-style Quick Q&A。v0.71 在 v0.7 知识库平台化基础上，继续补齐 Quick Q&A 操作闭环与可观测性：上传队列、文档下载 / 取消解析 / 移动、停止生成、自动标题、last-request state、阶段化 retrieval trace、真实运行状态 API 和 Command Palette：
+当前版本为 v0.8，主线仍聚焦 WeKnora-style Quick Q&A。v0.8 在 v0.71 操作闭环基础上，继续补齐 Quick Q&A 可解释性、检索质量和管理闭环：retrieval diagnostics、rendered context、history merge、rerank cleaning/MMR、FAQ import progress 和批量字段更新、chunk 管理、generated questions、message search、provider/types 元数据、composite retriever、OpenSearch sparse MVP、真实 runtime status 和临时文本附件上下文：
 
 ```text
 模型管理
@@ -36,6 +36,14 @@ knowmate 知友是一个参考 [Tencent/WeKnora](https://github.com/Tencent/WeKn
   -> 文档处理 timeline
   -> 文档下载 / 取消解析 / 移动 KB
   -> runtime status / Command Palette
+  -> retrieval diagnostics / rendered context
+  -> history merge / rerank cleaning / MMR
+  -> FAQ import progress / batch fields / FAQ boost
+  -> chunk by-id / update / disable / generated questions
+  -> message search / chat-history stats
+  -> model providers / vector-store types
+  -> composite retriever / sparse backend MVP
+  -> attachment context
 ```
 
 ## 当前进度
@@ -143,14 +151,26 @@ knowmate 知友是一个参考 [Tencent/WeKnora](https://github.com/Tencent/WeKn
   - retrieval trace 新增 rewrite / search / rerank / answer 阶段列表，包含状态、耗时和输出摘要。
   - 新增 `/api/v1/runtime-status`，返回 database、local storage、vector store、parser registry 等运行状态，设置页使用真实状态而不是静态占位。
   - 新增全局 Command Palette，支持按钮和 Ctrl/Meta+K 打开，快速跳转 Chat、知识库、文档、FAQ、模型、检索、解析器和存储状态。
+- v0.8 Quick Q&A 可解释性、检索质量和管理闭环：
+  - retrieval diagnostics 细化到 rewrite、vector、keyword、RRF、parent_expand、deduplicate、FAQ merge、rerank 和 answer 阶段，前端 Chat 和检索调试面板可读展示。
+  - Quick Q&A 保存 `rendered_context` 和 `prompt_context_summary`，并支持轻量 history merge。
+  - Rerank 增加 passage cleaning、失败降级、阈值降级和 MMR 去冗余。
+  - FAQ 导入记录 progress、last result 和 display status；FAQ 支持字段批量更新，并在检索阶段支持 FAQ merge / boost。
+  - Chunk 支持 by-id 查询、更新、禁用、generated questions 管理和前端详情抽屉。
+  - Chunker debug 增加策略链、被拒绝层级、保护块统计、size distribution 和 token-aware validation。
+  - 新增历史问答搜索、chat-history stats、模型 provider presets、vector-store types 和 composite retriever diagnostics。
+  - 新增 OpenSearch/Elasticsearch sparse/BM25 后端 MVP，当前以 fake/test-client 与配置边界验证为主；生产未配置时返回中文明确错误。
+  - `/api/v1/runtime-status` 增强模型、向量库、存储 provider、parser engines 和修复建议。
+  - Quick Q&A 支持临时文本附件上下文，附件只进入本轮 prompt，不写入知识库、不写入 Qdrant、不作为 sources 返回。
+  - 开发启动脚本会检查 `docker compose`、`alembic` 等原生命令退出码，避免迁移失败后继续假启动。
 - 自动化测试：覆盖多模型 CRUD、凭据加密、知识库模型校验、重处理、检索配置、hybrid/RRF/rerank/parent-child retrieval、knowledge-search API、前端关键逻辑、API 和文档处理 payload。
-- v0.71 质量验证详见下方“验证命令”和 [CHANGELOG.md](CHANGELOG.md)。
+- v0.8 质量验证详见下方“验证命令”和 [CHANGELOG.md](CHANGELOG.md)。
 
 暂未实现：
 
 - 登录、RBAC、多租户隔离。
 - OCR / MinerU / 图片类文件解析。
-- 真正 BM25 引擎、pg_jieba、Elasticsearch/OpenSearch、ParadeDB/pg_search。
+- 生产级 BM25 引擎、pg_jieba、Elasticsearch/OpenSearch 集群、ParadeDB/pg_search。
 - GraphRAG、多维索引、Agent Mode、Wiki Mode。
 - WeKnoraCloud、Ollama 拉取、VLM、ASR。
 
@@ -163,11 +183,19 @@ knowmate 知友是一个参考 [Tencent/WeKnora](https://github.com/Tencent/WeKn
 | 异步任务 | Celery, Redis |
 | 向量库 | Qdrant |
 | 模型接入 | OpenAI Python SDK, OpenAI-compatible API, OpenAI-compatible rerank API |
-| 检索 | Qdrant dense retrieval, PostgreSQL FTS, jieba, RRF |
+| 检索 | Qdrant dense retrieval, PostgreSQL FTS, jieba, RRF, optional rerank, OpenSearch sparse MVP |
 | 前端 | Vue 3, TypeScript, Vite, Arco Design Vue, Pinia, vue-router, markdown-it, highlight.js |
 | 测试与质量 | pytest, Ruff |
 
 ## 快速启动
+
+如果依赖已经安装并配置好 `.env`，Windows 开发环境可优先使用一键脚本：
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start-dev.ps1
+```
+
+脚本会启动 `postgres / redis / qdrant`、执行 `alembic upgrade head`，并分别拉起 API、Celery Worker 和 Vite dev server。v0.8 起脚本会检查原生命令退出码；如果迁移或 Docker 启动失败，会直接停止并输出失败命令。
 
 ### 1. 安装依赖
 
@@ -282,6 +310,7 @@ Vite 会把 `/api` 和 `/health` 代理到 `http://127.0.0.1:8000`。
 | `PUT` | `/api/v1/model-config` | 兼容接口：保存旧 active 模型配置 |
 | `POST` | `/api/v1/model-config/test` | 兼容接口：测试旧模型配置 |
 | `GET` | `/api/v1/models?type=Embedding` | 查询模型列表，可按类型过滤 |
+| `GET` | `/api/v1/models/providers` | 查询 OpenAI-compatible provider presets 和默认模型信息 |
 | `POST` | `/api/v1/models` | 创建模型 |
 | `GET` | `/api/v1/models/{id}` | 查询模型 |
 | `PUT` | `/api/v1/models/{id}` | 更新模型基础信息 |
@@ -317,6 +346,10 @@ Vite 会把 `/api` 和 `/health` 代理到 `http://127.0.0.1:8000`。
 | `DELETE` | `/api/v1/knowledge-bases/{kb_id}/faqs/{faq_id}` | 删除 FAQ 条目 |
 | `POST` | `/api/v1/knowledge-bases/{kb_id}/faqs/{faq_id}/rebuild-index` | 重建 FAQ 索引 |
 | `POST` | `/api/v1/knowledge-bases/{kb_id}/faqs/import` | CSV/XLSX 导入 FAQ，支持 append/replace |
+| `GET` | `/api/v1/knowledge-bases/{kb_id}/faqs/import-progress/{task_id}` | 查询 FAQ 导入进度 |
+| `GET` | `/api/v1/knowledge-bases/{kb_id}/faqs/import-last-result` | 查询 FAQ 最近导入结果 |
+| `PUT` | `/api/v1/knowledge-bases/{kb_id}/faqs/import-last-result/display-status` | 更新 FAQ 最近导入结果展示状态 |
+| `PUT` | `/api/v1/knowledge-bases/{kb_id}/faqs/fields` | 批量更新 FAQ 启停、推荐、标签和 metadata 等字段 |
 | `GET` | `/api/v1/knowledge-bases/{kb_id}/faqs/export?format=csv` | 导出 FAQ CSV |
 | `GET` | `/api/v1/knowledge-bases/{kb_id}/faqs/export?format=xlsx` | 导出 FAQ XLSX |
 | `GET` | `/api/v1/documents/{document_id}` | 查询文档处理状态 |
@@ -327,6 +360,11 @@ Vite 会把 `/api` 和 `/health` 代理到 `http://127.0.0.1:8000`。
 | `GET` | `/api/v1/documents/{document_id}/download` | 下载文档原文件 |
 | `POST` | `/api/v1/documents/{document_id}/cancel-parse` | 取消 queued/processing 文档解析 |
 | `POST` | `/api/v1/documents/move` | 移动文档到其他兼容知识库 |
+| `GET` | `/api/v1/chunks/by-id/{chunk_id}` | 按 chunk id 查询 chunk 详情 |
+| `PUT` | `/api/v1/chunks/{knowledge_id}/{chunk_id}` | 更新 chunk content/search_text/metadata/is_enabled |
+| `DELETE` | `/api/v1/chunks/{knowledge_id}/{chunk_id}` | 禁用 chunk 并同步向量 payload 状态 |
+| `POST` | `/api/v1/chunks/by-id/{chunk_id}/questions` | 新增 chunk generated question |
+| `DELETE` | `/api/v1/chunks/by-id/{chunk_id}/questions` | 删除 chunk generated question |
 | `POST` | `/api/v1/knowledge-search` | 知识搜索，只返回检索 hits，不调用 LLM |
 | `POST` | `/api/v1/quick-answer` | 快速问答 |
 | `POST` | `/api/v1/quick-answer/stream` | 流式快速问答，返回 SSE events 并保存会话消息 |
@@ -339,11 +377,14 @@ Vite 会把 `/api` 和 `/health` 代理到 `http://127.0.0.1:8000`。
 | `DELETE` | `/api/v1/chat-sessions/{session_id}` | 软删除会话 |
 | `GET` | `/api/v1/chat-sessions/{session_id}/messages` | 查询会话消息 |
 | `POST` | `/api/v1/chat-sessions/{session_id}/stop` | 停止当前会话流式生成 |
+| `POST` | `/api/v1/messages/search` | 搜索历史问答消息 |
+| `GET` | `/api/v1/messages/chat-history-stats` | 查询历史消息统计和可检索状态 |
 | `GET` | `/api/v1/runtime-status` | 查询数据库、存储、向量库和 parser registry 运行状态 |
 | `GET` | `/api/v1/tasks` | 查询任务中心 |
 | `GET` | `/api/v1/tasks/{task_id}` | 查询单个任务 |
 | `POST` | `/api/v1/tasks/{task_id}/retry` | 重试失败任务 |
 | `GET` | `/api/v1/vector-stores` | 查询 VectorStore |
+| `GET` | `/api/v1/vector-stores/types` | 查询 vector store provider 类型、字段和可用性 |
 | `POST` | `/api/v1/vector-stores` | 创建 VectorStore |
 | `GET` | `/api/v1/vector-stores/{id}` | 查询 VectorStore |
 | `PUT` | `/api/v1/vector-stores/{id}` | 更新 VectorStore |
@@ -447,6 +488,97 @@ GET /api/v1/documents/{document_id}/spans
 ```
 
 返回 root span、当前 attempt 和 parse/chunk/embed/upsert/finalize 五阶段状态；历史文档无 span 时返回 attempt `0` 占位阶段。
+
+## v0.8 Schema / API 变化
+
+`retrieval_trace` 增强 diagnostics：
+
+```json
+{
+  "stages": [
+    {
+      "name": "vector",
+      "status": "completed",
+      "duration_ms": 18,
+      "summary": "vector hits: 8",
+      "input_count": 1,
+      "output_count": 8
+    },
+    {
+      "name": "faq_merge",
+      "status": "completed",
+      "boost_count": 1
+    }
+  ],
+  "retrievers": [
+    {
+      "knowledge_base_id": "kb-id",
+      "engine": "qdrant+postgres",
+      "mode": "hybrid",
+      "status": "completed",
+      "hit_count": 5
+    }
+  ]
+}
+```
+
+Quick Answer / Chat message 保存上下文摘要：
+
+```json
+{
+  "rendered_context": "用于 prompt 的上下文正文",
+  "prompt_context_summary": {
+    "source_count": 5,
+    "history_used": true,
+    "attachments_used": 1
+  }
+}
+```
+
+Quick Answer 支持临时文本附件：
+
+```json
+{
+  "question": "请总结附件内容",
+  "attachments": [
+    {
+      "filename": "notes.md",
+      "content_type": "text/markdown",
+      "content": "# 会议纪要\n..."
+    }
+  ]
+}
+```
+
+附件只进入本轮 prompt，不写入知识库、不写入 Qdrant，也不会作为 sources 返回。
+
+FAQ 导入和字段批量更新新增：
+
+```http
+GET /api/v1/knowledge-bases/{kb_id}/faqs/import-progress/{task_id}
+GET /api/v1/knowledge-bases/{kb_id}/faqs/import-last-result
+PUT /api/v1/knowledge-bases/{kb_id}/faqs/import-last-result/display-status
+PUT /api/v1/knowledge-bases/{kb_id}/faqs/fields
+```
+
+Chunk 管理新增：
+
+```http
+GET /api/v1/chunks/by-id/{chunk_id}
+PUT /api/v1/chunks/{knowledge_id}/{chunk_id}
+DELETE /api/v1/chunks/{knowledge_id}/{chunk_id}
+POST /api/v1/chunks/by-id/{chunk_id}/questions
+DELETE /api/v1/chunks/by-id/{chunk_id}/questions
+```
+
+模型、向量后端和历史消息新增：
+
+```http
+GET /api/v1/models/providers
+GET /api/v1/vector-stores/types
+POST /api/v1/messages/search
+GET /api/v1/messages/chat-history-stats
+```
 
 ## v0.71 Schema / API 变化
 
@@ -782,23 +914,22 @@ npm --prefix frontend run build
 
 最近一次本地验证结果：
 
-- `python -m pytest tests/test_v071_document_lifecycle.py tests/test_frontend_v071_document_lifecycle.py -q`：`5 passed`
-- `python -m pytest tests/test_v071_chat_generation_lifecycle.py tests/test_frontend_v071_chat_generation_lifecycle.py -q`：`4 passed`
-- `python -m pytest tests/test_v071_observability_status.py tests/test_frontend_v071_observability_status.py -q`：`3 passed`
-- `python -m pytest tests/test_frontend_v071_command_palette.py -q`：`1 passed`
-- `python -m pytest tests/test_v05_document_management.py::test_deleted_duplicate_file_can_be_uploaded_again tests/test_v05_document_management.py::test_active_duplicate_file_upload_returns_chinese_error -q`：`2 passed`
-- `ruff check app\api\v1\documents.py app\db\repositories\document.py app\services\document.py tests\test_v05_document_management.py`：通过
-- `python -m compileall app tests`：通过
+- `python -m pytest -q`：`184 passed`
+- `ruff check app tests`：通过
+- `python -m compileall app tests alembic`：通过
 - `npm --prefix frontend run build`：通过，仍有 Vite 大 chunk 提示。
-- v0.71 分项验收详见 [CHANGELOG.md](CHANGELOG.md) 的 v0.71 Verification。
+- `python -m pytest tests/test_dev_start_script.py tests/test_v07_chat_mentioned_items.py tests/test_v06_quick_answer_stream.py -q`：`12 passed`
+- `ruff check alembic app tests`：通过
+- 本地启动烟测：`scripts/start-dev.ps1` 完成后 PostgreSQL、Redis、Qdrant healthy，API `/health` 返回 `{"status":"ok"}`，Alembic current 为 `0016_task032_faq_recommended (head)`，Vite 工作台 `http://127.0.0.1:5173/#/chat` 显示“后端已连接”。
+- v0.8 分项验收详见 [CHANGELOG.md](CHANGELOG.md) 的 v0.8 Verification。
 
 ## 开发备注
 
-- v0.71 仍默认单租户，`DEFAULT_TENANT_ID=10000`。
+- v0.8 仍默认单租户，`DEFAULT_TENANT_ID=10000`。
 - Docker Compose 当前只提供 `postgres / redis / qdrant`，API、worker、前端 dev server 需要本地命令启动。
 - 文档上传后必须启动 Celery Worker，否则文档会停留在 `pending` 或 `processing`。
 - 切换 embedding 模型、维度、切分参数或 keyword 检索文本策略后，需要重处理文档或重建知识库来刷新 Qdrant 向量和 `chunks.search_text`。
-- v0.3 keyword search 是 PostgreSQL FTS + 应用层 `jieba` 分词，不是完整 BM25；真正 BM25 引擎留到后续版本。
+- 默认 keyword search 是 PostgreSQL FTS + 应用层 `jieba` 分词；OpenSearch/Elasticsearch sparse 后端当前是 MVP 配置边界和 fake/test-client 验证，不等同于已接入生产级 BM25 集群。
 - Rerank 默认关闭；启用时必须先创建可用的 `Rerank` 模型，并在检索配置中绑定 `rerank_model_id`。
 - 当前 OCR / MinerU 未接入，图片类文件会明确显示 unsupported/unavailable。
 - 模型测试会透传 provider 的真实错误，例如认证失败、模型不存在、维度不匹配等，前端会渲染中文可读文本，不渲染 `[object Object]`。

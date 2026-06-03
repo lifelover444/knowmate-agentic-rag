@@ -85,3 +85,80 @@ def test_disabling_faq_entry_removes_it_from_search(client: TestClient, fake_vec
     )
     assert search_response.status_code == 200
     assert search_response.json()["hits"] == []
+
+
+def test_batch_updating_faq_fields_disables_search_and_reports_partial_failures(
+    client: TestClient,
+    fake_vector_store,
+):
+    kb_id = _create_faq_kb(client)
+    first = client.post(
+        f"/api/v1/knowledge-bases/{kb_id}/faqs",
+        json={"question": "批量停用 A？", "answer": "批量停用后不可检索。", "enabled": True},
+    ).json()
+    second = client.post(
+        f"/api/v1/knowledge-bases/{kb_id}/faqs",
+        json={"question": "批量停用 B？", "answer": "批量停用后不可检索。", "enabled": True},
+    ).json()
+
+    response = client.put(
+        f"/api/v1/knowledge-bases/{kb_id}/faqs/fields",
+        json={
+            "by_id": {
+                first["id"]: {"enabled": False, "is_recommended": True},
+                second["id"]: {"is_enabled": False},
+                "missing-faq": {"enabled": False},
+            }
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["requested"] == 3
+    assert payload["succeeded"] == 2
+    assert payload["failed"] == 1
+    assert "1 条 FAQ 字段更新失败" in payload["error_summary"]
+    assert payload["failures"][0]["faq_id"] == "missing-faq"
+    assert "FAQ 条目不存在" in payload["failures"][0]["reason"]
+
+    entries = {item["id"]: item for item in client.get(f"/api/v1/knowledge-bases/{kb_id}/faqs").json()}
+    assert entries[first["id"]]["enabled"] is False
+    assert entries[first["id"]]["is_recommended"] is True
+    assert entries[second["id"]]["enabled"] is False
+    assert fake_vector_store.results == []
+
+    search_response = client.post(
+        "/api/v1/knowledge-search",
+        json={"knowledge_base_id": kb_id, "query": "批量停用", "mode": "keyword_only"},
+    )
+    assert search_response.status_code == 200
+    assert search_response.json()["hits"] == []
+
+
+def test_batch_updating_faq_tag_syncs_entry_chunks_and_vector_payload(
+    client: TestClient,
+    db_session,
+    fake_vector_store,
+):
+    kb_id = _create_faq_kb(client)
+    tag = client.post(f"/api/v1/knowledge-bases/{kb_id}/tags", json={"name": "批量标签"}).json()
+    faq = client.post(
+        f"/api/v1/knowledge-bases/{kb_id}/faqs",
+        json={"question": "批量改标签？", "answer": "FAQ 和索引标签应同步。", "enabled": True},
+    ).json()
+
+    response = client.put(
+        f"/api/v1/knowledge-bases/{kb_id}/faqs/fields",
+        json={"by_id": {faq["id"]: {"tag_id": tag["id"], "is_recommended": True}}},
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["succeeded"] == 1
+    entry = db_session.get(FAQEntry, faq["id"])
+    assert entry.tag_id == tag["id"]
+    assert entry.is_recommended is True
+    assert db_session.get(Knowledge, entry.knowledge_id).tag_id == tag["id"]
+    chunk = db_session.query(Chunk).filter_by(knowledge_id=entry.knowledge_id).one()
+    assert chunk.tag_id == tag["id"]
+    assert fake_vector_store.points[-1]["payload"]["tag_id"] == tag["id"]
+    assert fake_vector_store.points[-1]["payload"]["is_recommended"] is True

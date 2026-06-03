@@ -35,16 +35,33 @@ def test_quick_answer_stream_returns_stage_trace(client, fake_vector_store):
     assert response.status_code == 200, response.text
     trace = dict(parse_sse_events(response.text))["final"]["retrieval_trace"]
     stages = {stage["name"]: stage for stage in trace["stages"]}
-    assert list(stages) == ["rewrite", "search", "rerank", "answer"]
+    assert list(stages) == [
+        "rewrite",
+        "vector",
+        "keyword",
+        "rrf",
+        "parent_expand",
+        "deduplicate",
+        "faq_merge",
+        "rerank",
+        "answer",
+    ]
     assert stages["rewrite"]["status"] == "skipped"
-    assert stages["search"]["status"] == "done"
-    assert stages["search"]["output"]["hit_count"] == 1
+    assert stages["vector"]["status"] == "done"
+    assert stages["vector"]["output"]["hit_count"] == 1
+    assert stages["keyword"]["status"] == "skipped"
+    assert stages["rrf"]["status"] == "skipped"
+    assert stages["parent_expand"]["status"] == "done"
+    assert stages["deduplicate"]["status"] == "done"
+    assert stages["faq_merge"]["status"] == "done"
+    assert stages["faq_merge"]["output"]["boost_count"] == 0
     assert stages["rerank"]["status"] == "skipped"
     assert stages["answer"]["status"] == "done"
     assert all(isinstance(stage["duration_ms"], int) and stage["duration_ms"] >= 0 for stage in stages.values())
 
 
 def test_runtime_status_reports_real_parser_storage_and_system_health(client):
+    create_bound_models(client)
     response = client.get("/api/v1/runtime-status")
 
     assert response.status_code == 200, response.text
@@ -55,6 +72,28 @@ def test_runtime_status_reports_real_parser_storage_and_system_health(client):
     assert payload["storage"]["status"] == "ok"
     assert payload["storage"]["writable"] is True
     assert payload["vector_store"]["status"] == "ok"
+    assert payload["model_configs"]["required_types"]["KnowledgeQA"]["status"] == "ok"
+    assert payload["model_configs"]["required_types"]["Embedding"]["status"] == "ok"
+    assert payload["model_configs"]["required_types"]["Rerank"]["status"] == "missing"
+    assert payload["model_configs"]["summary"]["total"] == 2
+    assert payload["model_configs"]["summary"]["api_key_configured"] == 2
+    assert "sk-test" not in response.text
+    assert payload["vector_stores"]["registered_count"] >= 1
+    assert payload["vector_stores"]["default"]["provider"] == "qdrant"
+    assert payload["vector_stores"]["default"]["config_json"]["api_key_configured"] is False
+    assert any(
+        provider["provider"] == "local" and provider["status"] == "ok"
+        for provider in payload["storage_providers"]
+    )
+    assert any(
+        provider["provider"] == "minio" and provider["status"] == "planned"
+        for provider in payload["storage_providers"]
+    )
     builtin = next(engine for engine in payload["parser_engines"] if engine["name"] == "builtin")
+    mineru = next(engine for engine in payload["parser_engines"] if engine["name"] == "mineru")
+    docreader = next(engine for engine in payload["parser_engines"] if engine["name"] == "docreader")
     assert builtin["status"] == "ok"
     assert "pdf" in builtin["file_types"]
+    assert mineru["status"] == "planned"
+    assert docreader["status"] == "planned"
+    assert any("Rerank" in suggestion for suggestion in payload["fix_suggestions"])

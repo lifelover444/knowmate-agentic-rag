@@ -39,6 +39,21 @@ def test_frontend_supports_separate_qa_and_embedding_model_credentials():
     assert "deepseek" in app
 
 
+def test_frontend_uses_provider_presets_and_grouped_model_list():
+    app = frontend_source()
+
+    assert "/models/providers" in app
+    assert "providerPresets" in app
+    assert "loadProviderPresets" in app
+    assert "applyProviderPreset" in app
+    assert "default_models" in app
+    assert "default_urls" in app
+    assert "modelGroups" in app
+    assert "KnowledgeQA 模型组" in app
+    assert "Embedding 模型组" in app
+    assert "Rerank 模型组" in app
+
+
 def test_frontend_uses_qwen_rerank_preset_instead_of_qwen_plus():
     app = frontend_source()
 

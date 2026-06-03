@@ -1,7 +1,7 @@
 import { computed, ref } from "vue";
 import { defineStore } from "pinia";
 import { deleteRequest, getJson, postJson, putJson } from "../utils/api";
-import type { ModelPayload, ModelRead, ModelTestPayload } from "../types/api";
+import type { ModelPayload, ModelProviderPreset, ModelRead, ModelTestPayload } from "../types/api";
 
 interface LegacyModelConfig {
   provider: string;
@@ -16,6 +16,7 @@ interface LegacyModelConfig {
 
 export const useModelsStore = defineStore("models", () => {
   const models = ref<ModelRead[]>([]);
+  const providerPresets = ref<ModelProviderPreset[]>([]);
   const selectedChatModelId = ref("");
   const selectedEmbeddingModelId = ref("");
   const selectedRerankModelId = ref("");
@@ -28,6 +29,11 @@ export const useModelsStore = defineStore("models", () => {
   const chatModels = computed(() => models.value.filter((model) => model.type === "KnowledgeQA"));
   const embeddingModels = computed(() => models.value.filter((model) => model.type === "Embedding"));
   const rerankModels = computed(() => models.value.filter((model) => model.type === "Rerank"));
+  const modelGroups = computed(() => [
+    { type: "KnowledgeQA", label: "KnowledgeQA 模型组", models: chatModels.value },
+    { type: "Embedding", label: "Embedding 模型组", models: embeddingModels.value },
+    { type: "Rerank", label: "Rerank 模型组", models: rerankModels.value },
+  ]);
 
   function selectAvailableModels() {
     if (!chatModels.value.some((model) => model.id === selectedChatModelId.value)) {
@@ -45,11 +51,17 @@ export const useModelsStore = defineStore("models", () => {
     legacyConfig.value = await getJson<LegacyModelConfig>("/model-config");
   }
 
+  async function loadProviderPresets() {
+    providerPresets.value = await getJson<ModelProviderPreset[]>("/models/providers");
+    return providerPresets.value;
+  }
+
   async function loadModels() {
     loading.value = true;
     try {
       const [modelList] = await Promise.all([
         getJson<ModelRead[]>("/models"),
+        loadProviderPresets().catch(() => []),
         loadLegacyModelConfig().catch(() => null),
       ]);
       models.value = modelList;
@@ -105,6 +117,7 @@ export const useModelsStore = defineStore("models", () => {
 
   return {
     models,
+    providerPresets,
     selectedChatModelId,
     selectedEmbeddingModelId,
     selectedRerankModelId,
@@ -116,6 +129,8 @@ export const useModelsStore = defineStore("models", () => {
     chatModels,
     embeddingModels,
     rerankModels,
+    modelGroups,
+    loadProviderPresets,
     loadModels,
     saveModel,
     deleteModel,

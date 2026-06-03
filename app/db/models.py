@@ -175,6 +175,8 @@ class ChatMessage(Base):
     rewritten_query: Mapped[str | None] = mapped_column(Text)
     sources_json: Mapped[list | None] = mapped_column(JSON)
     retrieval_trace_json: Mapped[dict | None] = mapped_column(JSON)
+    rendered_context: Mapped[str | None] = mapped_column(Text)
+    prompt_context_summary: Mapped[str | None] = mapped_column(Text)
     model_config_json: Mapped[dict | None] = mapped_column(JSON)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="completed", index=True)
     error_message: Mapped[str | None] = mapped_column(Text)
@@ -245,9 +247,33 @@ class FAQEntry(Base):
     faq_metadata: Mapped[dict | None] = mapped_column("metadata", JSON)
     tag_id: Mapped[str | None] = mapped_column(String(36), index=True)
     enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, index=True)
+    is_recommended: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class FAQImportResult(Base):
+    __tablename__ = "faq_import_results"
+    __table_args__ = (Index("ix_faq_import_results_tenant_kb_created", "tenant_id", "knowledge_base_id", "created_at"),)
+
+    task_id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    tenant_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    knowledge_base_id: Mapped[str] = mapped_column(ForeignKey("knowledge_bases.id"), nullable=False, index=True)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="completed", index=True)
+    progress: Mapped[int] = mapped_column(Integer, nullable=False, default=100)
+    total: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    processed: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    succeeded: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    failed: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    failures_json: Mapped[list | None] = mapped_column(JSON)
+    error_summary: Mapped[str | None] = mapped_column(Text)
+    import_mode: Mapped[str] = mapped_column(String(16), nullable=False, default="append")
+    display_status: Mapped[str] = mapped_column(String(16), nullable=False, default="open", index=True)
+    processing_time_ms: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    imported_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
 
 
 class Chunk(Base):

@@ -71,6 +71,20 @@ class FakeVectorStore:
             if item.get("knowledge_id") == knowledge_id:
                 item["knowledge_base_id"] = target_kb_id
 
+    def set_enabled_for_chunk_ids(self, *, chunk_ids: list[str], is_enabled: bool) -> None:
+        self.set_payload_for_chunk_ids(chunk_ids=chunk_ids, payload={"is_enabled": is_enabled})
+
+    def set_payload_for_chunk_ids(self, *, chunk_ids: list[str], payload: dict) -> None:
+        chunk_id_set = set(chunk_ids)
+        for item in self.points:
+            if item["payload"].get("chunk_id") in chunk_id_set:
+                item["payload"].update(payload)
+        for item in self.results:
+            if item.get("chunk_id") in chunk_id_set:
+                item.update(payload)
+                if "metadata" in payload:
+                    item["metadata"] = payload["metadata"]
+
     def search(
         self,
         *,
@@ -83,6 +97,7 @@ class FakeVectorStore:
             item
             for item in self.results
             if item["knowledge_base_id"] == knowledge_base_id
+            and item.get("is_enabled", True) is not False
         ]
         if score_threshold is not None:
             results = [item for item in results if float(item.get("score") or 0) >= score_threshold]

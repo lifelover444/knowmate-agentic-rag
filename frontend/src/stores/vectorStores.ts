@@ -1,10 +1,11 @@
 import { ref } from "vue";
 import { defineStore } from "pinia";
 import { deleteRequest, getJson, postJson, putJson } from "../utils/api";
-import type { VectorStorePayload, VectorStoreRead } from "../types/api";
+import type { VectorStorePayload, VectorStoreRead, VectorStoreTypeRead } from "../types/api";
 
 export const useVectorStoresStore = defineStore("vectorStores", () => {
   const vectorStores = ref<VectorStoreRead[]>([]);
+  const vectorStoreTypes = ref<VectorStoreTypeRead[]>([]);
   const loading = ref(false);
   const testing = ref(false);
 
@@ -16,6 +17,11 @@ export const useVectorStoresStore = defineStore("vectorStores", () => {
     } finally {
       loading.value = false;
     }
+  }
+
+  async function loadVectorStoreTypes() {
+    vectorStoreTypes.value = await getJson<VectorStoreTypeRead[]>("/vector-stores/types");
+    return vectorStoreTypes.value;
   }
 
   async function createVectorStore(payload: VectorStorePayload) {
@@ -46,9 +52,11 @@ export const useVectorStoresStore = defineStore("vectorStores", () => {
 
   return {
     vectorStores,
+    vectorStoreTypes,
     loading,
     testing,
     loadVectorStores,
+    loadVectorStoreTypes,
     createVectorStore,
     updateVectorStore,
     deleteVectorStore,

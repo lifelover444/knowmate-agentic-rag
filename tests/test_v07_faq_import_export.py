@@ -71,7 +71,24 @@ def test_faq_csv_import_append_reports_failures_and_indexes_successes(client: Te
     result = response.json()
     assert result["imported"] == 1
     assert result["failed"] == 1
+    assert result["task_id"]
+    assert result["processed"] == 2
+    assert result["succeeded"] == 1
+    assert result["status"] == "completed"
     assert result["errors"][0]["row"] == 3
+    progress = client.get(f"/api/v1/knowledge-bases/{kb_id}/faqs/import-progress/{result['task_id']}")
+    assert progress.status_code == 200, progress.text
+    assert progress.json()["processed"] == 2
+    last_result = client.get(f"/api/v1/knowledge-bases/{kb_id}/faqs/import-last-result")
+    assert last_result.status_code == 200, last_result.text
+    assert last_result.json()["task_id"] == result["task_id"]
+    assert last_result.json()["display_status"] == "open"
+    close_response = client.put(
+        f"/api/v1/knowledge-bases/{kb_id}/faqs/import-last-result/display-status",
+        json={"display_status": "close"},
+    )
+    assert close_response.status_code == 200, close_response.text
+    assert close_response.json()["display_status"] == "close"
     faqs = client.get(f"/api/v1/knowledge-bases/{kb_id}/faqs").json()
     assert faqs[0]["question"] == "如何申请退款？"
     assert faqs[0]["tag_id"] == tag["id"]

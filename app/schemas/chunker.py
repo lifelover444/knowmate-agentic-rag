@@ -24,6 +24,12 @@ class PreviewChunkingStats(BaseModel):
     min_chars: int
     max_chars: int
     stddev_chars: int
+    avg_tokens: int = 0
+    min_tokens: int = 0
+    max_tokens: int = 0
+    stddev_tokens: int = 0
+    token_limit: int | None = None
+    size_distribution: dict[str, int] = Field(default_factory=dict)
     truncated_to: int | None = None
 
 
@@ -32,5 +38,11 @@ class PreviewChunkingResponse(BaseModel):
     tier_chain: list[str]
     rejected: list[dict]
     profile: dict
+    protected_blocks: dict[str, int] = Field(default_factory=dict)
+    token_limit_applied: bool = False
+    token_limit_reason: str = ""
+    requested_chunk_size: int = 0
+    effective_chunk_size: int = 0
+    fallback_tier: str | None = None
     chunks: list[PreviewChunk]
     stats: PreviewChunkingStats

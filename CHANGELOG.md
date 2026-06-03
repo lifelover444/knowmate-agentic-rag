@@ -1,5 +1,70 @@
 # Changelog
 
+## v0.8
+
+v0.8 是 v0.71 之后的 WeKnora-style Quick Q&A 可解释性、检索质量和管理闭环版本，聚合 TASK-025 到 TASK-045。主线仍保持单租户 Quick Q&A，不进入 Agent/Wiki/RBAC 大范围。
+
+### Added
+
+- 新增 Quick Q&A retrieval diagnostics 后端和前端展示：
+  - trace 细化到 rewrite、vector、keyword、RRF、parent_expand、deduplicate、FAQ merge、rerank、answer 等阶段。
+  - answer 侧保存 `rendered_context` 和 `prompt_context_summary`，便于复盘回答上下文。
+  - 多轮问答增加轻量 history merge，追问会结合最近上下文生成检索输入。
+- 新增 rerank 质量控制：
+  - rerank passage cleaning、失败降级、阈值降级和 MMR 去冗余。
+  - 低置信 rerank 结果会回退到原始排序，避免硬过滤导致无结果。
+- 新增 FAQ 导入和管理闭环：
+  - FAQ 导入记录 progress、last result、display status 和失败摘要。
+  - FAQ 支持字段批量更新，包括启停、推荐状态、标签和 metadata 同步。
+  - 检索阶段新增 FAQ merge / boost 独立策略，高置信 FAQ 命中可有限提权。
+- 新增 chunk 管理能力：
+  - 支持按 chunk id 查询、更新 content/search_text/metadata/is_enabled 和禁用 chunk。
+  - 支持 generated questions 手工新增/删除，并同步 search_text 和向量 payload metadata。
+  - 前端文档预览可打开 chunk 详情抽屉，编辑 chunk 和 generated questions。
+- 新增 chunk debug 和 token-aware validation：
+  - chunker preview 展示策略链、被拒绝层级、文档画像、保护块统计和 size distribution。
+  - 增加轻量 token 估算和 token limit 生效诊断，覆盖中文、英文和混合文本。
+- 新增会话检索与统计：
+  - `POST /api/v1/messages/search` 支持按历史问答搜索。
+  - `GET /api/v1/messages/chat-history-stats` 返回会话和消息统计。
+  - Chat 侧栏展示历史问答搜索入口和可检索消息数。
+- 新增模型和向量后端元数据：
+  - `GET /api/v1/models/providers` 返回 OpenAI-compatible provider presets。
+  - `GET /api/v1/vector-stores/types` 返回 Qdrant 可用状态和 OpenSearch、Elasticsearch、Milvus、Weaviate、Doris、Tencent VectorDB 等 planned provider metadata。
+  - 引入 composite retriever 接口和 retriever fan-out diagnostics。
+  - 新增 OpenSearch/Elasticsearch sparse/BM25 后端 MVP，当前以 fake/test-client 与配置边界验证为主。
+- 新增运行状态真实化和附件上下文：
+  - `/api/v1/runtime-status` 增强 database、local storage、vector runtime、model_configs、vector_stores、storage_providers、parser engines 和修复建议。
+  - Quick Q&A 支持临时文本附件上下文，附件只进入本轮 prompt，不写入知识库、不写入 Qdrant、不作为 sources 返回。
+
+### Fixed
+
+- 修复 Alembic revision id 超过 PostgreSQL 默认 `alembic_version.version_num` 长度导致 `alembic upgrade head` 失败的问题，TASK-032 migration revision 缩短为 `0016_task032_faq_recommended`。
+- 修复 `scripts/start-dev.ps1` 对 `docker compose` 和 `alembic` 等原生命令非零退出不敏感的问题；现在会检查 `$LASTEXITCODE` 并停止启动流程。
+
+### Changed
+
+- Quick Q&A source、trace、last-request state 和 rendered context 更完整地暴露检索依据，但仍不回显 API Key 等敏感信息。
+- Settings 页面从静态占位进一步转为真实运行状态和 provider 能力展示。
+- VectorStore 管理仍只允许创建当前可用 provider；planned provider 返回明确中文错误，不做静默 fallback。
+
+### Not Included
+
+- 不实现完整登录、RBAC、多租户 workspace、审计日志。
+- 不实现 Agent Mode、MCP 工具、Wiki Mode、GraphRAG 或外部数据源同步。
+- 不接入生产级 OpenSearch/Elasticsearch 集群、Milvus、Weaviate、Doris、Tencent VectorDB 或对象存储 provider。
+- 不接入真实 MinerU/OCR、DocReader、WeKnoraCloud、VLM、ASR。
+
+### Verification
+
+- `python -m pytest -q`：`184 passed`
+- `ruff check app tests`：通过
+- `python -m compileall app tests alembic`：通过
+- `npm --prefix frontend run build`：通过，仍有 Vite 大 chunk 提示。
+- `python -m pytest tests/test_dev_start_script.py tests/test_v07_chat_mentioned_items.py tests/test_v06_quick_answer_stream.py -q`：`12 passed`
+- `ruff check alembic app tests`：通过
+- 本地启动烟测：`scripts/start-dev.ps1` 完成后 PostgreSQL、Redis、Qdrant healthy，API `/health` 返回 `{"status":"ok"}`，Alembic current 为 `0016_task032_faq_recommended (head)`，Vite 工作台 `http://127.0.0.1:5173/#/chat` 显示“后端已连接”。
+
 ## v0.71
 
 v0.71 是 v0.7 WeKnora P0 对齐之后的 Quick Q&A 操作闭环与可观测性版本，聚合 TASK-020 到 TASK-024，并补齐软删除后同文件重新上传的稳定性问题。本版本仍不进入 Agent/Wiki/RBAC 大范围，继续保持单租户 Quick Q&A 主线。

@@ -1,4 +1,5 @@
 from app.core.config import Settings
+from app.integrations.opensearch_store import OpenSearchSparseStore
 from app.integrations.qdrant_store import QdrantVectorStore
 
 SENSITIVE_CONFIG_KEYS = {"api_key", "password", "secret", "token"}
@@ -22,9 +23,14 @@ class VectorStoreRegistry:
 
     def build(self, provider: str, config: dict | None = None):
         provider = provider.lower()
-        if provider != "qdrant":
-            raise ValueError("v0.5 仅支持 Qdrant VectorStore")
-        return QdrantVectorStore(self.settings, config=config)
+        config = config or {}
+        if provider == "qdrant":
+            return QdrantVectorStore(self.settings, config=config)
+        if provider in {"opensearch", "elasticsearch"}:
+            if config.get("fake") or config.get("client"):
+                return OpenSearchSparseStore(config=config)
+            raise ValueError("OpenSearch/Elasticsearch VectorStore 未配置，当前 Quick Q&A 默认仅启用 Qdrant")
+        raise ValueError(f"不支持的 VectorStore provider：{provider}")
 
     def default_config(self) -> dict:
         return {

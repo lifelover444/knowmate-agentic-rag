@@ -52,6 +52,24 @@ class ModelRead(BaseModel):
     updated_at: datetime
 
 
+class ModelProviderCredentialField(BaseModel):
+    name: str
+    label: str
+    sensitive: bool = True
+    required: bool = True
+
+
+class ModelProviderPreset(BaseModel):
+    value: str
+    label: str
+    description: str
+    model_types: list[str]
+    default_urls: dict[str, str]
+    default_models: dict[str, str]
+    embedding_dimensions: dict[str, int] = Field(default_factory=dict)
+    credential_fields: list[ModelProviderCredentialField] = Field(default_factory=list)
+
+
 class ModelCredentialPayload(BaseModel):
     api_key: str | None = Field(default=None, max_length=4096)
 

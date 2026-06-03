@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 from app.core.config import Settings
 from app.db.models import ChatMessage, Knowledge
 from app.integrations.llm_openai import OpenAIChatModel
+from app.rag.attachments import prepare_attachments
 from app.rag.prompt import build_quick_answer_messages
 from app.rag.query_rewrite import build_query_rewrite_messages
 from app.rag.quick_answer import AnswerResult, AnswerSource
@@ -21,6 +22,9 @@ class QuickAnswerPrepared:
     source_payloads: list[dict]
     retrieval_trace: dict
     model_config: dict
+    rendered_context: str = ""
+    prompt_context_summary: str = ""
+    attachment_metadata: list[dict] | None = None
     rewritten_query: str | None = None
     messages: list[dict[str, str]] | None = None
     chat_model: object | None = None
@@ -43,6 +47,7 @@ class QuickAnswerService:
         enable_rerank: bool | None = None,
         knowledge_base_ids: list[str] | None = None,
         knowledge_ids: list[str] | None = None,
+        attachments: list | None = None,
     ):
         prepared = self.prepare_answer(
             knowledge_base_id=knowledge_base_id,
@@ -52,6 +57,7 @@ class QuickAnswerService:
             top_k=top_k,
             mode=mode,
             enable_rerank=enable_rerank,
+            attachments=attachments,
         )
         return AnswerResult(answer=prepared.answer, sources=prepared.sources)
 
@@ -70,8 +76,11 @@ class QuickAnswerService:
         temperature: float | None = None,
         system_prompt: str | None = None,
         generate_answer: bool = True,
+        attachments: list | None = None,
     ) -> QuickAnswerPrepared:
         primary_kb_id = knowledge_base_id or _primary_knowledge_base_id(knowledge_base_ids, knowledge_ids, self.db)
+        prepared_attachments, attachments_context = prepare_attachments(attachments or [])
+        attachment_metadata = [item.metadata() for item in prepared_attachments]
         stages: list[dict] = []
         rewrite_started = time.perf_counter()
         rewritten_query, rewrite_trace = self._rewrite_query(
@@ -89,6 +98,7 @@ class QuickAnswerService:
                 "rewrite",
                 rewrite_status,
                 rewrite_started,
+                input={"query": query, "history_count": len(history or [])},
                 output={
                     "enabled": enable_query_rewrite,
                     "rewritten_query": rewritten_query,
@@ -98,8 +108,13 @@ class QuickAnswerService:
             )
         )
         search_query = rewritten_query or query
-        search_started = time.perf_counter()
-        hits = KnowledgeSearchService(self.db, self.settings, self.embedder, self.vector_store).search(
+        conversation_context, history_trace = _build_conversation_context(history or [])
+        search_result = KnowledgeSearchService(
+            self.db,
+            self.settings,
+            self.embedder,
+            self.vector_store,
+        ).search_with_diagnostics(
             knowledge_base_id=knowledge_base_id,
             knowledge_base_ids=knowledge_base_ids,
             knowledge_ids=knowledge_ids,
@@ -108,24 +123,9 @@ class QuickAnswerService:
             top_k=top_k,
             enable_rerank=enable_rerank,
         )
-        stages.append(
-            _trace_stage(
-                "search",
-                "done",
-                search_started,
-                output={"hit_count": len(hits), "mode": mode, "top_k": top_k},
-            )
-        )
+        hits = search_result.hits
+        stages.extend(search_result.diagnostics.get("stages") or [])
         model_config = self._model_config_payload(primary_kb_id)
-        should_rerank = bool(enable_rerank)
-        stages.append(
-            _trace_stage(
-                "rerank",
-                "done" if should_rerank else "skipped",
-                None,
-                output={"enabled": should_rerank},
-            )
-        )
         answer_started = time.perf_counter()
         retrieval_trace = {
             **rewrite_trace,
@@ -133,11 +133,29 @@ class QuickAnswerService:
             "top_k": top_k,
             "enable_rerank": enable_rerank,
             "hit_count": len(hits),
+            "diagnostics": search_result.diagnostics,
+            "context_chunk_ids": [hit.chunk_id for hit in hits],
+            "context_char_count": 0,
+            "context_truncated": False,
+            "attachments_used": bool(prepared_attachments),
+            "attachments": attachment_metadata,
+            "attachments_truncated": any(item.truncated for item in prepared_attachments),
+            "attachments_char_count": sum(item.char_count for item in prepared_attachments),
+            "prompt_context_summary": "",
+            "rendered_context": "",
+            **history_trace,
             "stages": stages,
         }
-        if not hits:
+        if not hits and not attachments_context:
             retrieval_trace["stages"].append(
-                _trace_stage("answer", "skipped", answer_started, output={"reason": "no_hits"})
+                _trace_stage(
+                    "answer",
+                    "skipped",
+                    answer_started,
+                    input={"hit_count": 0},
+                    output={"reason": "no_hits"},
+                    error_message="没有在知识库中找到可引用的内容。",
+                )
             )
             return QuickAnswerPrepared(
                 answer="没有在知识库中找到可引用的内容。",
@@ -145,20 +163,27 @@ class QuickAnswerService:
                 source_payloads=[],
                 retrieval_trace=retrieval_trace,
                 model_config=model_config,
+                attachment_metadata=attachment_metadata,
                 rewritten_query=rewritten_query,
             )
 
         sources = [_hit_to_source(hit) for hit in hits]
+        context_blocks = [_source_context(source) for source in sources]
+        raw_context = "\n\n---\n\n".join(context_blocks)
+        combined_context = "\n\n---\n\n".join([part for part in [raw_context, attachments_context] if part])
+        rendered_context, context_truncated = _truncate_text(combined_context, max_chars=6000)
+        prompt_context_summary = _build_prompt_context_summary(sources, attachment_metadata=attachment_metadata)
+        retrieval_trace["context_char_count"] = len(combined_context)
+        retrieval_trace["context_truncated"] = context_truncated
+        retrieval_trace["prompt_context_summary"] = prompt_context_summary
+        retrieval_trace["rendered_context"] = rendered_context
         chat_model = self._chat_model(primary_kb_id)
         messages = build_quick_answer_messages(
             query=search_query,
-            contexts=[
-                f"{source.context_header}\n\n{source.context_content or source.content}"
-                if source.context_header
-                else source.context_content or source.content
-                for source in sources
-            ],
+            contexts=context_blocks,
             system_prompt=system_prompt,
+            conversation_context=conversation_context,
+            attachments_context=attachments_context,
         )
         answer = _complete(chat_model, messages, temperature or 0.2) if generate_answer else ""
         retrieval_trace["stages"].append(
@@ -166,6 +191,7 @@ class QuickAnswerService:
                 "answer",
                 "done" if generate_answer else "pending",
                 answer_started,
+                input={"context_count": len(sources), "attachment_count": len(prepared_attachments)},
                 output={"streaming": not generate_answer},
             )
         )
@@ -176,6 +202,9 @@ class QuickAnswerService:
             source_payloads=source_payloads,
             retrieval_trace=retrieval_trace,
             model_config=model_config,
+            rendered_context=rendered_context,
+            prompt_context_summary=prompt_context_summary,
+            attachment_metadata=attachment_metadata,
             rewritten_query=rewritten_query,
             messages=messages,
             chat_model=chat_model,
@@ -307,6 +336,83 @@ def _source_to_read(source: AnswerSource) -> SourceRead:
     )
 
 
+def _source_context(source: AnswerSource) -> str:
+    body = source.context_content or source.content
+    return f"{source.context_header}\n\n{body}" if source.context_header else body
+
+
+def _build_prompt_context_summary(
+    sources: list[AnswerSource],
+    *,
+    attachment_metadata: list[dict] | None = None,
+    max_chars: int = 1200,
+) -> str:
+    lines: list[str] = []
+    for index, source in enumerate(sources, start=1):
+        text = " ".join((source.context_content or source.content or "").split())
+        preview = text[:180]
+        title = source.title or source.document_id
+        lines.append(f"{index}. {title} / {source.chunk_id}: {preview}")
+    for attachment in attachment_metadata or []:
+        truncated = "，已截断" if attachment.get("truncated") else ""
+        lines.append(f"附件: {attachment.get('filename')} ({attachment.get('file_type')}{truncated})")
+    summary = "\n".join(lines)
+    truncated, _ = _truncate_text(summary, max_chars=max_chars)
+    return truncated
+
+
+def _build_conversation_context(
+    history: list[ChatMessage],
+    *,
+    max_messages: int = 6,
+    max_chars: int = 1600,
+) -> tuple[str, dict]:
+    eligible = [
+        message
+        for message in history
+        if message.role in {"user", "assistant"} and message.content and message.status != "failed"
+    ]
+    selected = eligible[-max_messages:]
+    candidate_lines: list[str] = []
+    for message in selected:
+        role = "User" if message.role == "user" else "Assistant"
+        content = " ".join(message.content.split())
+        if content:
+            candidate_lines.append(f"{role}: {content}")
+    raw_context = "\n".join(candidate_lines)
+    kept_reversed: list[str] = []
+    used_chars = 0
+    truncated = False
+    for line in reversed(candidate_lines):
+        separator_chars = 1 if kept_reversed else 0
+        remaining = max_chars - used_chars - separator_chars
+        if remaining <= 0:
+            truncated = True
+            break
+        if len(line) > remaining:
+            kept_reversed.append(line[: max(0, remaining - 8)].rstrip() + "…")
+            truncated = True
+            break
+        kept_reversed.append(line)
+        used_chars += len(line) + separator_chars
+    if len(kept_reversed) < len(candidate_lines):
+        truncated = True
+    conversation_context = "\n".join(reversed(kept_reversed))
+    return conversation_context, {
+        "history_used": bool(conversation_context),
+        "history_message_count": len(selected),
+        "history_char_count": len(raw_context),
+        "history_truncated": truncated,
+    }
+
+
+def _truncate_text(value: str, *, max_chars: int) -> tuple[str, bool]:
+    text = value or ""
+    if len(text) <= max_chars:
+        return text, False
+    return text[:max_chars].rstrip() + "\n...[已截断]", True
+
+
 def _complete(chat_model, messages: list[dict[str, str]], temperature: float) -> str:
     try:
         return chat_model.complete(messages, temperature=temperature)
@@ -344,6 +450,7 @@ def _trace_stage(
     status: str,
     started_at: float | None,
     *,
+    input: dict | None = None,
     output: dict | None = None,
     error_message: str | None = None,
 ) -> dict:
@@ -352,6 +459,7 @@ def _trace_stage(
         "name": name,
         "status": status,
         "duration_ms": duration_ms,
+        "input": input or {},
         "output": output or {},
         "error_message": error_message,
     }

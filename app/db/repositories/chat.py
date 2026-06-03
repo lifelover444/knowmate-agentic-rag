@@ -1,6 +1,6 @@
 from datetime import UTC, datetime
 
-from sqlalchemy import or_, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from app.db.models import ChatMessage, ChatSession, Chunk, FAQEntry, Knowledge
@@ -77,6 +77,56 @@ class ChatRepository:
             ).all()
         )
 
+    def search_messages_by_keyword(
+        self,
+        tenant_id: int,
+        keyword: str,
+        session_ids: list[str] | None = None,
+        limit: int = 20,
+    ) -> list[tuple[ChatMessage, ChatSession]]:
+        pattern = f"%{keyword.strip()}%"
+        stmt = (
+            select(ChatMessage, ChatSession)
+            .join(ChatSession, ChatSession.id == ChatMessage.session_id)
+            .where(
+                ChatSession.tenant_id == tenant_id,
+                ChatSession.deleted_at.is_(None),
+                ChatMessage.tenant_id == tenant_id,
+                ChatMessage.content.ilike(pattern),
+            )
+        )
+        if session_ids:
+            stmt = stmt.where(ChatMessage.session_id.in_(session_ids))
+        ordered = stmt.order_by(ChatMessage.created_at.desc(), ChatMessage.id.desc()).limit(limit)
+        return list(self.db.execute(ordered).all())
+
+    def chat_history_stats(self, tenant_id: int) -> tuple[int, int, datetime | None]:
+        session_count = self.db.scalar(
+            select(func.count())
+            .select_from(ChatSession)
+            .where(ChatSession.tenant_id == tenant_id, ChatSession.deleted_at.is_(None))
+        )
+        message_count = self.db.scalar(
+            select(func.count())
+            .select_from(ChatMessage)
+            .join(ChatSession, ChatSession.id == ChatMessage.session_id)
+            .where(
+                ChatSession.tenant_id == tenant_id,
+                ChatSession.deleted_at.is_(None),
+                ChatMessage.tenant_id == tenant_id,
+            )
+        )
+        last_message_at = self.db.scalar(
+            select(func.max(ChatMessage.created_at))
+            .join(ChatSession, ChatSession.id == ChatMessage.session_id)
+            .where(
+                ChatSession.tenant_id == tenant_id,
+                ChatSession.deleted_at.is_(None),
+                ChatMessage.tenant_id == tenant_id,
+            )
+        )
+        return int(session_count or 0), int(message_count or 0), last_message_at
+
     def create_message(self, message: ChatMessage) -> ChatMessage:
         self.db.add(message)
         self.db.commit()
@@ -99,7 +149,7 @@ class ChatRepository:
                     FAQEntry.enabled.is_(True),
                     FAQEntry.deleted_at.is_(None),
                 )
-                .order_by(FAQEntry.updated_at.desc(), FAQEntry.created_at.desc())
+                .order_by(FAQEntry.is_recommended.desc(), FAQEntry.updated_at.desc(), FAQEntry.created_at.desc())
                 .limit(limit)
             ).all()
         )

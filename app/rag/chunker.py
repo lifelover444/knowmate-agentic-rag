@@ -4,6 +4,16 @@ from dataclasses import dataclass, field
 from typing import Literal
 
 StrategyTier = Literal["heading", "heuristic", "legacy"]
+LANG_ENGLISH = "en"
+LANG_GERMAN = "de"
+LANG_CHINESE = "zh"
+LANG_MIXED = "mixed"
+CHARS_PER_TOKEN = {
+    LANG_ENGLISH: 4.0,
+    LANG_GERMAN: 4.5,
+    LANG_CHINESE: 1.7,
+    LANG_MIXED: 3.0,
+}
 
 
 @dataclass(frozen=True)
@@ -112,6 +122,11 @@ class ChunkingDiagnostics:
     tier_chain: list[StrategyTier]
     rejected: list[TierRejection]
     profile: DocProfile
+    token_limit_applied: bool = False
+    token_limit_reason: str = ""
+    requested_chunk_size: int = 0
+    effective_chunk_size: int = 0
+    fallback_tier: StrategyTier | None = None
 
 
 @dataclass(frozen=True)
@@ -136,13 +151,19 @@ class ParentChildResult:
     children: list[ChildChunk] = field(default_factory=list)
 
 
-PROTECTED_PATTERNS = [
-    re.compile(r"(?s)\$\$.*?\$\$"),
-    re.compile(r"!\[[^\]]*]\([^)]+\)"),
-    re.compile(r"\[[^\]]+]\([^)]+\)"),
-    re.compile(r"(?m)[ ]*(?:\|[^|\n]*)+\|[\r\n]+\s*(?:\|\s*:?-{3,}:?\s*)+\|[\r\n]+(?:[ ]*(?:\|[^|\n]*)+\|[\r\n]*)*"),
-    re.compile(r"(?s)```(?:\w+)?[\r\n].*?```"),
+PROTECTED_PATTERN_SPECS = [
+    ("formula", re.compile(r"(?s)\$\$.*?\$\$")),
+    ("image", re.compile(r"!\[[^\]]*]\([^)]+\)")),
+    ("markdown_link", re.compile(r"\[[^\]]+]\([^)]+\)")),
+    (
+        "table",
+        re.compile(
+            r"(?m)[ ]*(?:\|[^|\n]*)+\|[\r\n]+\s*(?:\|\s*:?-{3,}:?\s*)+\|[\r\n]+(?:[ ]*(?:\|[^|\n]*)+\|[\r\n]*)*"
+        ),
+    ),
+    ("code", re.compile(r"(?s)```(?:\w+)?[\r\n].*?```")),
 ]
+PROTECTED_PATTERNS = [pattern for _, pattern in PROTECTED_PATTERN_SPECS]
 HEADING_RE = re.compile(r"^(#{1,6})\s+(.+?)\s*$")
 NUMBERED_RE = re.compile(r"^\s*((\d+(\.\d+){0,4})|([一二三四五六七八九十]+[、.．]))\s+.+")
 CHINESE_CHAPTER_RE = re.compile(r"^\s*第[一二三四五六七八九十百千万\d]+[章节条部分]\s*.+")
@@ -153,7 +174,12 @@ VISUAL_SEP_RE = re.compile(r"^\s*[-=_*]{3,}\s*$")
 
 class AdaptiveTextChunker:
     def __init__(self, config: ChunkingConfig | None = None) -> None:
-        self.config = ensure_defaults(config or ChunkingConfig())
+        self.requested_config = config or ChunkingConfig()
+        self.config = ensure_defaults(self.requested_config)
+        self.token_limit_applied, self.token_limit_reason = token_limit_diagnostics(
+            self.requested_config,
+            self.config,
+        )
 
     def split(self, text: str) -> list[ParsedChunk]:
         chunks, _ = self.split_with_diagnostics(text)
@@ -169,11 +195,30 @@ class AdaptiveTextChunker:
             chunks = run_tier(tier, normalized, self.config, profile)
             result = validate_chunks(chunks, len(normalized), self.config.chunk_size)
             if result.ok:
-                return chunks, ChunkingDiagnostics(tier, chain, rejected, profile)
+                return chunks, self._diagnostics(tier, chain, rejected, profile)
             rejected.append(TierRejection(tier, result.reason))
             last = (tier, chunks)
         tier, chunks = last if last else ("legacy", split_legacy(normalized, self.config))
-        return chunks, ChunkingDiagnostics(tier, chain, rejected, profile)
+        return chunks, self._diagnostics(tier, chain, rejected, profile)
+
+    def _diagnostics(
+        self,
+        tier: StrategyTier,
+        chain: list[StrategyTier],
+        rejected: list[TierRejection],
+        profile: DocProfile,
+    ) -> ChunkingDiagnostics:
+        return ChunkingDiagnostics(
+            selected_tier=tier,
+            tier_chain=chain,
+            rejected=rejected,
+            profile=profile,
+            token_limit_applied=self.token_limit_applied,
+            token_limit_reason=self.token_limit_reason,
+            requested_chunk_size=self.requested_config.chunk_size or 512,
+            effective_chunk_size=self.config.chunk_size,
+            fallback_tier=tier if rejected else None,
+        )
 
 
 class TextChunker:
@@ -189,7 +234,9 @@ class TextChunker:
 def ensure_defaults(config: ChunkingConfig) -> ChunkingConfig:
     chunk_size = config.chunk_size or 512
     if config.token_limit and config.token_limit > 0:
-        chunk_size = min(chunk_size, max(50, int(config.token_limit * 4 * 0.9)))
+        language = config_language(config.languages)
+        token_budget_chars = chars_for_token_limit(config.token_limit, language)
+        chunk_size = min(chunk_size, max(50, token_budget_chars))
     overlap = config.chunk_overlap
     if overlap < 0:
         overlap = 0
@@ -202,6 +249,76 @@ def ensure_defaults(config: ChunkingConfig) -> ChunkingConfig:
         strategy=config.strategy or "legacy",
         token_limit=config.token_limit or 0,
         languages=config.languages or [],
+    )
+
+
+def config_language(languages: list[str]) -> str:
+    for language in languages or []:
+        normalized = language.lower().strip()
+        if normalized in CHARS_PER_TOKEN:
+            return normalized
+    return LANG_MIXED
+
+
+def chars_for_token_limit(tokens: int, language: str) -> int:
+    if tokens <= 0:
+        return 0
+    ratio = CHARS_PER_TOKEN.get(language, CHARS_PER_TOKEN[LANG_MIXED])
+    return int(tokens * ratio * 0.9)
+
+
+def approx_token_count(text: str, language: str = LANG_MIXED) -> int:
+    if not text:
+        return 0
+    ratio = CHARS_PER_TOKEN.get(language, CHARS_PER_TOKEN[LANG_MIXED])
+    approx = len(text) / ratio
+    return max(1, int(approx + 0.5))
+
+
+def detect_language(sample: str) -> str:
+    if not sample:
+        return LANG_MIXED
+    cjk = latin = umlaut = 0
+    for char in sample:
+        if "\u4e00" <= char <= "\u9fff" or "\u3040" <= char <= "\u30ff" or "\uac00" <= char <= "\ud7af":
+            cjk += 1
+        elif char in "äöüÄÖÜß":
+            umlaut += 1
+            latin += 1
+        elif char.isascii() and char.isalpha():
+            latin += 1
+    total = cjk + latin
+    if total == 0:
+        return LANG_MIXED
+    cjk_ratio = cjk / total
+    latin_ratio = latin / total
+    if cjk_ratio >= 0.15 and latin_ratio >= 0.15:
+        return LANG_MIXED
+    if cjk_ratio > 0.3:
+        return LANG_CHINESE
+    if umlaut > 0 or has_german_words(sample):
+        return LANG_GERMAN
+    return LANG_ENGLISH
+
+
+def has_german_words(sample: str) -> bool:
+    text = f" {sample[:512].lower()} "
+    return any(word in text for word in (" der ", " die ", " das ", " und ", " ist ", " nicht ", " mit ", " auf "))
+
+
+def token_limit_diagnostics(requested: ChunkingConfig, effective: ChunkingConfig) -> tuple[bool, str]:
+    if not requested.token_limit or requested.token_limit <= 0:
+        return False, ""
+    requested_size = requested.chunk_size or 512
+    if effective.chunk_size >= requested_size:
+        return False, ""
+    language = config_language(requested.languages)
+    return (
+        True,
+        (
+            f"token_limit={requested.token_limit} language={language} "
+            f"clamped chunk_size {requested_size}->{effective.chunk_size}"
+        ),
     )
 
 
@@ -248,8 +365,23 @@ def profile_document(text: str) -> DocProfile:
         has_tables="| ---" in text or "|---" in text,
         has_code="```" in text,
         code_ratio=code_len / len(text) if text else 0,
-        detected_langs=[_detect_language(text[:4096])],
+            detected_langs=[_detect_language(text[:4096])],
     )
+
+
+def protected_block_stats(text: str) -> dict[str, int]:
+    stats = {name: 0 for name, _ in PROTECTED_PATTERN_SPECS}
+    spans: list[tuple[int, int]] = []
+    for name, pattern in PROTECTED_PATTERN_SPECS:
+        for match in pattern.finditer(text):
+            if name == "markdown_link" and match.start() > 0 and text[match.start() - 1] == "!":
+                continue
+            stats[name] += 1
+            spans.append(match.span())
+    merged_spans = _merge_spans(spans)
+    stats["total"] = sum(stats[name] for name, _ in PROTECTED_PATTERN_SPECS)
+    stats["total_chars"] = sum(end - start for start, end in merged_spans)
+    return stats
 
 
 def resolve_strategy_chain(profile: DocProfile, strategy: str) -> list[StrategyTier]:
@@ -423,6 +555,10 @@ def _protected_spans(text: str, patterns: list[re.Pattern] | None = None) -> lis
     spans: list[tuple[int, int]] = []
     for pattern in patterns or PROTECTED_PATTERNS:
         spans.extend(match.span() for match in pattern.finditer(text))
+    return _merge_spans(spans)
+
+
+def _merge_spans(spans: list[tuple[int, int]]) -> list[tuple[int, int]]:
     spans.sort()
     merged: list[tuple[int, int]] = []
     for start, end in spans:
@@ -603,10 +739,4 @@ def _is_separator_only(text: str) -> bool:
 
 
 def _detect_language(sample: str) -> str:
-    zh = sum(1 for char in sample if "\u4e00" <= char <= "\u9fff")
-    en = sum(1 for char in sample if char.isascii() and char.isalpha())
-    if zh and en:
-        return "mixed"
-    if zh:
-        return "zh"
-    return "en"
+    return detect_language(sample)

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, watch } from "vue";
-import type { ModelPayload, ModelRead, ModelTestPayload, ModelType } from "../types/api";
+import type { ModelPayload, ModelProviderPreset, ModelRead, ModelTestPayload, ModelType } from "../types/api";
 
 const qwenPresets = {
   cn: {
@@ -30,6 +30,7 @@ const props = defineProps<{
   modelType: ModelType;
   title: string;
   models: ModelRead[];
+  providerPresets: ModelProviderPreset[];
   selectedModelId: string;
   saving: boolean;
   testing: boolean;
@@ -68,6 +69,12 @@ const currentProvider = computed({
     else qaProvider.value = value;
   },
 });
+const availableProviderPresets = computed(() =>
+  props.providerPresets.filter((preset) => preset.model_types.includes(props.modelType)),
+);
+const selectedProviderPreset = computed(() =>
+  availableProviderPresets.value.find((preset) => preset.value === currentProvider.value),
+);
 const requiresDimension = computed(() => props.modelType === "Embedding");
 const apiKeyHint = computed(() => {
   const model = selectedModel.value;
@@ -84,9 +91,17 @@ function defaultName() {
   return "阿里云百炼 Qwen QA";
 }
 
-function applyPreset() {
+function applyProviderPreset() {
   if (applyingSelected.value) return;
   localError.value = "";
+  const backendPreset = selectedProviderPreset.value;
+  if (backendPreset) {
+    configName.value = `${backendPreset.label} ${props.modelType === "KnowledgeQA" ? "QA" : props.modelType}`;
+    baseUrl.value = backendPreset.default_urls[props.modelType] || baseUrl.value;
+    modelName.value = backendPreset.default_models[props.modelType] || modelName.value;
+    embeddingDimension.value = backendPreset.embedding_dimensions[props.modelType] || embeddingDimension.value;
+    return;
+  }
   if (currentProvider.value === "qwen") {
     const preset = qwenPresets[region.value];
     if (props.modelType === "Embedding") {
@@ -127,7 +142,7 @@ function applySelectedModel() {
     });
   } else {
     applyingSelected.value = false;
-    applyPreset();
+    applyProviderPreset();
   }
 }
 
@@ -169,7 +184,7 @@ function handleTest() {
 }
 
 watch(() => props.selectedModelId, applySelectedModel, { immediate: true });
-watch([currentProvider, region], applyPreset);
+watch([currentProvider, region, () => props.providerPresets], applyProviderPreset);
 </script>
 
 <template>
@@ -197,9 +212,9 @@ watch([currentProvider, region], applyPreset);
     <div class="model-form__grid">
       <a-form-item label="供应商">
         <a-select v-model="currentProvider" data-testid="qa-provider">
-          <a-option value="qwen">Qwen / DashScope</a-option>
-          <a-option v-if="modelType !== 'Embedding'" value="deepseek">DeepSeek</a-option>
-          <a-option value="openai-compatible">OpenAI 兼容</a-option>
+          <a-option v-for="preset in availableProviderPresets" :key="preset.value" :value="preset.value">
+            {{ preset.label }}
+          </a-option>
         </a-select>
       </a-form-item>
       <a-form-item label="区域">

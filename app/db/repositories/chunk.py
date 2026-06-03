@@ -30,6 +30,17 @@ class ChunkRepository:
     def get(self, chunk_id: str) -> Chunk | None:
         return self.db.scalar(select(Chunk).where(Chunk.id == chunk_id, Chunk.deleted_at.is_(None)))
 
+    def save(self, chunk: Chunk) -> Chunk:
+        self.db.add(chunk)
+        self.db.commit()
+        self.db.refresh(chunk)
+        return chunk
+
+    def soft_delete(self, chunk: Chunk) -> Chunk:
+        chunk.deleted_at = datetime.now(UTC)
+        chunk.is_enabled = False
+        return self.save(chunk)
+
     def keyword_search(
         self,
         *,

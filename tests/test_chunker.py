@@ -1,6 +1,9 @@
 from app.rag.chunker import (
     AdaptiveTextChunker,
     ChunkingConfig,
+    approx_token_count,
+    chars_for_token_limit,
+    detect_language,
     split_parent_child,
 )
 
@@ -74,3 +77,37 @@ def test_parent_child_chunking_links_children_to_parent_indexes():
     assert result.children
     assert {child.parent_index for child in result.children} <= set(range(len(result.parents)))
     assert any(child.context_header for child in result.children)
+
+
+def test_token_limit_uses_language_budget_and_records_diagnostics():
+    english_budget = chars_for_token_limit(100, "en")
+    chinese_budget = chars_for_token_limit(100, "zh")
+
+    assert chinese_budget < english_budget
+    assert detect_language("Hello 世界，这是一段 mixed text") == "mixed"
+    assert approx_token_count("pneumonoultramicroscopicsilicovolcanoconiosis" * 4, "en") > 0
+
+    text = "密集中文内容" * 240
+    chunks, diagnostics = AdaptiveTextChunker(
+        ChunkingConfig(strategy="legacy", chunk_size=10000, chunk_overlap=20, token_limit=100, languages=["zh"])
+    ).split_with_diagnostics(text)
+
+    assert diagnostics.token_limit_applied is True
+    assert diagnostics.requested_chunk_size == 10000
+    assert diagnostics.effective_chunk_size == chinese_budget
+    assert "token_limit=100" in diagnostics.token_limit_reason
+    assert all(approx_token_count(chunk.embedding_content(), "zh") <= 120 for chunk in chunks)
+
+
+def test_token_limit_preserves_protected_table_and_code_blocks():
+    table = "| 字段 | 说明 |\n| --- | --- |\n| name | 用户名称 |\n| email | 用户邮箱 |"
+    code = "```python\nfor index in range(20):\n    print(index)\n```"
+    text = ("普通说明。" * 80) + f"\n\n{table}\n\n" + ("更多说明。" * 80) + f"\n\n{code}\n\n" + ("结尾说明。" * 80)
+
+    chunks, diagnostics = AdaptiveTextChunker(
+        ChunkingConfig(strategy="legacy", chunk_size=10000, chunk_overlap=0, token_limit=80, languages=["zh"])
+    ).split_with_diagnostics(text)
+
+    assert diagnostics.token_limit_applied is True
+    assert any(table in chunk.content for chunk in chunks)
+    assert any(code in chunk.content for chunk in chunks)

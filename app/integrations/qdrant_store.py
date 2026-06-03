@@ -39,6 +39,7 @@ class QdrantVectorStore:
                 "tag_id": models.PayloadSchemaType.KEYWORD,
                 "chunk_type": models.PayloadSchemaType.KEYWORD,
                 "is_enabled": models.PayloadSchemaType.BOOL,
+                "is_recommended": models.PayloadSchemaType.BOOL,
                 "content": models.PayloadSchemaType.TEXT,
                 "context_header": models.PayloadSchemaType.TEXT,
             }.items():
@@ -87,6 +88,28 @@ class QdrantVectorStore:
                         models.FieldCondition(
                             key="knowledge_id",
                             match=models.MatchAny(any=knowledge_ids),
+                        )
+                    ]
+                ),
+            )
+
+    def set_enabled_for_chunk_ids(self, *, chunk_ids: list[str], is_enabled: bool) -> None:
+        self.set_payload_for_chunk_ids(chunk_ids=chunk_ids, payload={"is_enabled": is_enabled})
+
+    def set_payload_for_chunk_ids(self, *, chunk_ids: list[str], payload: dict) -> None:
+        if not chunk_ids or not payload:
+            return
+        for collection in self.client.get_collections().collections:
+            if not collection.name.startswith(f"{self.base_collection}_"):
+                continue
+            self.client.set_payload(
+                collection_name=collection.name,
+                payload=payload,
+                points=models.Filter(
+                    must=[
+                        models.FieldCondition(
+                            key="chunk_id",
+                            match=models.MatchAny(any=chunk_ids),
                         )
                     ]
                 ),

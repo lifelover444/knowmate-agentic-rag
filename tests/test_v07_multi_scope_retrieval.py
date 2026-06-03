@@ -67,6 +67,12 @@ def test_knowledge_search_supports_multi_kb_scope_and_returns_kb_name(client: Te
     assert {hit["knowledge_base_id"] for hit in hits} == {first_kb, second_kb}
     assert {hit["knowledge_base_name"] for hit in hits} == {"产品知识库", "运维知识库"}
     assert {hit["document_id"] for hit in hits} == {"doc-product", "doc-ops"}
+    retrievers = response.json()["diagnostics"]["retrievers"]
+    assert len(retrievers) == 2
+    assert {item["knowledge_base_id"] for item in retrievers} == {first_kb, second_kb}
+    assert {item["engine"] for item in retrievers} == {"qdrant+postgres"}
+    assert all(item["status"] == "done" for item in retrievers)
+    assert all(item["hit_count"] == 1 for item in retrievers)
 
 
 def test_knowledge_search_supports_file_scope_without_explicit_kb(client: TestClient, db_session):

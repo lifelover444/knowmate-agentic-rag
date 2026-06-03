@@ -70,14 +70,58 @@ async function remove(id: string) {
   }
 }
 
+function typeStatusText(status: string): string {
+  if (status === "available") return "可用";
+  if (status === "planned") return "planned";
+  return "unavailable";
+}
+
+function typeStatusColor(status: string): string {
+  if (status === "available") return "green";
+  if (status === "planned") return "orange";
+  return "gray";
+}
+
 onMounted(() => {
-  store.loadVectorStores().catch((error) => Message.error(formatApiError(error instanceof Error ? error.message : error)));
+  Promise.all([store.loadVectorStores(), store.loadVectorStoreTypes()]).catch((error) => {
+    Message.error(formatApiError(error instanceof Error ? error.message : error));
+  });
 });
 </script>
 
 <template>
   <main class="page-shell">
     <a-page-header title="VectorStore 管理" subtitle="管理知识库可绑定的 Qdrant VectorStore，敏感配置不会明文回显。" />
+
+    <section class="content-card">
+      <div class="section-heading">
+        <div>
+          <h2>VectorStore Types</h2>
+          <p>当前仅 Qdrant 可用，OpenSearch、Elasticsearch、Milvus、Weaviate、Doris、Tencent VectorDB 为 planned。</p>
+        </div>
+      </div>
+      <div class="vector-type-grid">
+        <article v-for="item in store.vectorStoreTypes" :key="item.type" class="vector-type-card">
+          <header>
+            <strong>{{ item.label }}</strong>
+            <a-tag :color="typeStatusColor(item.status)">{{ typeStatusText(item.status) }}</a-tag>
+          </header>
+          <p>{{ item.description }}</p>
+          <div class="vector-field-list">
+            <span>connection_fields</span>
+            <a-tag v-for="field in item.connection_fields" :key="`${item.type}-conn-${field.name}`">
+              {{ field.label }}{{ field.sensitive ? " · sensitive" : "" }}
+            </a-tag>
+          </div>
+          <div class="vector-field-list">
+            <span>index_fields</span>
+            <a-tag v-for="field in item.index_fields" :key="`${item.type}-index-${field.name}`">
+              {{ field.label }}
+            </a-tag>
+          </div>
+        </article>
+      </div>
+    </section>
 
     <section class="content-card">
       <div class="section-heading">
@@ -131,3 +175,47 @@ onMounted(() => {
     </section>
   </main>
 </template>
+
+<style scoped>
+.vector-type-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 12px;
+}
+
+.vector-type-card {
+  display: grid;
+  gap: 8px;
+  border: 1px solid var(--km-border);
+  border-radius: var(--km-radius);
+  padding: 12px;
+  background: var(--km-bg-card);
+}
+
+.vector-type-card header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.vector-type-card p {
+  margin: 0;
+  color: var(--km-text-secondary);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.vector-field-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+
+.vector-field-list span {
+  width: 100%;
+  color: var(--km-text-secondary);
+  font-size: 12px;
+}
+</style>

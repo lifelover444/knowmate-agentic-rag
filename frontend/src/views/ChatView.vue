@@ -7,7 +7,7 @@ import SourceCard from "../components/SourceCard.vue";
 import { useChatStore } from "../stores/chat";
 import { useKnowledgeBaseStore } from "../stores/knowledgeBase";
 import { useRetrievalStore } from "../stores/retrieval";
-import type { ChatMessageRead, ChatSessionRead, MentionedItem } from "../types/api";
+import type { AttachmentInput, ChatMessageRead, ChatSessionRead, MentionedItem, RetrievalTraceStage } from "../types/api";
 import { formatApiError } from "../utils/api";
 
 const chat = useChatStore();
@@ -20,6 +20,13 @@ const enableQueryRewrite = ref(false);
 const renameVisible = ref(false);
 const renameTitle = ref("");
 const renamingSessionId = ref("");
+const attachmentInput = ref<HTMLInputElement | null>(null);
+const chatAttachments = ref<AttachmentInput[]>([]);
+
+const acceptedAttachmentTypes = ".txt,.md,.markdown,.csv,.json";
+const maxAttachmentBytes = 64 * 1024;
+const maxAttachmentLines = 200;
+const maxAttachmentChars = 12000;
 
 const md = new MarkdownIt({
   html: false,
@@ -99,12 +106,57 @@ function requestParams() {
     mode: retrieval.retrievalMode,
     enable_rerank: retrieval.retrievalEnableRerank,
     enable_query_rewrite: enableQueryRewrite.value,
+    attachments: chatAttachments.value,
   };
 }
 
 function clearMentionScope() {
   selectedMentionKbIds.value = [];
   selectedMentionDocumentIds.value = [];
+}
+
+function attachmentFileType(filename: string): string {
+  return filename.split(".").pop()?.toLowerCase() || "";
+}
+
+function isSupportedAttachment(filename: string): boolean {
+  return ["txt", "md", "markdown", "csv", "json"].includes(attachmentFileType(filename));
+}
+
+function attachmentWillTruncate(content: string): boolean {
+  return content.split(/\r\n|\r|\n/).length > maxAttachmentLines || content.length > maxAttachmentChars;
+}
+
+function removeAttachment(filename: string) {
+  chatAttachments.value = chatAttachments.value.filter((item) => item.filename !== filename);
+}
+
+async function handleAttachmentChange(event: Event) {
+  const input = event.target as HTMLInputElement;
+  const files = Array.from(input.files || []);
+  input.value = "";
+  for (const file of files) {
+    if (!isSupportedAttachment(file.name)) {
+      Message.error(`不支持的附件类型：${file.name}，当前仅支持 txt/md/csv/json`);
+      continue;
+    }
+    if (file.size > maxAttachmentBytes) {
+      Message.error(`附件 ${file.name} 超过大小限制，当前仅支持 64KB 以内的文本附件`);
+      continue;
+    }
+    const content = await file.text();
+    const attachment: AttachmentInput = {
+      filename: file.name,
+      mime_type: file.type || null,
+      size: file.size,
+      content,
+      truncated: attachmentWillTruncate(content),
+    };
+    chatAttachments.value = [
+      ...chatAttachments.value.filter((item) => item.filename !== file.name),
+      attachment,
+    ].slice(0, 5);
+  }
 }
 
 async function newSession() {
@@ -127,6 +179,16 @@ async function newSession() {
 async function selectSession(session: ChatSessionRead) {
   try {
     await chat.loadSession(session.id);
+    selectedKbId.value = session.knowledge_base_id;
+    enableQueryRewrite.value = Boolean((session.settings as Record<string, unknown>)?.enable_query_rewrite);
+  } catch (error) {
+    Message.error(formatApiError(error instanceof Error ? error.message : error));
+  }
+}
+
+async function openHistoryResult(sessionId: string) {
+  try {
+    const session = await chat.loadSession(sessionId);
     selectedKbId.value = session.knowledge_base_id;
     enableQueryRewrite.value = Boolean((session.settings as Record<string, unknown>)?.enable_query_rewrite);
   } catch (error) {
@@ -160,6 +222,14 @@ async function deleteSession(session: ChatSessionRead) {
 async function searchSessions() {
   try {
     await chat.loadSessions(chat.sessionSearchKeyword);
+  } catch (error) {
+    Message.error(formatApiError(error instanceof Error ? error.message : error));
+  }
+}
+
+async function searchMessageHistory() {
+  try {
+    await chat.searchMessageHistory();
   } catch (error) {
     Message.error(formatApiError(error instanceof Error ? error.message : error));
   }
@@ -206,6 +276,7 @@ async function askQuestion() {
   }
   try {
     await chat.askQuestion(requestParams());
+    chatAttachments.value = [];
     if (chat.streamError) Message.error(chat.streamError);
   } catch (error) {
     Message.error(formatApiError(error instanceof Error ? error.message : error));
@@ -237,13 +308,112 @@ function messageTrace(message: ChatMessageRead): Record<string, unknown> {
   return message.retrieval_trace || {};
 }
 
-function traceStages(message: ChatMessageRead): Record<string, unknown>[] {
+function traceStages(message: ChatMessageRead): RetrievalTraceStage[] {
   const stages = messageTrace(message).stages;
-  return Array.isArray(stages) ? stages as Record<string, unknown>[] : [];
+  return Array.isArray(stages) ? stages as RetrievalTraceStage[] : [];
+}
+
+function promptContextSummary(message: ChatMessageRead): string {
+  const trace = messageTrace(message);
+  return String(message.prompt_context_summary || trace.prompt_context_summary || "");
+}
+
+function knowledgeSearchTraceStages(): RetrievalTraceStage[] {
+  return chat.knowledgeSearchResult?.diagnostics?.stages || [];
+}
+
+function traceStageLabel(name: unknown): string {
+  const labels: Record<string, string> = {
+    rewrite: "问题改写",
+    vector: "向量检索",
+    keyword: "关键词检索",
+    rrf: "RRF 合并",
+    parent_expand: "父子块扩展",
+    deduplicate: "去重",
+    faq_merge: "FAQ 合并",
+    rerank: "重排",
+    answer: "回答生成",
+  };
+  const key = String(name || "");
+  return labels[key] || key || "未知阶段";
+}
+
+function traceStatusText(status: unknown): string {
+  const labels: Record<string, string> = {
+    done: "已完成",
+    skipped: "已跳过",
+    failed: "失败",
+    pending: "待生成",
+    cancelled: "已停止",
+  };
+  const key = String(status || "");
+  return labels[key] || key || "未知";
+}
+
+function traceStatusColor(status: unknown): string {
+  const key = String(status || "");
+  if (key === "done") return "green";
+  if (key === "failed") return "red";
+  if (key === "cancelled") return "orange";
+  if (key === "pending") return "blue";
+  return "gray";
+}
+
+function traceReasonText(value: unknown): string {
+  const labels: Record<string, string> = {
+    mode_not_applicable: "不适用于当前检索模式",
+    no_hits: "没有命中来源",
+  };
+  const key = String(value || "");
+  return labels[key] || key;
+}
+
+function traceValueText(value: unknown): string {
+  if (value === null || value === undefined || value === "") return "-";
+  if (typeof value === "boolean") return value ? "是" : "否";
+  if (typeof value === "number" || typeof value === "string") return traceReasonText(value);
+  if (Array.isArray(value)) return value.length ? value.map(traceValueText).join(", ") : "-";
+  if (typeof value === "object") {
+    const entries = Object.entries(value as Record<string, unknown>)
+      .filter(([_key, entryValue]) => entryValue !== null && entryValue !== undefined && entryValue !== "")
+      .slice(0, 4)
+      .map(([key, entryValue]) => `${key}: ${traceValueText(entryValue)}`);
+    return entries.length ? entries.join("；") : "-";
+  }
+  return String(value);
+}
+
+function traceStageSummary(stage: RetrievalTraceStage): string {
+  const output = stage.output || {};
+  const input = stage.input || {};
+  const parts: string[] = [];
+  const fields: [string, string, Record<string, unknown>][] = [
+    ["命中", "hit_count", output],
+    ["输入", "input_count", output],
+    ["输出", "output_count", output],
+    ["候选", "candidate_count", input],
+    ["扩展", "expanded_count", output],
+    ["过滤", "removed_count", output],
+    ["Boost", "boost_count", output],
+    ["原因", "reason", output],
+    ["阈值", "threshold", input],
+  ];
+  for (const [label, key, source] of fields) {
+    if (source[key] !== undefined && source[key] !== null && source[key] !== "") {
+      parts.push(`${label}: ${traceValueText(source[key])}`);
+    }
+  }
+  if (stage.error_message) parts.push(`错误: ${stage.error_message}`);
+  return parts.length ? parts.join(" · ") : "暂无摘要";
 }
 
 onMounted(() => {
-  Promise.all([kbStore.loadKnowledgeBases(), retrieval.loadRetrievalConfig(), chat.loadSessions()]).then(() => {
+  Promise.all([
+    kbStore.loadKnowledgeBases(),
+    retrieval.loadRetrievalConfig(),
+    chat.loadSessions(),
+    chat.loadChatHistoryStats(),
+  ]).then(() => {
     selectedKbId.value = chat.currentSession?.knowledge_base_id || kbStore.knowledgeBases[0]?.id || "";
     if (!chat.currentSession && chat.sessions[0]) {
       selectSession(chat.sessions[0]);
@@ -300,6 +470,39 @@ watch(selectedKbId, (kbId) => {
             </a-popconfirm>
           </div>
         </div>
+        <section class="history-search-panel" data-testid="message-history-search">
+          <header>
+            <strong>历史问答搜索</strong>
+            <span>
+              可检索消息 {{ chat.chatHistoryStats?.message_count || 0 }}
+            </span>
+          </header>
+          <a-input-search
+            v-model="chat.messageSearchQuery"
+            data-testid="message-history-search-input"
+            placeholder="搜索历史回答"
+            allow-clear
+            :loading="chat.searchingMessages"
+            @search="searchMessageHistory"
+            @press-enter="searchMessageHistory"
+          />
+          <div v-if="chat.messageSearchResults.length" class="history-search-results">
+            <button
+              v-for="item in chat.messageSearchResults"
+              :key="`${item.session_id}-${item.created_at}`"
+              type="button"
+              @click="openHistoryResult(item.session_id)"
+            >
+              <strong>{{ item.session_title }}</strong>
+              <span>{{ item.query_content }}</span>
+              <small>{{ item.answer_snippet }}</small>
+            </button>
+          </div>
+          <a-empty
+            v-else-if="chat.messageSearchQuery.trim() && !chat.searchingMessages"
+            description="暂无历史问答命中"
+          />
+        </section>
         <div class="session-list" data-testid="chat-session-list">
           <div
             v-for="session in chat.filteredSessions"
@@ -427,6 +630,15 @@ watch(selectedKbId, (kbId) => {
                 {{ item.type === "kb" ? "KB" : "文件" }} · {{ item.name }}
               </a-tag>
             </div>
+            <div v-if="message.role === 'user' && message.attachments?.length" class="message-attachments">
+              <a-tag
+                v-for="attachment in message.attachments"
+                :key="`${message.id}-${attachment.filename}`"
+                :color="attachment.truncated ? 'orange' : 'blue'"
+              >
+                临时附件 · {{ attachment.filename }}{{ attachment.truncated ? " · 附件内容已截断" : "" }}
+              </a-tag>
+            </div>
             <div class="message__bubble">
               <div v-if="message.role === 'assistant'" class="markdown-body" v-html="renderMarkdown(message.content)"></div>
               <p v-else>{{ message.content }}</p>
@@ -441,11 +653,22 @@ watch(selectedKbId, (kbId) => {
                     <span>retrieval_mode: {{ messageTrace(message).retrieval_mode || "-" }}</span>
                     <span>hit_count: {{ messageTrace(message).hit_count ?? message.sources.length }}</span>
                   </div>
+                  <section
+                    v-if="promptContextSummary(message)"
+                    class="prompt-context-summary"
+                    data-testid="prompt-context-summary"
+                  >
+                    <strong>本次送入模型的上下文摘要</strong>
+                    <p>{{ promptContextSummary(message) }}</p>
+                  </section>
                   <div v-if="traceStages(message).length" class="trace-stage-list" data-testid="trace-stage-list">
                     <article v-for="stage in traceStages(message)" :key="String(stage.name)">
-                      <strong>{{ stage.name }}</strong>
-                      <a-tag>{{ stage.status }}</a-tag>
+                      <header>
+                        <strong>{{ traceStageLabel(stage.name) }}</strong>
+                        <a-tag :color="traceStatusColor(stage.status)">{{ traceStatusText(stage.status) }}</a-tag>
+                      </header>
                       <span>{{ stage.duration_ms ?? 0 }} ms</span>
+                      <small>{{ traceStageSummary(stage) }}</small>
                     </article>
                   </div>
                   <div v-if="message.sources.length" class="source-list">
@@ -466,6 +689,34 @@ watch(selectedKbId, (kbId) => {
             placeholder="请输入问题"
             @keydown.ctrl.enter.prevent="askQuestion"
           />
+          <div class="chat-attachment-panel">
+            <input
+              ref="attachmentInput"
+              data-testid="chat-attachment-input"
+              type="file"
+              multiple
+              :accept="acceptedAttachmentTypes"
+              @change="handleAttachmentChange"
+            />
+            <a-button size="small" @click="attachmentInput?.click()">添加临时附件</a-button>
+            <span class="muted-text">支持 txt/md/csv/json，单个不超过 64KB。</span>
+            <div v-if="chatAttachments.length" class="message-attachments">
+              <a-tag
+                v-for="attachment in chatAttachments"
+                :key="attachment.filename"
+                :color="attachment.truncated ? 'orange' : 'blue'"
+                closable
+                @close="removeAttachment(attachment.filename)"
+              >
+                {{ attachment.filename }}{{ attachment.truncated ? " · 附件内容已截断" : "" }}
+              </a-tag>
+            </div>
+            <a-alert
+              v-if="chatAttachments.some((attachment) => attachment.truncated)"
+              type="warning"
+              content="附件内容已截断，将只作为本轮临时上下文使用。"
+            />
+          </div>
           <a-button
             type="primary"
             data-testid="ask-question"
@@ -501,6 +752,20 @@ watch(selectedKbId, (kbId) => {
                 </a-button>
               </div>
               <div class="qa-layout__result" data-testid="knowledge-search-result">
+                <div
+                  v-if="knowledgeSearchTraceStages().length"
+                  class="trace-stage-list trace-stage-list--debug"
+                  data-testid="knowledge-search-trace"
+                >
+                  <article v-for="stage in knowledgeSearchTraceStages()" :key="`search-${stage.name}`">
+                    <header>
+                      <strong>{{ traceStageLabel(stage.name) }}</strong>
+                      <a-tag :color="traceStatusColor(stage.status)">{{ traceStatusText(stage.status) }}</a-tag>
+                    </header>
+                    <span>{{ stage.duration_ms ?? 0 }} ms</span>
+                    <small>{{ traceStageSummary(stage) }}</small>
+                  </article>
+                </div>
                 <div v-if="chat.knowledgeSearchResult?.hits.length" class="source-list">
                   <SourceCard v-for="hit in chat.knowledgeSearchResult.hits" :key="hit.chunk_id" :source="hit" />
                 </div>
@@ -535,7 +800,7 @@ watch(selectedKbId, (kbId) => {
 
 .chat-sidebar {
   display: grid;
-  grid-template-rows: auto 1fr;
+  grid-template-rows: auto auto minmax(0, 1fr);
   border-right: 1px solid var(--km-border);
   background: #fbfdfc;
 }
@@ -554,6 +819,61 @@ watch(selectedKbId, (kbId) => {
   gap: 8px;
   color: var(--km-text-secondary);
   font-size: 12px;
+}
+
+.history-search-panel {
+  display: grid;
+  gap: 10px;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--km-border);
+  background: #fff;
+}
+
+.history-search-panel header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.history-search-panel header span {
+  color: var(--km-text-secondary);
+  font-size: 12px;
+}
+
+.history-search-results {
+  display: grid;
+  gap: 8px;
+  max-height: 260px;
+  overflow: auto;
+}
+
+.history-search-results button {
+  display: grid;
+  gap: 4px;
+  border: 1px solid var(--km-border);
+  border-radius: var(--km-radius);
+  padding: 9px 10px;
+  color: var(--km-text-primary);
+  background: var(--km-bg-card);
+  text-align: left;
+  cursor: pointer;
+}
+
+.history-search-results button:hover {
+  border-color: #bfead6;
+  background: var(--km-bg-deep);
+}
+
+.history-search-results span,
+.history-search-results small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.history-search-results small {
+  color: var(--km-text-secondary);
 }
 
 .session-list {
@@ -751,6 +1071,23 @@ watch(selectedKbId, (kbId) => {
   gap: 12px;
 }
 
+.prompt-context-summary {
+  display: grid;
+  gap: 6px;
+  border: 1px solid var(--km-border);
+  border-radius: var(--km-radius);
+  padding: 10px;
+  background: #fbfdfc;
+}
+
+.prompt-context-summary p {
+  margin: 0;
+  color: var(--km-text-secondary);
+  font-size: 12px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+}
+
 .trace-stage-list {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -764,6 +1101,22 @@ watch(selectedKbId, (kbId) => {
   border-radius: var(--km-radius);
   padding: 8px;
   background: var(--km-bg-card);
+}
+
+.trace-stage-list article header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.trace-stage-list small {
+  color: var(--km-text-secondary);
+  line-height: 1.5;
+}
+
+.trace-stage-list--debug {
+  margin-bottom: 12px;
 }
 
 .trace-grid {

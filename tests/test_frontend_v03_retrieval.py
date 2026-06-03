@@ -24,3 +24,17 @@ def test_frontend_exposes_v03_retrieval_controls_and_knowledge_search():
     assert "knowledgeSearchResult" in app
     assert "retrieval_method" in app
     assert "rerank_score" in app
+
+
+def test_frontend_vector_store_settings_use_types_api():
+    app = frontend_source()
+
+    assert "/vector-stores/types" in app
+    assert "vectorStoreTypes" in app
+    assert "loadVectorStoreTypes" in app
+    assert "connection_fields" in app
+    assert "index_fields" in app
+    assert "planned" in app
+    assert "OpenSearch" in app
+    assert "Elasticsearch" in app
+    assert "Tencent VectorDB" in app

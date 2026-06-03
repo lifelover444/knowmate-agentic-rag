@@ -22,7 +22,18 @@ def test_frontend_exposes_command_palette_minimum_workflow_entries():
     assert "commandPaletteQuery" in app
     assert "filteredCommands" in app
 
-    for label in ["快速问答", "知识库", "文档管理", "FAQ 管理", "模型配置", "检索设置", "解析器状态", "存储状态"]:
+    expected_labels = [
+        "快速问答",
+        "历史问答搜索",
+        "知识库",
+        "文档管理",
+        "FAQ 管理",
+        "模型配置",
+        "检索设置",
+        "解析器状态",
+        "存储状态",
+    ]
+    for label in expected_labels:
         assert label in app
 
     for target in [

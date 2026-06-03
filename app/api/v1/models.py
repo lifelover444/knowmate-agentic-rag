@@ -9,6 +9,7 @@ from app.schemas.models import (
     ModelCreate,
     ModelCredentialPayload,
     ModelCredentialsRead,
+    ModelProviderPreset,
     ModelRead,
     ModelTestPayload,
     ModelUpdate,
@@ -36,6 +37,11 @@ def create_model(payload: ModelCreate, db: DBSession, settings: AppSettings, req
         return service(db, settings, request).create_model(payload)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/providers", response_model=list[ModelProviderPreset])
+def list_model_providers(db: DBSession, settings: AppSettings, request: Request, model_type: str | None = None):
+    return service(db, settings, request).list_provider_presets(model_type)
 
 
 @router.get("/{model_id}", response_model=ModelRead)

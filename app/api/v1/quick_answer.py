@@ -34,7 +34,7 @@ def quick_answer(
     vector_store: VectorStoreDep,
 ):
     try:
-        result = QuickAnswerService(db, settings, embedder, chat_model, vector_store).answer(
+        prepared = QuickAnswerService(db, settings, embedder, chat_model, vector_store).prepare_answer(
             knowledge_base_id=payload.knowledge_base_id,
             knowledge_base_ids=payload.knowledge_base_ids,
             knowledge_ids=payload.knowledge_ids,
@@ -42,13 +42,14 @@ def quick_answer(
             top_k=payload.top_k,
             mode=payload.mode,
             enable_rerank=payload.enable_rerank,
+            attachments=payload.attachments,
         )
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except (RuntimeError, ValueError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return QuickAnswerResponse(
-        answer=result.answer,
+        answer=prepared.answer,
         sources=[
             SourceRead(
                 document_id=source.document_id,
@@ -70,8 +71,9 @@ def quick_answer(
                 context_chunk_id=source.context_chunk_id,
                 context_content=source.context_content,
             )
-            for source in result.sources
+            for source in prepared.sources
         ],
+        retrieval_trace=prepared.retrieval_trace,
     )
 
 
@@ -108,7 +110,7 @@ def quick_answer_stream(
             raise ValueError("会话绑定的知识库与请求不一致")
         history = repo.list_messages(session.id, settings.default_tenant_id)
         session = chat_service.maybe_auto_title(session, payload.query, len(history))
-        user_message = chat_service.create_user_message(session, payload.query, payload.mentioned_items)
+        attachment_metadata: list[dict] = []
         prepared = QuickAnswerService(db, settings, embedder, chat_model, vector_store).prepare_answer(
             knowledge_base_id=payload.knowledge_base_id,
             knowledge_base_ids=payload.knowledge_base_ids,
@@ -122,6 +124,14 @@ def quick_answer_stream(
             temperature=payload.temperature,
             system_prompt=payload.system_prompt,
             generate_answer=False,
+            attachments=payload.attachments,
+        )
+        attachment_metadata = prepared.attachment_metadata or []
+        user_message = chat_service.create_user_message(
+            session,
+            payload.query,
+            payload.mentioned_items,
+            attachments=attachment_metadata,
         )
         started_at = time.perf_counter()
         base_state = _last_request_state(
@@ -160,6 +170,7 @@ def quick_answer_stream(
             yield _sse(
                 "retrieval",
                 {
+                    "id": session.id,
                     "hit_count": len(prepared.source_payloads),
                     "sources": prepared.source_payloads,
                     "retrieval_trace": prepared.retrieval_trace,
@@ -183,6 +194,8 @@ def quick_answer_stream(
                             sources=prepared.source_payloads,
                             retrieval_trace={**prepared.retrieval_trace, "stream_cancelled": True},
                             model_config=prepared.model_config,
+                            rendered_context=prepared.rendered_context,
+                            prompt_context_summary=prepared.prompt_context_summary,
                             status="cancelled",
                             error_message=reason or "用户已停止生成",
                         )
@@ -219,6 +232,8 @@ def quick_answer_stream(
                     sources=prepared.source_payloads,
                     retrieval_trace=prepared.retrieval_trace,
                     model_config=prepared.model_config,
+                    rendered_context=prepared.rendered_context,
+                    prompt_context_summary=prepared.prompt_context_summary,
                 )
             except Exception as exc:
                 error_message = f"回答生成失败：{exc}"
@@ -231,6 +246,8 @@ def quick_answer_stream(
                     sources=prepared.source_payloads,
                     retrieval_trace={**prepared.retrieval_trace, "stream_failed": True},
                     model_config=prepared.model_config,
+                    rendered_context=prepared.rendered_context,
+                    prompt_context_summary=prepared.prompt_context_summary,
                     status="failed",
                     error_message=error_message,
                 )
@@ -298,6 +315,9 @@ def _last_request_state(
         "knowledge_base_ids": payload.knowledge_base_ids,
         "knowledge_ids": payload.knowledge_ids,
         "mentioned_items": payload.mentioned_items,
+        "attachments": prepared.attachment_metadata or [],
+        "attachments_used": bool(prepared.attachment_metadata),
+        "attachments_truncated": any(item.get("truncated") for item in (prepared.attachment_metadata or [])),
         "top_k": payload.top_k,
         "mode": payload.mode,
         "enable_rerank": payload.enable_rerank,

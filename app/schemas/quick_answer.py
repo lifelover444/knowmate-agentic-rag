@@ -1,11 +1,19 @@
 from pydantic import BaseModel, Field
 
 
+class AttachmentInput(BaseModel):
+    filename: str = Field(min_length=1, max_length=255)
+    content: str = ""
+    mime_type: str | None = Field(default=None, max_length=128)
+    size: int | None = Field(default=None, ge=0)
+
+
 class QuickAnswerRequest(BaseModel):
     knowledge_base_id: str | None = None
     knowledge_base_ids: list[str] = Field(default_factory=list)
     knowledge_ids: list[str] = Field(default_factory=list)
     mentioned_items: list[dict] = Field(default_factory=list)
+    attachments: list[AttachmentInput] = Field(default_factory=list)
     query: str = Field(min_length=1)
     top_k: int | None = Field(default=None, ge=1, le=20)
     mode: str | None = None
@@ -44,3 +52,4 @@ class SourceRead(BaseModel):
 class QuickAnswerResponse(BaseModel):
     answer: str
     sources: list[SourceRead]
+    retrieval_trace: dict | None = None

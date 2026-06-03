@@ -100,8 +100,16 @@ export function patchJson<T, P = unknown>(path: string, payload?: P): Promise<T>
   });
 }
 
-export function deleteRequest<T = unknown>(path: string): Promise<T> {
-  return request<T>(apiUrl(path), { method: "DELETE" });
+export function deleteRequest<T = unknown, P = unknown>(path: string, payload?: P): Promise<T> {
+  return request<T>(apiUrl(path), {
+    method: "DELETE",
+    ...(payload === undefined
+      ? {}
+      : {
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      }),
+  });
 }
 
 export function postForm<T>(path: string, form: FormData): Promise<T> {
