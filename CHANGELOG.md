@@ -1,5 +1,64 @@
 # Changelog
 
+## v0.9
+
+v0.9 是 v0.8 之后的固定 Quick Q&A 主链路版本，聚合 TASK-046 到 TASK-055。目标是把 KnowMate 从“可配置实验型 RAG”收敛为单一、可解释、可验收的 WeKnora-style 快速问答链路：Qdrant dense retrieval + ParadeDB pg_search BM25 + RRF + mandatory rerank + parent-child context。
+
+### Added
+
+- 新增集中化 v0.9 retrieval config：
+  - 固定 `retrieval_mode=hybrid`、`vector_engine=qdrant`、`keyword_engine=paradedb_bm25`。
+  - 固定向量召回 top50、关键词召回 top50、RRF top30、rerank top8、最终 context 6 段和最多 8000 字符。
+  - 仅保留 `rerank_model_id` 作为用户需要绑定的检索模型配置项。
+- 新增 ParadeDB BM25 schema 和 repository 边界：
+  - Alembic migration 创建 `pg_search` 扩展和 `chunks` BM25 索引。
+  - PostgreSQL keyword search 使用 ParadeDB `search_text ||| :query`、`pdb.score(id)` 和 `pdb.snippet(search_text)`。
+  - 缺少 ParadeDB/pg_search 或索引不可用时返回中文明确错误。
+- 新增固定 parent-child chunk 数据契约：
+  - parent chunks 只入库作为回答上下文。
+  - child chunks 用于 embedding、Qdrant payload 和 ParadeDB BM25 检索。
+  - child payload 补齐 document id、chunk id、parent id、title、context header、chunk type 和 metadata。
+- 新增文档处理双写：
+  - 处理时清理旧 Qdrant/BM25 索引，再写 PostgreSQL chunks、BM25 child chunks 和 Qdrant child payload。
+  - 文档和知识库软删除同步清理 BM25 与向量索引。
+- 新增 v0.9 final context / sources / trace 契约：
+  - parent_expand 移到 rerank 之后，使用 rerank 选出的 child hits 扩展 parent context。
+  - Quick Q&A context_select 按 parent/context 去重、编号并限制数量和字符数。
+  - sources 返回 `document_title`、`source_type`、`snippet`、child chunk id、parent chunk id、score、rerank score 和 metadata。
+  - retrieval trace 返回 query original/normalized/rewritten、vector/keyword/RRF/rerank hit counts、selected_contexts 和非敏感模型摘要。
+
+### Changed
+
+- Quick Q&A / knowledge-search 公开 schema 不再提供用户可选 `mode`；旧请求体里的 `mode` 会被忽略，实际始终走固定 hybrid 主链路。
+- Rerank 不再可选。有候选命中但未配置可用 `Rerank` 模型时，非流式和流式 Quick Q&A 都返回中文硬错误，不静默 fallback。
+- Knowledge base 创建和编辑默认固定启用 parent-child 与 rerank。
+- 前端设置页改为 v0.9 固定主链路展示，不再提供 retrieval mode 选择、关闭 rerank、关闭 parent-child 或 planned vector backend 列表。
+- SourceCard 和 Chat trace 展示 v0.9 sources / retrieval trace，并继续避免 `[object Object]`。
+- Docker Compose 现在包含完整后端栈 `postgres / redis / qdrant / api / worker`；`api` 启动时自动执行 `alembic upgrade head`，`worker` 等待 API healthy 后消费任务。
+- `scripts/start-dev.ps1` 改为默认启动 Docker 后端栈和本机 Vite，并清理本机 API / Celery 残留，避免 Windows 路径和 Linux 容器路径混跑导致解析失败。
+
+### Not Included
+
+- 不实现登录、RBAC、多租户 workspace、审计日志。
+- 不实现 Agent Mode、Wiki Mode、GraphRAG、外部数据源同步或 Web Search provider。
+- 不接入 OpenSearch/Elasticsearch/Milvus/Weaviate/Doris/Tencent VectorDB 作为用户可选后端。
+- 不接入真实 MinerU/OCR、DocReader、WeKnoraCloud、VLM、ASR。
+- 自动化测试不依赖真实外部模型 API key；真实端到端问答仍需要人工配置 QA、Embedding 和 Rerank 模型。
+
+### Verification
+
+- `python -m pytest -q`：`209 passed`
+- `ruff check .`：通过
+- `python -m compileall app tests`：通过
+- `npm --prefix frontend run build`：通过，仍有既有 Vite 大 chunk 提示。
+- `alembic upgrade 0016_task032_faq_recommended:head --sql | Select-String -Pattern "pg_search|USING bm25|ix_chunks_paradedb_bm25"`：确认生成 `CREATE EXTENSION IF NOT EXISTS pg_search`、`USING bm25` 和 `ix_chunks_paradedb_bm25`。
+- Browser smoke：`http://127.0.0.1:5173/#/settings?section=retrieval` 确认 v0.9 固定主链路展示，旧 retrieval mode / rerank / parent-child 开关 test id 不存在；`http://127.0.0.1:5173/#/chat` 确认页面可渲染且空态不出现 `[object Object]`。
+- Docker Desktop 可用后补验通过：
+  - `docker compose up -d --build`：`api / worker / postgres / redis / qdrant` 均 healthy，`api` 自动执行在线迁移。
+  - 数据库中 `pg_search 0.24.0` 已安装，`ix_chunks_paradedb_bm25` BM25 索引存在。
+  - 本地服务 E2E：使用真实 PostgreSQL/ParadeDB 和 Qdrant、进程内 fake Embedding/Chat/Rerank，验证知识库创建、文档上传、同步处理、parent-child chunks、Qdrant point、ParadeDB BM25 hit、knowledge-search 和 quick-answer trace/sources 均通过。验收输出：`vector_hits=1`、`keyword_hits=1`、`rrf_hits=1`、`rerank_hits=1`、`selected_contexts=1`。
+  - `scripts/start-dev.ps1`：成功启动 Docker 后端栈和本机 Vite；`celery inspect ping` 只剩 Docker worker，`1 node online`；`/health` 返回 `{"status":"ok"}`，`http://127.0.0.1:5173` 返回 200。
+
 ## v0.8
 
 v0.8 是 v0.71 之后的 WeKnora-style Quick Q&A 可解释性、检索质量和管理闭环版本，聚合 TASK-025 到 TASK-045。主线仍保持单租户 Quick Q&A，不进入 Agent/Wiki/RBAC 大范围。

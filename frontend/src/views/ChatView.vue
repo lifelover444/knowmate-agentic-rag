@@ -318,6 +318,26 @@ function promptContextSummary(message: ChatMessageRead): string {
   return String(message.prompt_context_summary || trace.prompt_context_summary || "");
 }
 
+function traceHitSummary(message: ChatMessageRead): string {
+  const trace = messageTrace(message);
+  const parts = [
+    `vector_hits: ${traceValueText(trace.vector_hits)}`,
+    `keyword_hits: ${traceValueText(trace.keyword_hits)}`,
+    `rrf_hits: ${traceValueText(trace.rrf_hits)}`,
+    `rerank_hits: ${traceValueText(trace.rerank_hits)}`,
+  ];
+  return parts.join(" · ");
+}
+
+function selectedContexts(message: ChatMessageRead): Record<string, unknown>[] {
+  const contexts = messageTrace(message).selected_contexts;
+  return Array.isArray(contexts) ? contexts as Record<string, unknown>[] : [];
+}
+
+function selectedContextTitle(context: Record<string, unknown>): string {
+  return String(context.document_title || context.document_id || "未知来源");
+}
+
 function knowledgeSearchTraceStages(): RetrievalTraceStage[] {
   return chat.knowledgeSearchResult?.diagnostics?.stages || [];
 }
@@ -332,6 +352,7 @@ function traceStageLabel(name: unknown): string {
     deduplicate: "去重",
     faq_merge: "FAQ 合并",
     rerank: "重排",
+    context_select: "上下文选择",
     answer: "回答生成",
   };
   const key = String(name || "");
@@ -395,6 +416,9 @@ function traceStageSummary(stage: RetrievalTraceStage): string {
     ["扩展", "expanded_count", output],
     ["过滤", "removed_count", output],
     ["Boost", "boost_count", output],
+    ["rerank 输入", "rerank_input_count", output],
+    ["rerank 输出", "rerank_output_count", output],
+    ["选中上下文", "selected_context_count", output],
     ["原因", "reason", output],
     ["阈值", "threshold", input],
   ];
@@ -648,10 +672,12 @@ watch(selectedKbId, (kbId) => {
               <a-collapse-item key="sources" header="来源依据 / Retrieval Trace">
                 <div class="trace-panel" data-testid="message-trace">
                   <div class="trace-grid">
-                    <span>original_query: {{ messageTrace(message).original_query || message.original_query || "-" }}</span>
-                    <span>rewritten_query: {{ messageTrace(message).rewritten_query || message.rewritten_query || "-" }}</span>
+                    <span>问题原文: {{ messageTrace(message).query_original || messageTrace(message).original_query || message.original_query || "-" }}</span>
+                    <span>问题规范化: {{ messageTrace(message).query_normalized || "-" }}</span>
+                    <span>问题改写: {{ messageTrace(message).query_rewritten || messageTrace(message).rewritten_query || message.rewritten_query || "-" }}</span>
                     <span>retrieval_mode: {{ messageTrace(message).retrieval_mode || "-" }}</span>
                     <span>hit_count: {{ messageTrace(message).hit_count ?? message.sources.length }}</span>
+                    <span>{{ traceHitSummary(message) }}</span>
                   </div>
                   <section
                     v-if="promptContextSummary(message)"
@@ -660,6 +686,25 @@ watch(selectedKbId, (kbId) => {
                   >
                     <strong>本次送入模型的上下文摘要</strong>
                     <p>{{ promptContextSummary(message) }}</p>
+                  </section>
+                  <section
+                    v-if="selectedContexts(message).length"
+                    class="selected-context-list"
+                    data-testid="selected-context-list"
+                  >
+                    <strong>selected_contexts</strong>
+                    <article v-for="context in selectedContexts(message)" :key="String(context.chunk_id || context.index)">
+                      <header>
+                        <span>[{{ traceValueText(context.index) }}] {{ selectedContextTitle(context) }}</span>
+                        <a-tag>{{ traceValueText(context.source_type) }}</a-tag>
+                      </header>
+                      <small>
+                        chunk_id: {{ traceValueText(context.chunk_id) }} · parent_chunk_id:
+                        {{ traceValueText(context.parent_chunk_id) }} · rerank_score:
+                        {{ traceValueText(context.rerank_score) }}
+                      </small>
+                      <p>{{ traceValueText(context.snippet) }}</p>
+                    </article>
                   </section>
                   <div v-if="traceStages(message).length" class="trace-stage-list" data-testid="trace-stage-list">
                     <article v-for="stage in traceStages(message)" :key="String(stage.name)">
@@ -1086,6 +1131,42 @@ watch(selectedKbId, (kbId) => {
   font-size: 12px;
   line-height: 1.6;
   white-space: pre-wrap;
+}
+
+.selected-context-list {
+  display: grid;
+  gap: 8px;
+  border: 1px solid var(--km-border);
+  border-radius: var(--km-radius);
+  padding: 10px;
+  background: #fbfdfc;
+}
+
+.selected-context-list article {
+  display: grid;
+  gap: 4px;
+  border-top: 1px solid var(--km-border);
+  padding-top: 8px;
+}
+
+.selected-context-list article:first-of-type {
+  border-top: 0;
+  padding-top: 0;
+}
+
+.selected-context-list header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.selected-context-list small,
+.selected-context-list p {
+  margin: 0;
+  color: var(--km-text-secondary);
+  font-size: 12px;
+  line-height: 1.6;
 }
 
 .trace-stage-list {

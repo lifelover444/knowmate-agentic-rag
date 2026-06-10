@@ -10,6 +10,7 @@ def read(path: str) -> str:
 def test_task_020_frontend_supports_multi_file_upload_queue():
     upload_component = read("frontend/src/components/DocumentUpload.vue")
     documents_view = read("frontend/src/views/DocumentsView.vue")
+    knowledge_store = read("frontend/src/stores/knowledgeBase.ts")
 
     assert "multiple" in upload_component
     assert "selectedFiles" in upload_component
@@ -33,4 +34,9 @@ def test_task_020_frontend_supports_multi_file_upload_queue():
     assert "queueItem.errorMessage" in documents_view
     assert "上传失败" in documents_view
     assert "解析失败" in documents_view
+    assert "DocumentProcessingTimeoutError" in knowledge_store
+    assert "DocumentProcessingTimeoutError" in documents_view
+    assert "解析仍在后台进行，请稍后刷新状态。" in documents_view
+    assert 'queueItem.status = "processing"' in documents_view
+    assert "queueItem.noticeMessage" in documents_view
     assert "部分成功" in documents_view

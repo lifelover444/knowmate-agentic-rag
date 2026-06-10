@@ -13,13 +13,48 @@ def frontend_source() -> str:
 
 def test_frontend_exposes_parser_and_chunking_settings():
     app = frontend_source()
+    retrieval_view = (ROOT / "frontend" / "src" / "views" / "RetrievalSettingsView.vue").read_text(encoding="utf-8")
 
     assert "切分配置" in app
     assert "/parser-engines" in app
     assert "/chunker/preview" in app
     assert "parser_engine_rules" in app
     assert "enable_parent_child" in app
+    assert "data-testid=\"enable-parent-child\"" not in retrieval_view
+    assert "parent-child 固定启用" in retrieval_view
     assert "previewResult" in app
+
+
+def test_frontend_kb_chunking_config_is_fixed_read_only():
+    retrieval_view = (ROOT / "frontend" / "src" / "views" / "RetrievalSettingsView.vue").read_text(encoding="utf-8")
+    kb_view = (ROOT / "frontend" / "src" / "views" / "KnowledgeBaseView.vue").read_text(encoding="utf-8")
+    kb_detail = (ROOT / "frontend" / "src" / "views" / "KnowledgeBaseDetailView.vue").read_text(encoding="utf-8")
+    retrieval_store = (ROOT / "frontend" / "src" / "stores" / "retrieval.ts").read_text(encoding="utf-8")
+
+    for source in (retrieval_view, kb_view, kb_detail):
+        assert 'v-model="retrieval.chunkStrategy"' not in source
+        assert 'v-model="retrieval.chunkSize"' not in source
+        assert 'v-model="retrieval.chunkOverlap"' not in source
+        assert 'v-model="retrieval.separatorsText"' not in source
+        assert 'v-model="retrieval.tokenLimit"' not in source
+        assert 'v-model="retrieval.parentChunkSize"' not in source
+        assert 'v-model="retrieval.childChunkSize"' not in source
+        assert 'v-model="settingsForm.chunkStrategy"' not in source
+        assert 'v-model="settingsForm.chunkSize"' not in source
+        assert 'v-model="settingsForm.chunkOverlap"' not in source
+        assert 'v-model="settingsForm.separatorsText"' not in source
+        assert 'v-model="settingsForm.tokenLimit"' not in source
+
+    assert "切分配置：只读展示" in kb_view
+    assert "切分配置：只读展示" in kb_detail
+    assert 'strategy: "auto"' in retrieval_store
+    assert "chunk_size: 512" in retrieval_store
+    assert "chunk_overlap: 80" in retrieval_store
+    assert 'separators: ["\\n\\n", "\\n", "。"]' in retrieval_store
+    assert "token_limit: 0" in retrieval_store
+    assert "enable_parent_child: true" in retrieval_store
+    assert "parent_chunk_size: 4096" in retrieval_store
+    assert "child_chunk_size: 384" in retrieval_store
 
 
 def test_frontend_chunk_preview_exposes_weknora_debug_fields():

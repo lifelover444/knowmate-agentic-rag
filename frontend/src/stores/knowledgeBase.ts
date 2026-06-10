@@ -26,6 +26,16 @@ import type {
 
 export const documentProcessingMaxPolls = 300;
 
+export class DocumentProcessingTimeoutError extends Error {
+  document: DocumentRead | null;
+
+  constructor(document: DocumentRead | null) {
+    super("文档解析仍在后台进行，请稍后刷新状态。");
+    this.name = "DocumentProcessingTimeoutError";
+    this.document = document;
+  }
+}
+
 export const useKnowledgeBaseStore = defineStore("knowledgeBase", () => {
   const knowledgeBases = ref<KnowledgeBaseRead[]>([]);
   const currentKb = ref<KnowledgeBaseRead | null>(null);
@@ -170,9 +180,11 @@ export const useKnowledgeBaseStore = defineStore("knowledgeBase", () => {
 
   async function pollDocument(documentId: string) {
     polling.value = true;
+    let latestDocument: DocumentRead | null = null;
     try {
       for (let index = 0; index < documentProcessingMaxPolls; index += 1) {
         const document = await loadDocument(documentId);
+        latestDocument = document;
         if (document.parse_status === "completed") {
           await loadChunks(document.id);
           await loadDocuments(document.knowledge_base_id);
@@ -183,7 +195,7 @@ export const useKnowledgeBaseStore = defineStore("knowledgeBase", () => {
         }
         await new Promise((resolve) => setTimeout(resolve, 1000));
       }
-      throw new Error("文档解析超时，请稍后刷新查看状态。");
+      throw new DocumentProcessingTimeoutError(latestDocument);
     } finally {
       polling.value = false;
     }

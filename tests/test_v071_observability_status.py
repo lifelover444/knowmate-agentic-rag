@@ -1,7 +1,7 @@
 from conftest import create_bound_models
 from fastapi.testclient import TestClient
 
-from tests.test_v06_quick_answer_stream import parse_sse_events
+from tests.test_v06_quick_answer_stream import FixedScoreReranker, configure_rerank, parse_sse_events
 
 
 def create_kb(client: TestClient) -> str:
@@ -14,8 +14,10 @@ def create_kb(client: TestClient) -> str:
     return response.json()["id"]
 
 
-def test_quick_answer_stream_returns_stage_trace(client, fake_vector_store):
+def test_quick_answer_stream_returns_stage_trace(client, fake_vector_store, monkeypatch):
     kb_id = create_kb(client)
+    configure_rerank(client)
+    monkeypatch.setattr("app.services.knowledge_search.RerankerClient", lambda _config: FixedScoreReranker())
     fake_vector_store.results = [
         {
             "chunk_id": "chunk-trace-stage",
@@ -40,22 +42,24 @@ def test_quick_answer_stream_returns_stage_trace(client, fake_vector_store):
         "vector",
         "keyword",
         "rrf",
-        "parent_expand",
         "deduplicate",
         "faq_merge",
         "rerank",
+        "parent_expand",
+        "context_select",
         "answer",
     ]
     assert stages["rewrite"]["status"] == "skipped"
     assert stages["vector"]["status"] == "done"
     assert stages["vector"]["output"]["hit_count"] == 1
-    assert stages["keyword"]["status"] == "skipped"
-    assert stages["rrf"]["status"] == "skipped"
-    assert stages["parent_expand"]["status"] == "done"
+    assert stages["keyword"]["status"] == "done"
+    assert stages["rrf"]["status"] == "done"
     assert stages["deduplicate"]["status"] == "done"
     assert stages["faq_merge"]["status"] == "done"
     assert stages["faq_merge"]["output"]["boost_count"] == 0
-    assert stages["rerank"]["status"] == "skipped"
+    assert stages["rerank"]["status"] == "done"
+    assert stages["parent_expand"]["status"] == "done"
+    assert stages["context_select"]["status"] == "done"
     assert stages["answer"]["status"] == "done"
     assert all(isinstance(stage["duration_ms"], int) and stage["duration_ms"] >= 0 for stage in stages.values())
 

@@ -10,30 +10,32 @@ import type {
   RuntimeStatus,
 } from "../types/api";
 
-function parseList(value: string): string[] {
-  return value
-    .split(",")
-    .map((item) => item.replaceAll("\\n", "\n").trim())
-    .filter(Boolean);
-}
-
-function numberOrDefault(value: number, fallback: number): number {
-  const parsed = Number(value);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
-}
+export const FIXED_V09_CHUNKING_CONFIG: ChunkingConfig = {
+  strategy: "auto",
+  chunk_size: 512,
+  chunk_overlap: 80,
+  separators: ["\n\n", "\n", "。"],
+  token_limit: 0,
+  languages: [],
+  enable_parent_child: true,
+  parent_chunk_size: 4096,
+  child_chunk_size: 384,
+};
 
 export const useRetrievalStore = defineStore("retrieval", () => {
   const retrievalMode = ref("hybrid");
   const retrievalEmbeddingTopK = ref(50);
+  const retrievalKeywordTopK = ref(50);
   const retrievalVectorThreshold = ref(0.15);
-  const retrievalKeywordThreshold = ref(0.3);
-  const retrievalRerankTopK = ref(10);
+  const retrievalKeywordThreshold = ref(0.2);
+  const retrievalRerankTopK = ref(8);
   const retrievalRerankThreshold = ref(0.2);
   const selectedRerankModelId = ref("");
-  const retrievalEnableRerank = ref(false);
+  const retrievalEnableRerank = ref(true);
   const retrievalRrfK = ref(60);
-  const retrievalRrfVectorWeight = ref(0.7);
-  const retrievalRrfKeywordWeight = ref(0.3);
+  const retrievalRrfVectorWeight = ref(0.65);
+  const retrievalRrfKeywordWeight = ref(0.35);
+  const retrievalRrfTopK = ref(30);
 
   const parserEngines = ref<ParserEngine[]>([]);
   const runtimeStatus = ref<RuntimeStatus | null>(null);
@@ -51,7 +53,7 @@ export const useRetrievalStore = defineStore("retrieval", () => {
   const separatorsText = ref("\\n\\n,\\n,。");
   const tokenLimit = ref(0);
   const languagesText = ref("");
-  const enableParentChild = ref(false);
+  const enableParentChild = ref(true);
   const parentChunkSize = ref(4096);
   const childChunkSize = ref(384);
   const previewSample = ref("# 产品手册\n\n## 安装\n\n安装步骤一。安装步骤二。\n\n## 使用\n\n使用说明一。使用说明二。");
@@ -64,6 +66,7 @@ export const useRetrievalStore = defineStore("retrieval", () => {
   function applyRetrievalConfig(config: RetrievalConfig) {
     retrievalMode.value = config.retrieval_mode || "hybrid";
     retrievalEmbeddingTopK.value = config.embedding_top_k;
+    retrievalKeywordTopK.value = config.keyword_top_k || 50;
     retrievalVectorThreshold.value = config.vector_threshold;
     retrievalKeywordThreshold.value = config.keyword_threshold;
     retrievalRerankTopK.value = config.rerank_top_k;
@@ -73,20 +76,24 @@ export const useRetrievalStore = defineStore("retrieval", () => {
     retrievalRrfK.value = config.rrf_k;
     retrievalRrfVectorWeight.value = config.rrf_vector_weight;
     retrievalRrfKeywordWeight.value = config.rrf_keyword_weight;
+    retrievalRrfTopK.value = config.rrf_top_k || 30;
+    chunkStrategy.value = FIXED_V09_CHUNKING_CONFIG.strategy;
+    chunkSize.value = FIXED_V09_CHUNKING_CONFIG.chunk_size;
+    chunkOverlap.value = FIXED_V09_CHUNKING_CONFIG.chunk_overlap;
+    separatorsText.value = "\\n\\n,\\n,。";
+    tokenLimit.value = FIXED_V09_CHUNKING_CONFIG.token_limit;
+    languagesText.value = "";
+    enableParentChild.value = true;
+    parentChunkSize.value = FIXED_V09_CHUNKING_CONFIG.parent_chunk_size;
+    childChunkSize.value = FIXED_V09_CHUNKING_CONFIG.child_chunk_size;
   }
 
   function chunkingPayload(): ChunkingConfig {
-    const separators = parseList(separatorsText.value);
     return {
-      strategy: chunkStrategy.value,
-      chunk_size: numberOrDefault(chunkSize.value, 512),
-      chunk_overlap: Math.max(0, Number(chunkOverlap.value || 0)),
-      separators: separators.length ? separators : ["\n\n", "\n", "。"],
-      token_limit: Math.max(0, Number(tokenLimit.value || 0)),
-      languages: parseList(languagesText.value),
-      enable_parent_child: enableParentChild.value,
-      parent_chunk_size: numberOrDefault(parentChunkSize.value, 4096),
-      child_chunk_size: numberOrDefault(childChunkSize.value, 384),
+      ...FIXED_V09_CHUNKING_CONFIG,
+      separators: ["\n\n", "\n", "。"],
+      languages: [],
+      enable_parent_child: true,
     };
   }
 
@@ -112,17 +119,21 @@ export const useRetrievalStore = defineStore("retrieval", () => {
     saving.value = true;
     try {
       const config = await putJson<RetrievalConfig, RetrievalConfig>("/retrieval-config", {
-        retrieval_mode: retrievalMode.value,
-        embedding_top_k: Number(retrievalEmbeddingTopK.value),
-        vector_threshold: Number(retrievalVectorThreshold.value),
-        keyword_threshold: Number(retrievalKeywordThreshold.value),
-        rerank_top_k: Number(retrievalRerankTopK.value),
-        rerank_threshold: Number(retrievalRerankThreshold.value),
         rerank_model_id: selectedRerankModelId.value || null,
-        enable_rerank: retrievalEnableRerank.value,
-        rrf_k: Number(retrievalRrfK.value),
-        rrf_vector_weight: Number(retrievalRrfVectorWeight.value),
-        rrf_keyword_weight: Number(retrievalRrfKeywordWeight.value),
+        retrieval_mode: "hybrid",
+        vector_engine: "qdrant",
+        keyword_engine: "paradedb_bm25",
+        embedding_top_k: 50,
+        keyword_top_k: 50,
+        vector_threshold: 0.15,
+        keyword_threshold: 0.2,
+        rerank_top_k: 8,
+        rerank_threshold: 0.2,
+        enable_rerank: true,
+        rrf_k: 60,
+        rrf_vector_weight: 0.65,
+        rrf_keyword_weight: 0.35,
+        rrf_top_k: 30,
       });
       applyRetrievalConfig(config);
       return config;
@@ -157,6 +168,7 @@ export const useRetrievalStore = defineStore("retrieval", () => {
   return {
     retrievalMode,
     retrievalEmbeddingTopK,
+    retrievalKeywordTopK,
     retrievalVectorThreshold,
     retrievalKeywordThreshold,
     retrievalRerankTopK,
@@ -166,6 +178,7 @@ export const useRetrievalStore = defineStore("retrieval", () => {
     retrievalRrfK,
     retrievalRrfVectorWeight,
     retrievalRrfKeywordWeight,
+    retrievalRrfTopK,
     parserEngines,
     runtimeStatus,
     parserEngineRules,

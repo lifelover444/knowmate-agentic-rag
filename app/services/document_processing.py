@@ -61,6 +61,8 @@ class DocumentProcessingService:
                 file_path,
                 engine=_select_parser_engine(kb.parser_engine_rules, document.file_type),
             )
+            if not parsed.content.strip():
+                raise ValueError("未解析出可入库文本；该文件可能是扫描版或图片型 PDF，请接入 OCR/MinerU 后重试。")
             document.doc_metadata = {**(document.doc_metadata or {}), **parsed.metadata, "pages": parsed.pages}
             spans.end_stage(document.id, attempt, current_stage, output_json={"pages": parsed.pages})
 
@@ -104,21 +106,29 @@ class DocumentProcessingService:
             spans.begin_stage(document.id, attempt, current_stage, input_json={"vector_count": len(vectors)})
             if hasattr(self.vector_store, "delete_by_knowledge_id"):
                 self.vector_store.delete_by_knowledge_id(document.id)
+            self.chunks.bm25_delete_by_document(document.id)
             self.chunks.replace_for_document(document.id, db_chunks)
+            self.chunks.bm25_upsert_chunks(embedding_chunks)
             payloads = [
                 {
                     "content": chunk.content,
+                    "search_text": chunk.search_text,
                     "context_header": chunk.context_header,
                     "source_id": chunk.id,
                     "source_type": 1,
                     "chunk_id": chunk.id,
+                    "child_chunk_id": chunk.id,
                     "knowledge_id": document.id,
+                    "document_id": document.id,
                     "knowledge_base_id": document.knowledge_base_id,
+                    "tenant_id": document.tenant_id,
                     "title": document.title,
                     "is_enabled": chunk.is_enabled,
                     "parent_chunk_id": chunk.parent_chunk_id,
                     "tag_id": chunk.tag_id,
                     "chunk_type": chunk.chunk_type,
+                    "position": chunk.chunk_index,
+                    "index": chunk.chunk_index,
                     "metadata": chunk.chunk_metadata or {},
                 }
                 for chunk in embedding_chunks
@@ -187,18 +197,22 @@ def _build_db_chunks(document, text: str, chunking: dict) -> tuple[list[Chunk], 
         parent_ids: list[str] = []
         for parent in result.parents:
             chunk = _to_db_chunk(document, parent, len(db_chunks), "parent")
+            _apply_chunk_contract(document, chunk)
             db_chunks.append(chunk)
             parent_ids.append(chunk.id)
         embedding_chunks: list[Chunk] = []
         for child in result.children:
             chunk = _to_db_chunk(document, child.chunk, len(db_chunks), "child")
             chunk.parent_chunk_id = parent_ids[child.parent_index]
+            _apply_chunk_contract(document, chunk)
             db_chunks.append(chunk)
             embedding_chunks.append(chunk)
         return db_chunks, embedding_chunks
 
     parsed_chunks = AdaptiveTextChunker(_chunking_config(chunking)).split(text)
     db_chunks = [_to_db_chunk(document, item, item.index, "text") for item in parsed_chunks]
+    for chunk in db_chunks:
+        _apply_chunk_contract(document, chunk)
     return db_chunks, db_chunks
 
 
@@ -222,6 +236,36 @@ def _to_db_chunk(document, item: ParsedChunk, index: int, chunk_type: str) -> Ch
         chunk_metadata=metadata,
         images=item.images or [],
     )
+
+
+def _apply_chunk_contract(document, chunk: Chunk) -> Chunk:
+    metadata = dict(chunk.chunk_metadata or {})
+    metadata.update(
+        {
+            "tenant_id": document.tenant_id,
+            "knowledge_base_id": document.knowledge_base_id,
+            "document_id": document.id,
+            "knowledge_id": document.id,
+            "title": document.title,
+            "chunk_id": chunk.id,
+            "chunk_type": chunk.chunk_type,
+            "position": chunk.chunk_index,
+            "index": chunk.chunk_index,
+            "context_header": chunk.context_header,
+            "normalized_content": chunk.search_text or chunk.content,
+            "search_text": chunk.search_text or chunk.content,
+            "start_at": chunk.start_at,
+            "end_at": chunk.end_at,
+        }
+    )
+    if chunk.chunk_type == "child":
+        metadata["child_chunk_id"] = chunk.id
+        metadata["parent_chunk_id"] = chunk.parent_chunk_id
+    else:
+        metadata["child_chunk_id"] = None
+        metadata["parent_chunk_id"] = chunk.parent_chunk_id
+    chunk.chunk_metadata = metadata
+    return chunk
 
 
 def _embedding_content(chunk: Chunk) -> str:

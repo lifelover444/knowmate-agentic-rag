@@ -43,7 +43,7 @@ def test_knowledge_base_read_exposes_capabilities_and_default_pin_state(client: 
         "document": True,
         "faq": False,
         "vector": True,
-        "keyword": False,
+            "keyword": True,
         "parent_child": True,
         "rerank": True,
         "wiki": False,

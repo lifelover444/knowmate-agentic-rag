@@ -76,9 +76,9 @@ def test_kb_update_accepts_model_parser_chunking_indexing_and_vector_store(clien
     assert payload["embedding_model_id"] == next_embedding_id
     assert payload["vector_store_id"] == vector_store["id"]
     assert payload["parser_engine_rules"] == [{"file_types": ["pdf", "txt"], "engine": "builtin"}]
-    assert payload["chunking_config"]["strategy"] == "heading"
+    assert payload["chunking_config"]["strategy"] == "auto"
     assert payload["chunking_config"]["enable_parent_child"] is True
-    assert payload["indexing_strategy"]["enable_keyword"] is False
+    assert payload["indexing_strategy"]["enable_keyword"] is True
     assert payload["indexing_strategy"]["enable_parent_child"] is True
     assert payload["indexing_strategy"]["enable_rerank"] is True
     assert payload["indexing_strategy"]["enable_wiki"] is False

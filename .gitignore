@@ -11,4 +11,5 @@ node_modules/
 .runtime-logs/
 uploads/
 storage/uploads/
+storage/e2e/
 *.log

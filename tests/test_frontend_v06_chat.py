@@ -32,12 +32,16 @@ def test_frontend_chat_trace_uses_chinese_stage_labels_and_safe_summary():
     assert "traceStageLabel" in app
     assert "traceStatusText" in app
     assert "traceStageSummary" in app
+    assert "traceHitSummary" in app
+    assert "selectedContexts" in app
     assert "mode_not_applicable" in app
     assert "不适用于当前检索模式" in app
+    assert "问题规范化" in app
     assert "向量检索" in app
     assert "关键词检索" in app
     assert "RRF 合并" in app
     assert "父子块扩展" in app
+    assert "上下文选择" in app
     assert "去重" in app
     assert "FAQ 合并" in app
     assert "重排" in app
@@ -53,6 +57,22 @@ def test_frontend_chat_trace_shows_prompt_context_summary():
     assert "promptContextSummary" in app
     assert "本次送入模型的上下文摘要" in app
     assert "prompt-context-summary" in app
+
+
+def test_frontend_chat_sources_show_v09_source_contract():
+    app = frontend_source()
+
+    assert "document_title" in app
+    assert "snippet" in app
+    assert "source_type" in app
+    assert "metadata 摘要" in app
+    assert "parent_chunk_id" in app
+    assert "rerank_score" in app
+    assert "context_select" in app
+    assert "vector_hits" in app
+    assert "keyword_hits" in app
+    assert "rrf_hits" in app
+    assert "rerank_hits" in app
 
 
 def test_frontend_chat_supports_text_attachments():

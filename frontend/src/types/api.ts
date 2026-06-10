@@ -54,7 +54,10 @@ export interface ModelTestPayload extends ModelPayload {
 
 export interface RetrievalConfig {
   retrieval_mode: string;
+  vector_engine?: string;
+  keyword_engine?: string;
   embedding_top_k: number;
+  keyword_top_k: number;
   vector_threshold: number;
   keyword_threshold: number;
   rerank_top_k: number;
@@ -64,6 +67,12 @@ export interface RetrievalConfig {
   rrf_k: number;
   rrf_vector_weight: number;
   rrf_keyword_weight: number;
+  rrf_top_k: number;
+  enable_parent_child?: boolean;
+  parent_chunk_size?: number;
+  child_chunk_size?: number;
+  final_context_count?: number;
+  max_context_chars?: number;
 }
 
 export interface ChunkingConfig {
@@ -523,7 +532,10 @@ export interface SourceRead {
   knowledge_base_id: string;
   knowledge_base_name?: string | null;
   chunk_id: string;
+  document_title?: string | null;
   title?: string | null;
+  snippet?: string | null;
+  source_type?: string | null;
   content: string;
   score: number;
   context_header?: string | null;

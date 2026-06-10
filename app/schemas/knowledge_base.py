@@ -10,7 +10,7 @@ class ChunkingConfigSchema(BaseModel):
     strategy: str = Field(default="auto")
     token_limit: int = Field(default=0, ge=0, le=8192)
     languages: list[str] = Field(default_factory=list)
-    enable_parent_child: bool = False
+    enable_parent_child: bool = True
     parent_chunk_size: int = Field(default=4096, ge=512, le=8192)
     child_chunk_size: int = Field(default=384, ge=64, le=2048)
 
@@ -23,8 +23,8 @@ class ParserEngineRuleSchema(BaseModel):
 class IndexingStrategySchema(BaseModel):
     enable_vector: bool = True
     enable_keyword: bool = True
-    enable_parent_child: bool = False
-    enable_rerank: bool = False
+    enable_parent_child: bool = True
+    enable_rerank: bool = True
     enable_wiki: bool = False
     enable_knowledge_graph: bool = False
 

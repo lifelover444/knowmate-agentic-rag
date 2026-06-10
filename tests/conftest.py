@@ -104,6 +104,11 @@ class FakeVectorStore:
         return results[:limit]
 
 
+class FixedScoreReranker:
+    def rerank(self, *, query: str, documents: list[str], top_n: int):
+        return [(index, 1.0 - index * 0.1) for index in range(min(len(documents), top_n))]
+
+
 @pytest.fixture
 def fake_embedder() -> FakeEmbedder:
     return FakeEmbedder()
@@ -185,3 +190,27 @@ def create_bound_models(client: TestClient) -> tuple[str, str]:
     )
     assert embedding_response.status_code == 201, embedding_response.text
     return chat_response.json()["id"], embedding_response.json()["id"]
+
+
+def create_rerank_model(client: TestClient) -> str:
+    response = client.post(
+        "/api/v1/models",
+        json={
+            "name": "Test Rerank",
+            "type": "Rerank",
+            "provider": "qwen",
+            "source": "remote",
+            "base_url": "https://example.com/v1/reranks",
+            "api_key": "sk-test-1234",
+            "model_name": "qwen3-rerank",
+        },
+    )
+    assert response.status_code == 201, response.text
+    return response.json()["id"]
+
+
+def configure_rerank(client: TestClient) -> str:
+    rerank_id = create_rerank_model(client)
+    response = client.put("/api/v1/retrieval-config", json={"rerank_model_id": rerank_id})
+    assert response.status_code == 200, response.text
+    return rerank_id

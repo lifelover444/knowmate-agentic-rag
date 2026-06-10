@@ -26,8 +26,17 @@ export const useModelsStore = defineStore("models", () => {
   const deleting = ref(false);
   const legacyConfig = ref<LegacyModelConfig | null>(null);
 
-  const chatModels = computed(() => models.value.filter((model) => model.type === "KnowledgeQA"));
-  const embeddingModels = computed(() => models.value.filter((model) => model.type === "Embedding"));
+  function isRealSelectableModel(model: ModelRead): boolean {
+    const modelName = model.model_name.trim().toLowerCase();
+    return model.model_name !== "fake-embedding" && !modelName.startsWith("fake-");
+  }
+
+  const chatModels = computed(() =>
+    models.value.filter((model) => model.type === "KnowledgeQA" && isRealSelectableModel(model)),
+  );
+  const embeddingModels = computed(() =>
+    models.value.filter((model) => model.type === "Embedding" && isRealSelectableModel(model)),
+  );
   const rerankModels = computed(() => models.value.filter((model) => model.type === "Rerank"));
   const modelGroups = computed(() => [
     { type: "KnowledgeQA", label: "KnowledgeQA 模型组", models: chatModels.value },

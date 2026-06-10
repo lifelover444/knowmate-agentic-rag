@@ -5,7 +5,6 @@ import { useRouter } from "vue-router";
 import { useKnowledgeBaseStore } from "../stores/knowledgeBase";
 import { useModelsStore } from "../stores/models";
 import { useRetrievalStore } from "../stores/retrieval";
-import { useVectorStoresStore } from "../stores/vectorStores";
 import type { KnowledgeBaseRead } from "../types/api";
 import { formatApiError } from "../utils/api";
 
@@ -13,7 +12,6 @@ const router = useRouter();
 const kbStore = useKnowledgeBaseStore();
 const modelStore = useModelsStore();
 const retrieval = useRetrievalStore();
-const vectorStore = useVectorStoresStore();
 const createVisible = ref(false);
 const editVisible = ref(false);
 const creating = ref(false);
@@ -26,11 +24,8 @@ const createForm = reactive({
   kb_type: "document",
   embedding_model_id: "",
   summary_model_id: "",
-  vector_store_id: "",
-  enable_vector: true,
-  enable_keyword: true,
-  enable_parent_child: false,
-  enable_rerank: false,
+  enable_parent_child: true,
+  enable_rerank: true,
 });
 
 const editForm = reactive({
@@ -39,11 +34,8 @@ const editForm = reactive({
   kb_type: "document",
   embedding_model_id: "",
   summary_model_id: "",
-  vector_store_id: "",
-  enable_vector: true,
-  enable_keyword: true,
-  enable_parent_child: false,
-  enable_rerank: false,
+  enable_parent_child: true,
+  enable_rerank: true,
 });
 
 function openCreateModal() {
@@ -52,11 +44,8 @@ function openCreateModal() {
   createForm.kb_type = "document";
   createForm.embedding_model_id = modelStore.selectedEmbeddingModelId;
   createForm.summary_model_id = modelStore.selectedChatModelId;
-  createForm.vector_store_id = vectorStore.vectorStores.find((store) => store.is_default)?.id || "";
-  createForm.enable_vector = true;
-  createForm.enable_keyword = true;
-  createForm.enable_parent_child = false;
-  createForm.enable_rerank = false;
+  createForm.enable_parent_child = true;
+  createForm.enable_rerank = true;
   createVisible.value = true;
 }
 
@@ -69,14 +58,14 @@ async function submitCreate() {
       kb_type: createForm.kb_type,
       embedding_model_id: createForm.embedding_model_id,
       summary_model_id: createForm.summary_model_id,
-      vector_store_id: createForm.vector_store_id || null,
+      vector_store_id: null,
       chunking_config: retrieval.chunkingPayload(),
       parser_engine_rules: retrieval.parserEngineRulesPayload(),
       indexing_strategy: {
-        enable_vector: createForm.enable_vector,
-        enable_keyword: createForm.enable_keyword,
-        enable_parent_child: createForm.enable_parent_child,
-        enable_rerank: createForm.enable_rerank,
+        enable_vector: true,
+        enable_keyword: true,
+        enable_parent_child: true,
+        enable_rerank: true,
         enable_wiki: false,
         enable_knowledge_graph: false,
       },
@@ -92,18 +81,14 @@ async function submitCreate() {
 }
 
 function openEditModal(record: any) {
-  const strategy = record.indexing_strategy || {};
   editingKbId.value = record.id;
   editForm.name = record.name;
   editForm.description = record.description || "";
   editForm.kb_type = record.kb_type || "document";
   editForm.embedding_model_id = record.embedding_model_id;
   editForm.summary_model_id = record.summary_model_id;
-  editForm.vector_store_id = record.vector_store_id || "";
-  editForm.enable_vector = strategy.enable_vector !== false;
-  editForm.enable_keyword = strategy.enable_keyword !== false;
-  editForm.enable_parent_child = Boolean(strategy.enable_parent_child);
-  editForm.enable_rerank = Boolean(strategy.enable_rerank);
+  editForm.enable_parent_child = true;
+  editForm.enable_rerank = true;
   editVisible.value = true;
 }
 
@@ -116,12 +101,12 @@ async function submitEdit() {
       kb_type: editForm.kb_type,
       embedding_model_id: editForm.embedding_model_id,
       summary_model_id: editForm.summary_model_id,
-      vector_store_id: editForm.vector_store_id || null,
+      vector_store_id: null,
       indexing_strategy: {
-        enable_vector: editForm.enable_vector,
-        enable_keyword: editForm.enable_keyword,
-        enable_parent_child: editForm.enable_parent_child,
-        enable_rerank: editForm.enable_rerank,
+        enable_vector: true,
+        enable_keyword: true,
+        enable_parent_child: true,
+        enable_rerank: true,
         enable_wiki: false,
         enable_knowledge_graph: false,
       },
@@ -181,7 +166,6 @@ onMounted(() => {
   Promise.all([
     kbStore.loadKnowledgeBases(),
     modelStore.loadModels(),
-    vectorStore.loadVectorStores(),
     retrieval.loadParserEngines(),
   ]).catch((error) => {
     Message.error(formatApiError(error instanceof Error ? error.message : error));
@@ -301,69 +285,60 @@ onMounted(() => {
           </a-select>
         </a-form-item>
         <a-form-item label="VectorStore">
-          <a-select v-model="createForm.vector_store_id" allow-clear placeholder="使用默认 Qdrant">
-            <a-option v-for="store in vectorStore.vectorStores" :key="store.id" :value="store.id">
-              {{ store.name }} · {{ store.provider }}{{ store.is_default ? " · 默认" : "" }}
-            </a-option>
-          </a-select>
+          <a-tag color="blue">VectorStore：默认 Qdrant</a-tag>
         </a-form-item>
         <a-divider>索引策略</a-divider>
         <div class="form-grid form-grid--compact">
           <a-form-item label="vector">
-            <a-switch v-model="createForm.enable_vector" />
+            <a-tag color="green">vector 固定开启</a-tag>
           </a-form-item>
           <a-form-item label="keyword">
-            <a-switch v-model="createForm.enable_keyword" />
+            <a-tag color="green">keyword 固定开启</a-tag>
           </a-form-item>
           <a-form-item label="parent-child">
-            <a-switch v-model="createForm.enable_parent_child" />
+            <a-tag color="green">parent-child 固定开启 · v0.9 固定启用</a-tag>
           </a-form-item>
           <a-form-item label="rerank">
-            <a-switch v-model="createForm.enable_rerank" />
+            <a-tag color="green">rerank 固定开启 · v0.9 固定启用</a-tag>
           </a-form-item>
           <a-form-item label="Wiki">
-            <a-switch :model-value="false" disabled />
+            <a-tag color="gray">Wiki 关闭</a-tag>
           </a-form-item>
           <a-form-item label="Knowledge Graph">
-            <a-switch :model-value="false" disabled />
+            <a-tag color="gray">Knowledge Graph 关闭</a-tag>
           </a-form-item>
         </div>
-        <a-divider>切分配置</a-divider>
+        <a-divider>切分配置：只读展示</a-divider>
         <div class="form-grid form-grid--compact">
           <a-form-item label="策略">
-            <a-select v-model="retrieval.chunkStrategy" data-testid="chunk-strategy">
-              <a-option value="auto">auto</a-option>
-              <a-option value="heading">heading</a-option>
-              <a-option value="heuristic">heuristic</a-option>
-              <a-option value="legacy">legacy</a-option>
-            </a-select>
+            <a-tag>auto</a-tag>
           </a-form-item>
           <a-form-item label="chunk size">
-            <a-input-number v-model="retrieval.chunkSize" data-testid="chunk-size" />
+            <a-tag>512</a-tag>
           </a-form-item>
           <a-form-item label="overlap">
-            <a-input-number v-model="retrieval.chunkOverlap" data-testid="chunk-overlap" />
+            <a-tag>80</a-tag>
           </a-form-item>
           <a-form-item label="separators">
-            <a-input v-model="retrieval.separatorsText" data-testid="chunk-separators" />
+            <a-tag>"\n\n", "\n", "。"</a-tag>
           </a-form-item>
           <a-form-item label="token limit">
-            <a-input-number v-model="retrieval.tokenLimit" data-testid="token-limit" />
+            <a-tag>0</a-tag>
           </a-form-item>
           <a-form-item label="languages">
-            <a-input v-model="retrieval.languagesText" data-testid="chunk-languages" />
+            <a-tag>未指定</a-tag>
           </a-form-item>
           <a-form-item label="parent-child">
-            <a-switch v-model="retrieval.enableParentChild" data-testid="enable-parent-child" />
+            <a-tag color="green">true</a-tag>
           </a-form-item>
           <a-form-item label="parent size">
-            <a-input-number v-model="retrieval.parentChunkSize" data-testid="parent-chunk-size" />
+            <a-tag>4096</a-tag>
           </a-form-item>
           <a-form-item label="child size">
-            <a-input-number v-model="retrieval.childChunkSize" data-testid="child-chunk-size" />
+            <a-tag>384</a-tag>
           </a-form-item>
         </div>
-        <a-alert type="info" content="创建 payload 将包含 chunking_config 与 parser_engine_rules。" />
+        <a-alert type="info" content="创建 payload 将按 v0.9 主链路写入固定 chunking_config 与 parser_engine_rules。" />
       </div>
     </a-modal>
 
@@ -396,31 +371,27 @@ onMounted(() => {
           </a-select>
         </a-form-item>
         <a-form-item label="VectorStore">
-          <a-select v-model="editForm.vector_store_id" allow-clear placeholder="使用默认 Qdrant">
-            <a-option v-for="store in vectorStore.vectorStores" :key="store.id" :value="store.id">
-              {{ store.name }} · {{ store.provider }}{{ store.is_default ? " · 默认" : "" }}
-            </a-option>
-          </a-select>
+          <a-tag color="blue">VectorStore：默认 Qdrant</a-tag>
         </a-form-item>
         <a-divider>索引策略</a-divider>
         <div class="form-grid form-grid--compact">
           <a-form-item label="vector">
-            <a-switch v-model="editForm.enable_vector" />
+            <a-tag color="green">vector 固定开启</a-tag>
           </a-form-item>
           <a-form-item label="keyword">
-            <a-switch v-model="editForm.enable_keyword" />
+            <a-tag color="green">keyword 固定开启</a-tag>
           </a-form-item>
           <a-form-item label="parent-child">
-            <a-switch v-model="editForm.enable_parent_child" />
+            <a-tag color="green">parent-child 固定开启 · v0.9 固定启用</a-tag>
           </a-form-item>
           <a-form-item label="rerank">
-            <a-switch v-model="editForm.enable_rerank" />
+            <a-tag color="green">rerank 固定开启 · v0.9 固定启用</a-tag>
           </a-form-item>
           <a-form-item label="Wiki">
-            <a-switch :model-value="false" disabled />
+            <a-tag color="gray">Wiki 关闭</a-tag>
           </a-form-item>
           <a-form-item label="Knowledge Graph">
-            <a-switch :model-value="false" disabled />
+            <a-tag color="gray">Knowledge Graph 关闭</a-tag>
           </a-form-item>
         </div>
       </div>

@@ -1,9 +1,16 @@
 from datetime import UTC, datetime
 
-from sqlalchemy import delete, func, or_, select
+from sqlalchemy import bindparam, delete, or_, select, text
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.db.models import Chunk
+
+PARADEDB_UNAVAILABLE_MESSAGE = "ParadeDB BM25 未就绪，请先安装 pg_search 扩展并执行数据库迁移。"
+
+
+class ParadeDBUnavailableError(RuntimeError):
+    pass
 
 
 class ChunkRepository:
@@ -52,7 +59,7 @@ class ChunkRepository:
         knowledge_ids: list[str] | None = None,
     ) -> list[dict]:
         if self.db.bind and self.db.bind.dialect.name == "postgresql":
-            return self._postgres_keyword_search(
+            return self._paradedb_bm25_search(
                 knowledge_base_id=knowledge_base_id,
                 query=query,
                 limit=limit,
@@ -76,7 +83,17 @@ class ChunkRepository:
         self.db.commit()
         return len(chunks)
 
-    def _postgres_keyword_search(
+    def bm25_delete_by_document(self, knowledge_id: str) -> int:
+        return self.soft_delete_by_document(knowledge_id)
+
+    def bm25_upsert_chunks(self, chunks: list[Chunk]) -> list[Chunk]:
+        self.db.add_all(chunks)
+        self.db.commit()
+        for chunk in chunks:
+            self.db.refresh(chunk)
+        return chunks
+
+    def _paradedb_bm25_search(
         self,
         *,
         knowledge_base_id: str,
@@ -85,22 +102,19 @@ class ChunkRepository:
         score_threshold: float | None,
         knowledge_ids: list[str] | None,
     ) -> list[dict]:
-        ts_query = func.plainto_tsquery("simple", query)
-        score_expr = func.ts_rank(func.to_tsvector("simple", func.coalesce(Chunk.search_text, "")), ts_query)
-        statement = (
-            select(Chunk, score_expr.label("score"))
-            .where(
-                Chunk.knowledge_base_id == knowledge_base_id,
-                Chunk.deleted_at.is_(None),
-                Chunk.is_enabled.is_(True),
-                func.to_tsvector("simple", func.coalesce(Chunk.search_text, "")).op("@@")(ts_query),
-            )
-        )
+        statement = _build_paradedb_bm25_sql(has_knowledge_ids=bool(knowledge_ids))
+        params = {
+            "knowledge_base_id": knowledge_base_id,
+            "query": query,
+            "limit": limit,
+        }
         if knowledge_ids:
-            statement = statement.where(Chunk.knowledge_id.in_(knowledge_ids))
-        statement = statement.order_by(score_expr.desc(), Chunk.chunk_index.asc()).limit(limit)
-        rows = self.db.execute(statement).all()
-        results = [_keyword_row(chunk, float(score or 0)) for chunk, score in rows]
+            params["knowledge_ids"] = list(knowledge_ids)
+        try:
+            rows = self.db.execute(statement, params).mappings().all()
+        except SQLAlchemyError as exc:
+            raise ParadeDBUnavailableError(PARADEDB_UNAVAILABLE_MESSAGE) from exc
+        results = [_bm25_row(row) for row in rows]
         if score_threshold is not None:
             results = [item for item in results if float(item["score"]) >= score_threshold]
         return results
@@ -159,4 +173,56 @@ def _keyword_row(chunk: Chunk, score: float) -> dict:
         "metadata": metadata,
         "title": title,
         "score": score,
+    }
+
+
+def _build_paradedb_bm25_sql(*, has_knowledge_ids: bool):
+    knowledge_filter = "AND knowledge_id IN :knowledge_ids" if has_knowledge_ids else ""
+    statement = text(
+        f"""
+        SELECT
+            id AS chunk_id,
+            knowledge_id,
+            knowledge_base_id,
+            content,
+            context_header,
+            parent_chunk_id,
+            chunk_type,
+            metadata,
+            metadata ->> 'title' AS title,
+            pdb.score(id) AS score,
+            pdb.snippet(search_text) AS snippet
+        FROM chunks
+        WHERE knowledge_base_id = :knowledge_base_id
+          AND deleted_at IS NULL
+          AND is_enabled IS TRUE
+          AND chunk_type = 'child'
+          {knowledge_filter}
+          AND search_text ||| :query
+        ORDER BY score DESC, chunk_index ASC
+        LIMIT :limit
+        """
+    )
+    if has_knowledge_ids:
+        statement = statement.bindparams(bindparam("knowledge_ids", expanding=True))
+    return statement
+
+
+def _bm25_row(row) -> dict:
+    metadata = dict(row.get("metadata") or {})
+    snippet = row.get("snippet")
+    if snippet:
+        metadata["snippet"] = snippet
+    return {
+        "chunk_id": row["chunk_id"],
+        "knowledge_id": row["knowledge_id"],
+        "knowledge_base_id": row["knowledge_base_id"],
+        "content": row["content"],
+        "context_header": row.get("context_header"),
+        "parent_chunk_id": row.get("parent_chunk_id"),
+        "chunk_type": row.get("chunk_type"),
+        "metadata": metadata,
+        "title": row.get("title") or metadata.get("title"),
+        "score": float(row.get("score") or 0),
+        "snippet": snippet,
     }

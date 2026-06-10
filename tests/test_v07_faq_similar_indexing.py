@@ -1,6 +1,6 @@
 from io import BytesIO
 
-from conftest import create_bound_models
+from conftest import FixedScoreReranker, configure_rerank, create_bound_models
 from fastapi.testclient import TestClient
 
 from app.db.models import Chunk, FAQEntry
@@ -68,7 +68,10 @@ def test_faq_index_modes_control_question_answer_and_separate_chunks(
     client: TestClient,
     db_session,
     fake_vector_store,
+    monkeypatch,
 ):
+    configure_rerank(client)
+    monkeypatch.setattr("app.services.knowledge_search.RerankerClient", lambda _config: FixedScoreReranker())
     question_only_kb = _create_faq_kb(
         client,
         {"index_mode": "question_only", "question_index_mode": "combined"},
@@ -116,5 +119,5 @@ def test_faq_index_modes_control_question_answer_and_separate_chunks(
         json={"knowledge_base_id": separate_kb, "query": "发票怎么申请", "mode": "keyword_only"},
     )
     assert search_response.status_code == 200, search_response.text
-    assert search_response.json()["hits"][0]["metadata"]["matched_question"] == "发票怎么申请"
+    assert any(hit["metadata"]["matched_question"] == "发票怎么申请" for hit in search_response.json()["hits"])
     assert any(point["payload"]["metadata"]["matched_question"] == "哪里下载发票" for point in fake_vector_store.points)

@@ -1,5 +1,11 @@
 # AI Done Log
 
+### 2026-06-08 | DOCS | v0.9 当前版本文档同步
+- summary: 同步当前 v0.9 文档口径：KnowMate 固定 Quick Q&A 主链路已完成 TASK-046 到 TASK-055；默认开发运行方式为 Docker API + Docker worker + 本机 Vite；`scripts/start-dev.ps1` 负责启动 Docker 后端栈和本机 Vite，不等同于自动化测试；不要混跑本机 `uvicorn` / `celery` 与 Docker `api` / `worker`。
+- files: `README.md`, `CHANGELOG.md`, `docs/v0.9.md`, `docs/ai-loop/done.md`
+- verification: `python -m pytest tests/test_dev_start_script.py tests/test_docker_compose_stack.py -q` -> 9 passed; `ruff check tests/test_dev_start_script.py tests/test_docker_compose_stack.py` -> All checks passed; `scripts/start-dev.ps1` -> Docker `api / worker / postgres / redis / qdrant` healthy, `/health` ok, frontend 5173 returned 200, Celery ping showed one Docker worker online.
+- follow_ups: 更新项目代码后先运行 `scripts/start-dev.ps1` 启动环境；需要确认代码质量时继续运行 `python -m pytest -q`、`ruff check .`、`python -m compileall app tests` 和 `npm --prefix frontend run build`。
+
 ### 2026-06-03 | v0.8 | TASK-025 到 TASK-045 版本归档
 - summary: 将 TASK-025 到 TASK-045 归档为 `v0.8`：retrieval diagnostics、trace 前端展示、rendered context、history merge、rerank cleaning/MMR、FAQ import progress、FAQ 字段批量更新、FAQ boost、chunk by-id/update/disable、generated questions、chunk 管理前端、chunk debug、token-aware validation、message search、model providers、vector-store types、composite retriever、OpenSearch sparse MVP、runtime status 真实化和文本附件上下文，共同构成 v0.71 操作闭环之后的 WeKnora-style Quick Q&A 可解释性、检索质量和管理闭环版本。
 - files: `README.md`, `CHANGELOG.md`, `docs/ai-loop/requirements.md`, `docs/ai-loop/done.md`, `docs/weknora-full-gap-analysis-2026-06-02.zh-CN.md`
@@ -315,3 +321,63 @@
 - summary: What was delivered.
 - files: path/to/file
 - follow_ups: none
+
+### 2026-06-06 | TASK-046 | v0.9 固定检索配置和默认参数
+- summary: 收敛 v0.9 固定 RAG 主链路配置；retrieval config 服务层固定 hybrid/qdrant/paradedb_bm25、RRF、rerank、parent-child 和上下文参数，仅保留 rerank_model_id 作为模型绑定；新建 KB 默认开启 parent-child/rerank 并归一化禁用输入；Quick Q&A 和 knowledge search 忽略旧 vector_only/keyword_only 请求，trace/diagnostics 回写实际 hybrid 主链路；FAQ boost 在 hybrid RRF 后继续按原始 vector/keyword 置信度判断。
+- files: `app/schemas/retrieval.py`, `app/services/retrieval_config.py`, `app/services/knowledge_base.py`, `app/schemas/knowledge_base.py`, `app/services/knowledge_search.py`, `app/services/quick_answer.py`, `tests/test_v09_fixed_retrieval_config.py`, `tests/test_v05_indexing_strategy.py`, `tests/test_v03_knowledge_search.py`, `tests/test_quick_answer.py`, `docs/ai-loop/requirements.md`, `docs/superpowers/plans/2026-06-06-v09-task-046-055.md`
+- verification: `python -m pytest tests/test_v09_fixed_retrieval_config.py -q` -> 3 passed; `python -m pytest tests/test_v05_indexing_strategy.py tests/test_v03_knowledge_search.py tests/test_quick_answer.py tests/test_v09_fixed_retrieval_config.py -q` -> 23 passed; `python -m compileall app tests` -> exit 0; `ruff check app tests` -> All checks passed.
+- follow_ups: 自动进入 `TASK-047`。
+
+### 2026-06-06 | TASK-047 | 固定 parent-child chunk 数据契约
+- summary: 文档处理固定使用 parent-child chunking 和 auto 策略归一；parent chunks 只入库用于上下文，child chunks 用于 embedding/retrieval；child chunk metadata 和 Qdrant payload 补齐 tenant_id、knowledge_base_id、document_id、child_chunk_id、parent_chunk_id、title、context_header、chunk_type、position/index、normalized_content/search_text；旧 enable_parent_child=false 输入不再让新处理任务退回单层 chunk；generated questions 更新同步 search_text 到向量 payload。
+- files: `app/services/knowledge_base.py`, `app/services/document_processing.py`, `app/services/chunk.py`, `tests/test_document_processing_chunk_payload.py`, `tests/test_v08_chunks_api.py`, `docs/ai-loop/requirements.md`
+- verification: `python -m pytest tests/test_document_processing_chunk_payload.py -q` -> 2 passed; `python -m pytest tests/test_chunker.py tests/test_document_processing_chunk_payload.py tests/test_v08_chunks_api.py -q` -> 11 passed; `python -m compileall app tests` -> exit 0; `ruff check app tests` -> All checks passed.
+- follow_ups: 自动进入 `TASK-048`。
+
+### 2026-06-06 | TASK-048 | ParadeDB BM25 schema 和 repository 边界
+- summary: 新增 v0.9 ParadeDB pg_search BM25 migration；repository 层将 PostgreSQL keyword search 切换为 ParadeDB BM25 SQL，使用 `search_text ||| :query`、`pdb.score(id)` 和 `pdb.snippet(search_text)`，并限定 child chunks；ParadeDB 缺失时返回中文可读错误；保留 SQLite/fake fallback 供自动测试；补充 BM25 upsert/delete repository 边界方法。
+- files: `alembic/versions/0017_v09_paradedb_bm25.py`, `app/db/repositories/chunk.py`, `tests/test_v09_paradedb_bm25.py`, `docs/ai-loop/requirements.md`
+- verification: `python -m pytest tests/test_v09_paradedb_bm25.py -q` -> 3 passed; `python -m pytest tests/test_v03_retriever.py tests/test_v03_knowledge_search.py tests/test_v09_paradedb_bm25.py -q` -> 24 passed; `alembic upgrade 0016_task032_faq_recommended:head --sql | Select-String ...` -> confirmed `CREATE EXTENSION IF NOT EXISTS pg_search`, `USING bm25`, `ix_chunks_paradedb_bm25`; `python -m compileall app tests` -> exit 0; `ruff check app tests` -> All checks passed. Online `alembic upgrade head` was attempted with `connect_timeout=3` and failed because local Postgres at `localhost:15432` timed out; Docker Desktop API was unavailable, so real ParadeDB migration could not be exercised in this environment.
+- follow_ups: 自动进入 `TASK-049`。
+
+### 2026-06-06 | TASK-049 | 文档处理双写 Qdrant 和 ParadeDB BM25
+- summary: 文档处理 upsert 阶段固定清理旧 Qdrant/BM25，再写入 PostgreSQL chunks、BM25 child chunks 边界和 Qdrant child payload；BM25 upsert 失败会让处理进入 failed 状态并保留中文错误，不再假装 completed；文档和知识库软删除同步调用 BM25 delete 与向量删除。
+- files: `app/services/document_processing.py`, `app/services/document.py`, `app/services/knowledge_base.py`, `tests/test_document_processing_chunk_payload.py`, `tests/test_v071_document_lifecycle.py`, `docs/ai-loop/requirements.md`
+- verification: `python -m pytest tests/test_document_processing_chunk_payload.py tests/test_v071_document_lifecycle.py -q` -> 8 passed; `python -m pytest tests/test_document_processing_chunk_payload.py tests/test_v071_document_lifecycle.py tests/test_v03_knowledge_search.py -q` -> 15 passed; `python -m compileall app tests` -> exit 0; `ruff check app tests` -> All checks passed.
+- follow_ups: 自动进入 `TASK-050`。
+
+### 2026-06-06 | TASK-050 | 固定 Quick Q&A hybrid 检索入口
+- summary: 从公开 Quick Q&A 和 knowledge search 请求 schema 移除旧 `mode` 字段，路由和 service 不再传递用户 mode；旧请求体里的 `mode` 作为 extra 被忽略，实际 trace 固定为 hybrid；Quick Q&A stream 固定启用 query rewrite 入口，无历史时明确 skipped；新增验证 vector/keyword top50 与 RRF top30。
+- files: `app/schemas/knowledge_search.py`, `app/schemas/quick_answer.py`, `app/api/v1/knowledge_search.py`, `app/api/v1/quick_answer.py`, `app/services/knowledge_search.py`, `app/services/quick_answer.py`, `tests/test_v09_hybrid_entry.py`, `tests/test_v06_quick_answer_stream.py`, `docs/ai-loop/requirements.md`
+- verification: `python -m pytest tests/test_v09_hybrid_entry.py -q` -> 2 passed; `python -m pytest tests/test_v03_knowledge_search.py tests/test_quick_answer.py tests/test_v06_quick_answer_stream.py tests/test_v09_hybrid_entry.py -q` -> 25 passed; `python -m compileall app tests` -> exit 0; `ruff check app tests` -> All checks passed.
+- follow_ups: 自动进入 `TASK-051`。
+
+### 2026-06-06 | TASK-051 | mandatory rerank
+- summary: 将 Quick Q&A rerank 收敛为 v0.9 必需阶段；有候选命中时即使旧请求传 `enable_rerank=false` 也必须执行 rerank；缺少 rerank 模型配置时非流式和流式 Quick Q&A 均返回中文硬错误；rerank provider 调用失败不再静默 fallback；trace 记录 rerank_input_count、rerank_output_count、model_config_used 和耗时。
+- files: `app/services/knowledge_search.py`, `tests/test_model_config_required.py`, `tests/test_v03_knowledge_search.py`, `tests/test_quick_answer.py`, `tests/test_v06_quick_answer_stream.py`, `tests/test_v09_hybrid_entry.py`, `docs/ai-loop/requirements.md`
+- verification: `python -m pytest tests/test_model_config_required.py tests/test_v03_retriever.py tests/test_v03_knowledge_search.py tests/test_quick_answer.py tests/test_v06_quick_answer_stream.py tests/test_v09_hybrid_entry.py -q` -> 43 passed; `python -m compileall app tests` -> exit 0; `ruff check .` -> All checks passed.
+- follow_ups: 自动进入 `TASK-052`。
+
+### 2026-06-06 | TASK-052 | parent context、sources 和 retrieval trace 最终契约
+- summary: 将 parent_expand 调整到 rerank 之后，使 rerank 选出的 child hits 再扩展 parent context；Quick Q&A 新增最终 context_select，按 parent/context 去重、编号、限制 6 段和 8000 字符；LLM prompt 使用编号后的 parent context；sources 补充 document_title、source_type、snippet 并保留 child chunk identity 和 parent_chunk_id；流式和非流式 trace 均输出 query_original/query_normalized/query_rewritten、vector/keyword/rrf/rerank hit counts、selected_contexts 和安全的 model_config_used。
+- files: `app/services/knowledge_search.py`, `app/services/quick_answer.py`, `app/rag/quick_answer.py`, `app/schemas/quick_answer.py`, `app/api/v1/quick_answer.py`, `tests/test_quick_answer.py`, `tests/test_v06_quick_answer_stream.py`, `tests/test_v071_observability_status.py`, `tests/test_v09_hybrid_entry.py`, `docs/ai-loop/requirements.md`
+- verification: `python -m pytest tests/test_quick_answer.py tests/test_v06_quick_answer_stream.py tests/test_v071_observability_status.py -q` -> 19 passed; `python -m pytest tests/test_v03_knowledge_search.py tests/test_model_config_required.py tests/test_v09_hybrid_entry.py tests/test_v09_fixed_retrieval_config.py tests/test_v03_retriever.py tests/test_quick_answer.py tests/test_v06_quick_answer_stream.py tests/test_v071_observability_status.py -q` -> 49 passed; `python -m compileall app tests` -> exit 0; `ruff check .` -> All checks passed.
+- follow_ups: 自动进入 `TASK-053`。
+
+### 2026-06-06 | TASK-053 | 前端设置页收敛为 v0.9 固定主链路
+- summary: 前端设置页改为展示 v0.9 固定主链路状态：Qdrant dense、ParadeDB BM25、RRF、必需 rerank 和固定 parent-child；移除 retrieval mode 选择、rerank 关闭开关、parent-child 关闭开关和 planned vector backend 列表；VectorStore 设置页只展示 Qdrant 配置状态和静态字段说明，配置对象以安全 JSON 展示；知识库创建/编辑和详情设置固定提交 parent-child/rerank true。
+- files: `frontend/src/views/RetrievalSettingsView.vue`, `frontend/src/views/VectorStoreSettingsView.vue`, `frontend/src/views/KnowledgeBaseView.vue`, `frontend/src/views/KnowledgeBaseDetailView.vue`, `frontend/src/stores/retrieval.ts`, `frontend/src/types/api.ts`, `tests/test_frontend_v03_retrieval.py`, `tests/test_frontend_v02_model_management.py`, `tests/test_frontend_chunking_settings.py`, `docs/ai-loop/requirements.md`
+- verification: `python -m pytest tests/test_frontend_v03_retrieval.py tests/test_frontend_v02_model_management.py tests/test_frontend_v071_observability_status.py tests/test_frontend_chunking_settings.py -q` -> 11 passed; `npm --prefix frontend run build` -> passed with existing Vite large chunk warning; `python -m compileall app tests` -> exit 0; `ruff check .` -> All checks passed; browser check at `http://127.0.0.1:5173/#/settings?section=retrieval` confirmed fixed mainline text present and old mode/rerank/parent-child switch test ids absent.
+- follow_ups: 自动进入 `TASK-054`。
+
+### 2026-06-06 | TASK-054 | 前端 Quick Q&A sources 和 retrieval trace 展示
+- summary: Quick Q&A 展示层补齐 v0.9 sources 与 trace：SourceCard 展示 document_title、snippet、source_type、score、rerank_score、chunk_id、parent_chunk_id 和 metadata 摘要；Chat trace 展示 query_original/query_normalized/query_rewritten、vector/keyword/rrf/rerank hit counts、context_select 阶段和 selected_contexts 列表；trace value 继续经安全格式化，避免 `[object Object]`。
+- files: `frontend/src/components/SourceCard.vue`, `frontend/src/views/ChatView.vue`, `frontend/src/types/api.ts`, `tests/test_frontend_v06_chat.py`, `docs/ai-loop/requirements.md`
+- verification: `python -m pytest tests/test_frontend_v06_chat.py tests/test_frontend_v07_chat_experience.py tests/test_frontend_v071_observability_status.py -q` -> 8 passed; `npm --prefix frontend run build` -> passed with existing Vite large chunk warning; `python -m compileall app tests` -> exit 0; `ruff check .` -> All checks passed; browser check at `http://127.0.0.1:5173/#/chat` confirmed Chat page renders and empty state contains no `[object Object]`.
+- follow_ups: 自动进入 `TASK-055`。
+
+### 2026-06-06 | TASK-055 | v0.9 端到端验收和文档更新
+- summary: 完成 v0.9 固定 Quick Q&A 主链路收尾验收；README/CHANGELOG/任务板更新为 v0.9，说明 Qdrant + ParadeDB BM25 + RRF + mandatory rerank + parent-child context 的固定依赖、配置步骤、schema/trace/sources 契约和真实验收状态；旧测试按 v0.9 固定链路更新，显式绑定 fake rerank 并改为断言 parent-child、mandatory rerank、ParadeDB diagnostics 和固定前端配置。
+- files: `README.md`, `CHANGELOG.md`, `docs/v0.9.md`, `docs/ai-loop/requirements.md`, `docs/ai-loop/done.md`, `docs/superpowers/plans/2026-06-06-v09-task-046-055.md`, `tests/conftest.py`, `tests/test_api_flow.py`, `tests/test_v02_model_binding_reprocess.py`, `tests/test_v05_faq.py`, `tests/test_v071_chat_generation_lifecycle.py`, `tests/test_v07_faq_similar_indexing.py`, `tests/test_v07_kb_capabilities_pin.py`, `tests/test_v07_kb_settings_update.py`, `tests/test_v07_multi_scope_retrieval.py`, `tests/test_v08_chunks_api.py`
+- verification: `python -m pytest -q` -> 209 passed; `ruff check .` -> All checks passed; `python -m compileall app tests` -> exit 0; `npm --prefix frontend run build` -> passed with existing Vite large chunk warning; `alembic upgrade 0016_task032_faq_recommended:head --sql | Select-String -Pattern "pg_search|USING bm25|ix_chunks_paradedb_bm25"` -> confirmed pg_search extension and BM25 index SQL; browser settings/chat smoke passed from TASK-053/TASK-054 local Vite check. Docker Desktop 可用后补验：`docker compose up -d --build` -> `api / worker / postgres / redis / qdrant` all healthy, `api` online migration passed with `pg_search 0.24.0` and `ix_chunks_paradedb_bm25`; local-service E2E with real PostgreSQL/ParadeDB + Qdrant and fake model clients verified KB create, document upload, synchronous processing, parent-child chunks, Qdrant point, ParadeDB BM25 hit, knowledge-search and quick-answer trace/sources. 2026-06-08 启动脚本补验：`scripts/start-dev.ps1` -> Docker backend stack and local Vite started, `/health` ok, frontend 5173 returned 200, Celery ping showed one Docker worker online.
+- follow_ups: TASK-046 到 TASK-055 全部完成；按用户要求停工。

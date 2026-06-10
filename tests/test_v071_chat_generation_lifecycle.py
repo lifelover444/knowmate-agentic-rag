@@ -1,6 +1,6 @@
 import json
 
-from conftest import create_bound_models
+from conftest import FixedScoreReranker, configure_rerank, create_bound_models
 from fastapi.testclient import TestClient
 
 from app.db.models import ChatMessage, Knowledge
@@ -63,8 +63,15 @@ def add_vector_hit(fake_vector_store, kb_id: str, document_id: str = "doc-chat-l
     ]
 
 
-def test_stream_auto_titles_empty_session_and_persists_last_request_state(client, db_session, fake_vector_store):
+def test_stream_auto_titles_empty_session_and_persists_last_request_state(
+    client,
+    db_session,
+    fake_vector_store,
+    monkeypatch,
+):
     kb_id = create_kb(client)
+    configure_rerank(client)
+    monkeypatch.setattr("app.services.knowledge_search.RerankerClient", lambda _config: FixedScoreReranker())
     add_document(db_session, kb_id)
     add_vector_hit(fake_vector_store, kb_id)
     session_response = client.post("/api/v1/chat-sessions", json={"knowledge_base_id": kb_id, "title": "新会话"})
@@ -90,6 +97,7 @@ def test_stream_auto_titles_empty_session_and_persists_last_request_state(client
     assert response.status_code == 200, response.text
     final = dict(parse_sse_events(response.text))["final"]
     assert final["answer"]
+    assert final["retrieval_trace"]["rerank_hits"] == 1
 
     detail = client.get(f"/api/v1/chat-sessions/{session_id}")
     assert detail.status_code == 200, detail.text
@@ -113,8 +121,11 @@ def test_stop_generation_cancels_active_stream_and_persists_partial_answer(
     client,
     db_session,
     fake_vector_store,
+    monkeypatch,
 ):
     kb_id = create_kb(client, "stop chat KB")
+    configure_rerank(client)
+    monkeypatch.setattr("app.services.knowledge_search.RerankerClient", lambda _config: FixedScoreReranker())
     add_document(db_session, kb_id, "doc-stop-chat")
     add_vector_hit(fake_vector_store, kb_id)
     session = client.post("/api/v1/chat-sessions", json={"knowledge_base_id": kb_id, "title": "新会话"}).json()

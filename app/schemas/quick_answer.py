@@ -16,7 +16,6 @@ class QuickAnswerRequest(BaseModel):
     attachments: list[AttachmentInput] = Field(default_factory=list)
     query: str = Field(min_length=1)
     top_k: int | None = Field(default=None, ge=1, le=20)
-    mode: str | None = None
     enable_rerank: bool | None = None
 
 
@@ -33,7 +32,10 @@ class SourceRead(BaseModel):
     knowledge_base_id: str
     knowledge_base_name: str | None = None
     chunk_id: str
+    document_title: str | None = None
     title: str | None = None
+    snippet: str | None = None
+    source_type: str | None = None
     content: str
     score: float
     context_header: str | None = None

@@ -1,4 +1,4 @@
-from conftest import create_bound_models
+from conftest import FixedScoreReranker, configure_rerank, create_bound_models
 from fastapi.testclient import TestClient
 
 from app.db.models import Chunk, Knowledge
@@ -45,7 +45,9 @@ def add_document_chunk(db_session, kb_id: str, document_id: str, title: str, chu
     db_session.commit()
 
 
-def test_knowledge_search_supports_multi_kb_scope_and_returns_kb_name(client: TestClient, db_session):
+def test_knowledge_search_supports_multi_kb_scope_and_returns_kb_name(client: TestClient, db_session, monkeypatch):
+    configure_rerank(client)
+    monkeypatch.setattr("app.services.knowledge_search.RerankerClient", lambda _config: FixedScoreReranker())
     chat_id, embedding_id = create_bound_models(client)
     first_kb = create_kb(client, "产品知识库", chat_id, embedding_id)
     second_kb = create_kb(client, "运维知识库", chat_id, embedding_id)
@@ -70,12 +72,14 @@ def test_knowledge_search_supports_multi_kb_scope_and_returns_kb_name(client: Te
     retrievers = response.json()["diagnostics"]["retrievers"]
     assert len(retrievers) == 2
     assert {item["knowledge_base_id"] for item in retrievers} == {first_kb, second_kb}
-    assert {item["engine"] for item in retrievers} == {"qdrant+postgres"}
+    assert {item["engine"] for item in retrievers} == {"qdrant+paradedb_bm25"}
     assert all(item["status"] == "done" for item in retrievers)
     assert all(item["hit_count"] == 1 for item in retrievers)
 
 
-def test_knowledge_search_supports_file_scope_without_explicit_kb(client: TestClient, db_session):
+def test_knowledge_search_supports_file_scope_without_explicit_kb(client: TestClient, db_session, monkeypatch):
+    configure_rerank(client)
+    monkeypatch.setattr("app.services.knowledge_search.RerankerClient", lambda _config: FixedScoreReranker())
     chat_id, embedding_id = create_bound_models(client)
     kb_id = create_kb(client, "文件范围知识库", chat_id, embedding_id)
     add_document_chunk(db_session, kb_id, "doc-a", "A 文档", "chunk-a", "文件范围 命中")
@@ -96,7 +100,9 @@ def test_knowledge_search_supports_file_scope_without_explicit_kb(client: TestCl
     assert [hit["document_id"] for hit in hits] == ["doc-a"]
 
 
-def test_quick_answer_supports_multi_kb_scope(client: TestClient, db_session):
+def test_quick_answer_supports_multi_kb_scope(client: TestClient, db_session, monkeypatch):
+    configure_rerank(client)
+    monkeypatch.setattr("app.services.knowledge_search.RerankerClient", lambda _config: FixedScoreReranker())
     chat_id, embedding_id = create_bound_models(client)
     first_kb = create_kb(client, "问答产品库", chat_id, embedding_id)
     second_kb = create_kb(client, "问答运维库", chat_id, embedding_id)

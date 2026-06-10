@@ -7,7 +7,6 @@ import FAQView from "./FAQView.vue";
 import { useKnowledgeBaseStore } from "../stores/knowledgeBase";
 import { useModelsStore } from "../stores/models";
 import { useRetrievalStore } from "../stores/retrieval";
-import { useVectorStoresStore } from "../stores/vectorStores";
 import type { ChunkingConfig, FAQConfig, IndexingStrategy, ParserEngineRule } from "../types/api";
 import { formatApiError } from "../utils/api";
 
@@ -18,7 +17,6 @@ const router = useRouter();
 const kbStore = useKnowledgeBaseStore();
 const modelStore = useModelsStore();
 const retrieval = useRetrievalStore();
-const vectorStore = useVectorStoresStore();
 const kbId = computed(() => String(route.params.kbId || ""));
 const activeSection = ref<DetailSection>("overview");
 const settingsSaving = ref(false);
@@ -30,7 +28,6 @@ const settingsForm = reactive({
   kb_type: "document",
   summary_model_id: "",
   embedding_model_id: "",
-  vector_store_id: "",
   parserRulesText: "",
   chunkStrategy: "auto",
   chunkSize: 512,
@@ -38,10 +35,8 @@ const settingsForm = reactive({
   separatorsText: "\\n\\n,\\n,。",
   tokenLimit: 0,
   languagesText: "",
-  enableVector: true,
-  enableKeyword: true,
-  enableParentChild: false,
-  enableRerank: false,
+  enableParentChild: true,
+  enableRerank: true,
   faqIndexMode: "question_answer",
   faqQuestionIndexMode: "combined",
 });
@@ -67,10 +62,6 @@ function normalizeSection(value: unknown): DetailSection {
     return section as DetailSection;
   }
   return defaultSection.value;
-}
-
-function listText(value: string[]): string {
-  return value.map((item) => item.replaceAll("\n", "\\n")).join(",");
 }
 
 function parseList(value: string): string[] {
@@ -104,25 +95,20 @@ function parseParserRules(value: string): ParserEngineRule[] {
 
 function syncSettingsForm() {
   if (!currentKb.value) return;
-  const chunking = currentKb.value.chunking_config as ChunkingConfig;
-  const indexing = currentKb.value.indexing_strategy as IndexingStrategy;
   settingsForm.name = currentKb.value.name;
   settingsForm.description = currentKb.value.description || "";
   settingsForm.kb_type = currentKb.value.kb_type || "document";
   settingsForm.summary_model_id = currentKb.value.summary_model_id;
   settingsForm.embedding_model_id = currentKb.value.embedding_model_id;
-  settingsForm.vector_store_id = currentKb.value.vector_store_id || "";
   settingsForm.parserRulesText = parserRulesText(currentKb.value.parser_engine_rules as ParserEngineRule[] | null);
-  settingsForm.chunkStrategy = String(chunking.strategy || "auto");
-  settingsForm.chunkSize = Number(chunking.chunk_size || 512);
-  settingsForm.chunkOverlap = Number(chunking.chunk_overlap || 80);
-  settingsForm.separatorsText = listText(Array.isArray(chunking.separators) ? chunking.separators : ["\n\n", "\n", "。"]);
-  settingsForm.tokenLimit = Number(chunking.token_limit || 0);
-  settingsForm.languagesText = listText(Array.isArray(chunking.languages) ? chunking.languages : []);
-  settingsForm.enableVector = indexing.enable_vector !== false;
-  settingsForm.enableKeyword = indexing.enable_keyword !== false;
-  settingsForm.enableParentChild = Boolean(indexing.enable_parent_child || chunking.enable_parent_child);
-  settingsForm.enableRerank = Boolean(indexing.enable_rerank);
+  settingsForm.chunkStrategy = "auto";
+  settingsForm.chunkSize = 512;
+  settingsForm.chunkOverlap = 80;
+  settingsForm.separatorsText = "\\n\\n,\\n,。";
+  settingsForm.tokenLimit = 0;
+  settingsForm.languagesText = "";
+  settingsForm.enableParentChild = true;
+  settingsForm.enableRerank = true;
   const faqConfig = (currentKb.value.faq_config || {}) as FAQConfig;
   settingsForm.faqIndexMode = String(faqConfig.index_mode || "question_answer");
   settingsForm.faqQuestionIndexMode = String(faqConfig.question_index_mode || "combined");
@@ -139,13 +125,13 @@ function validateSettingsModels() {
 
 function settingsChunkingPayload(): ChunkingConfig {
   return {
-    strategy: settingsForm.chunkStrategy,
-    chunk_size: Number(settingsForm.chunkSize || 512),
-    chunk_overlap: Math.max(0, Number(settingsForm.chunkOverlap || 0)),
-    separators: parseList(settingsForm.separatorsText).length ? parseList(settingsForm.separatorsText) : ["\n\n", "\n", "。"],
-    token_limit: Math.max(0, Number(settingsForm.tokenLimit || 0)),
-    languages: parseList(settingsForm.languagesText),
-    enable_parent_child: settingsForm.enableParentChild,
+    strategy: "auto",
+    chunk_size: 512,
+    chunk_overlap: 80,
+    separators: ["\n\n", "\n", "。"],
+    token_limit: 0,
+    languages: [],
+    enable_parent_child: true,
     parent_chunk_size: 4096,
     child_chunk_size: 384,
   };
@@ -153,10 +139,10 @@ function settingsChunkingPayload(): ChunkingConfig {
 
 function settingsIndexingStrategyPayload(): IndexingStrategy {
   return {
-    enable_vector: settingsForm.enableVector,
-    enable_keyword: settingsForm.enableKeyword,
-    enable_parent_child: settingsForm.enableParentChild,
-    enable_rerank: settingsForm.enableRerank,
+    enable_vector: true,
+    enable_keyword: true,
+    enable_parent_child: true,
+    enable_rerank: true,
     enable_wiki: false,
     enable_knowledge_graph: false,
   };
@@ -177,7 +163,6 @@ async function loadDetail() {
     kbStore.loadKnowledgeBase(kbId.value),
     kbStore.loadTasks({ knowledge_base_id: kbId.value }),
     modelStore.loadModels(),
-    vectorStore.loadVectorStores(),
     retrieval.loadParserEngines(),
   ]);
   activeSection.value = normalizeSection(route.query.section);
@@ -194,7 +179,7 @@ async function submitSettings() {
       kb_type: settingsForm.kb_type,
       summary_model_id: settingsForm.summary_model_id,
       embedding_model_id: settingsForm.embedding_model_id,
-      vector_store_id: settingsForm.vector_store_id || null,
+      vector_store_id: null,
       faq_config: settingsForm.kb_type === "faq"
         ? {
           index_mode: settingsForm.faqIndexMode,
@@ -333,12 +318,7 @@ watch(currentKb, syncSettingsForm);
               <a-textarea v-model="settingsForm.description" :auto-size="{ minRows: 2, maxRows: 4 }" />
             </a-form-item>
             <a-form-item label="vector store">
-              <a-select v-model="settingsForm.vector_store_id" allow-clear placeholder="使用默认 Qdrant">
-                <a-option value="">使用默认 Qdrant</a-option>
-                <a-option v-for="store in vectorStore.vectorStores" :key="store.id" :value="store.id">
-                  {{ store.name }} · {{ store.provider }}{{ store.is_default ? " · 默认" : "" }}
-                </a-option>
-              </a-select>
+              <a-tag color="blue">VectorStore：默认 Qdrant</a-tag>
             </a-form-item>
           </div>
         </section>
@@ -396,30 +376,31 @@ watch(currentKb, syncSettingsForm);
         </section>
 
         <section>
-          <h3>chunking config</h3>
+          <h3>chunking config · 切分配置：只读展示</h3>
           <div class="form-grid form-grid--compact">
             <a-form-item label="策略">
-              <a-select v-model="settingsForm.chunkStrategy">
-                <a-option value="auto">auto</a-option>
-                <a-option value="heading">heading</a-option>
-                <a-option value="heuristic">heuristic</a-option>
-                <a-option value="legacy">legacy</a-option>
-              </a-select>
+              <a-tag>auto</a-tag>
             </a-form-item>
             <a-form-item label="chunk size">
-              <a-input-number v-model="settingsForm.chunkSize" :min="50" :max="10000" />
+              <a-tag>512</a-tag>
             </a-form-item>
             <a-form-item label="overlap">
-              <a-input-number v-model="settingsForm.chunkOverlap" :min="0" :max="2000" />
+              <a-tag>80</a-tag>
             </a-form-item>
             <a-form-item label="separators">
-              <a-input v-model="settingsForm.separatorsText" />
+              <a-tag>"\n\n", "\n", "。"</a-tag>
             </a-form-item>
             <a-form-item label="token limit">
-              <a-input-number v-model="settingsForm.tokenLimit" :min="0" :max="8192" />
+              <a-tag>0</a-tag>
             </a-form-item>
-            <a-form-item label="languages">
-              <a-input v-model="settingsForm.languagesText" placeholder="zh,en" />
+            <a-form-item label="parent-child">
+              <a-tag color="green">true</a-tag>
+            </a-form-item>
+            <a-form-item label="parent size">
+              <a-tag>4096</a-tag>
+            </a-form-item>
+            <a-form-item label="child size">
+              <a-tag>384</a-tag>
             </a-form-item>
           </div>
         </section>
@@ -428,22 +409,22 @@ watch(currentKb, syncSettingsForm);
           <h3>indexing strategy</h3>
           <div class="form-grid form-grid--compact">
             <a-form-item label="vector">
-              <a-switch v-model="settingsForm.enableVector" />
+              <a-tag color="green">vector 固定开启</a-tag>
             </a-form-item>
             <a-form-item label="keyword">
-              <a-switch v-model="settingsForm.enableKeyword" />
+              <a-tag color="green">keyword 固定开启</a-tag>
             </a-form-item>
             <a-form-item label="parent-child">
-              <a-switch v-model="settingsForm.enableParentChild" />
+              <a-tag color="green">parent-child 固定开启 · v0.9 固定启用</a-tag>
             </a-form-item>
             <a-form-item label="rerank">
-              <a-switch v-model="settingsForm.enableRerank" />
+              <a-tag color="green">rerank 固定开启 · v0.9 固定启用</a-tag>
             </a-form-item>
-            <a-form-item label="Wiki 暂未实现">
-              <a-switch :model-value="false" disabled />
+            <a-form-item label="Wiki">
+              <a-tag color="gray">Wiki 关闭 · Wiki 暂未实现</a-tag>
             </a-form-item>
-            <a-form-item label="Graph 暂未实现">
-              <a-switch :model-value="false" disabled />
+            <a-form-item label="Knowledge Graph">
+              <a-tag color="gray">Knowledge Graph 关闭 · Graph 暂未实现</a-tag>
             </a-form-item>
           </div>
         </section>

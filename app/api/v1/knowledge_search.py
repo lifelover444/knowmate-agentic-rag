@@ -31,7 +31,6 @@ def knowledge_search(
             knowledge_base_ids=payload.knowledge_base_ids,
             knowledge_ids=payload.knowledge_ids,
             query=payload.query,
-            mode=payload.mode,
             top_k=payload.top_k,
             enable_rerank=payload.enable_rerank,
         )

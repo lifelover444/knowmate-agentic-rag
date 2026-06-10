@@ -66,7 +66,7 @@ class ChunkService:
         chunk.search_text = _search_text_with_generated_questions(chunk.content, questions)
         chunk.updated_at = datetime.now(UTC)
         chunk = self.repo.save(chunk)
-        self._sync_vector_payload(chunk, {"metadata": metadata})
+        self._sync_vector_payload(chunk, {"metadata": metadata, "search_text": chunk.search_text})
         return chunk
 
     def delete_generated_question(self, chunk_id: str, question_id: str) -> Chunk:
@@ -81,7 +81,7 @@ class ChunkService:
         chunk.search_text = _search_text_with_generated_questions(chunk.content, filtered)
         chunk.updated_at = datetime.now(UTC)
         chunk = self.repo.save(chunk)
-        self._sync_vector_payload(chunk, {"metadata": metadata})
+        self._sync_vector_payload(chunk, {"metadata": metadata, "search_text": chunk.search_text})
         return chunk
 
     def _sync_vector_payload(self, chunk: Chunk, payload: dict) -> None:

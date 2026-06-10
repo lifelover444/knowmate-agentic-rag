@@ -1,5 +1,6 @@
 from pathlib import Path
 
+from conftest import FixedScoreReranker
 from cryptography.fernet import Fernet
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, select
@@ -274,10 +275,12 @@ def test_model_test_endpoint_can_use_saved_credentials_when_api_key_is_blank(tmp
     assert tester.seen_api_keys == ["sk-secret-1234", "sk-secret-1234"]
 
 
-def test_knowledge_base_requires_bound_models_and_quick_answer_uses_retrieval_threshold(tmp_path: Path):
+def test_knowledge_base_requires_bound_models_and_quick_answer_uses_fixed_v09_retrieval(tmp_path: Path, monkeypatch):
     client, _, vector_store = make_client(tmp_path)
     chat_id = create_model(client, "KnowledgeQA", "qwen-plus")
     embedding_id = create_model(client, "Embedding", "text-embedding-v4", dimension=3)
+    rerank_id = create_model(client, "Rerank", "qwen3-rerank")
+    monkeypatch.setattr("app.services.knowledge_search.RerankerClient", lambda _config: FixedScoreReranker())
 
     missing_model_response = client.post("/api/v1/knowledge-bases", json={"name": "missing models"})
     assert missing_model_response.status_code == 400
@@ -297,7 +300,7 @@ def test_knowledge_base_requires_bound_models_and_quick_answer_uses_retrieval_th
 
     config_response = client.put(
         "/api/v1/retrieval-config",
-        json={"embedding_top_k": 50, "vector_threshold": 0.95, "rerank_top_k": 10},
+        json={"embedding_top_k": 50, "vector_threshold": 0.95, "rerank_top_k": 10, "rerank_model_id": rerank_id},
     )
     assert config_response.status_code == 200
 
@@ -312,7 +315,10 @@ def test_knowledge_base_requires_bound_models_and_quick_answer_uses_retrieval_th
     ]
     answer_response = client.post("/api/v1/quick-answer", json={"knowledge_base_id": kb_id, "query": "问题"})
     assert answer_response.status_code == 200
-    assert answer_response.json()["sources"] == []
+    payload = answer_response.json()
+    assert payload["sources"]
+    assert payload["retrieval_trace"]["vector_hits"] >= 1
+    assert payload["retrieval_trace"]["rerank_hits"] >= 1
 
 
 def test_document_and_knowledge_base_reprocess_clear_old_vectors(tmp_path: Path, monkeypatch):
@@ -355,4 +361,5 @@ def test_document_and_knowledge_base_reprocess_clear_old_vectors(tmp_path: Path,
     with session_factory() as session:
         document = session.get(Knowledge, document_id)
         assert document.embedding_model_id == embedding_id
-        assert session.query(Chunk).filter_by(knowledge_id=document_id).count() == 1
+        chunks = session.query(Chunk).filter_by(knowledge_id=document_id).all()
+        assert {chunk.chunk_type for chunk in chunks} == {"parent", "child"}

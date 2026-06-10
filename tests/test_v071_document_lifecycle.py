@@ -4,6 +4,7 @@ from conftest import create_bound_models
 from fastapi.testclient import TestClient
 
 from app.db.models import Chunk, Knowledge, ProcessingTask
+from app.db.repositories.chunk import ChunkRepository
 
 
 def create_kb(client: TestClient, name: str, embedding_model_id: str | None = None) -> tuple[str, str]:
@@ -169,3 +170,39 @@ def test_move_document_rejects_incompatible_embedding_model(client: TestClient, 
 
     assert response.status_code == 400, response.text
     assert "目标知识库必须使用相同的 Embedding 模型" in response.text
+
+
+def test_delete_document_syncs_vector_and_bm25_indexes(
+    client: TestClient,
+    db_session,
+    tmp_path: Path,
+    fake_vector_store,
+    monkeypatch,
+):
+    kb_id, _ = create_kb(client, "delete sync kb")
+    file_path = tmp_path / "delete-sync.txt"
+    file_path.write_text("delete me", encoding="utf-8")
+    document = add_document(db_session, kb_id, str(file_path))
+    add_chunk(db_session, document)
+    bm25_deleted = []
+
+    def track_bm25_delete(self, knowledge_id: str) -> int:
+        bm25_deleted.append(knowledge_id)
+        return 1
+
+    monkeypatch.setattr(ChunkRepository, "bm25_delete_by_document", track_bm25_delete)
+    fake_vector_store.results = [
+        {
+            "chunk_id": "chunk-delete-sync",
+            "knowledge_id": document.id,
+            "knowledge_base_id": kb_id,
+            "content": "delete me",
+            "score": 0.91,
+        }
+    ]
+
+    response = client.delete(f"/api/v1/documents/{document.id}")
+
+    assert response.status_code == 204, response.text
+    assert bm25_deleted == [document.id]
+    assert fake_vector_store.results == []

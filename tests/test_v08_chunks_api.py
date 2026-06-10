@@ -1,4 +1,4 @@
-from conftest import create_bound_models
+from conftest import FixedScoreReranker, configure_rerank, create_bound_models
 from fastapi.testclient import TestClient
 
 from app.db.models import Chunk, Knowledge
@@ -121,7 +121,10 @@ def test_generated_questions_update_chunk_metadata_search_and_recommendations(
     client: TestClient,
     db_session,
     fake_vector_store,
+    monkeypatch,
 ):
+    configure_rerank(client)
+    monkeypatch.setattr("app.services.knowledge_search.RerankerClient", lambda _config: FixedScoreReranker())
     kb_id, document_id, chunk_id = _create_kb_with_chunk(client, db_session, chunk_id="chunk-generated-api")
     fake_vector_store.results = [
         {
@@ -171,9 +174,12 @@ def test_generated_questions_update_chunk_metadata_search_and_recommendations(
     assert delete_response.status_code == 200, delete_response.text
     assert delete_response.json()["metadata"].get("generated_questions") == []
     assert fake_vector_store.results[0]["metadata"].get("generated_questions") == []
+    assert "生成问题召回" not in fake_vector_store.results[0]["search_text"]
     search_after_delete = client.post(
         "/api/v1/knowledge-search",
         json={"knowledge_base_id": kb_id, "query": "生成问题召回", "mode": "keyword_only", "top_k": 5},
     )
     assert search_after_delete.status_code == 200, search_after_delete.text
-    assert search_after_delete.json()["hits"] == []
+    hits_after_delete = search_after_delete.json()["hits"]
+    assert [hit["chunk_id"] for hit in hits_after_delete] == [chunk_id]
+    assert hits_after_delete[0]["keyword_score"] is None

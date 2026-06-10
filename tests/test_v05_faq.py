@@ -1,4 +1,4 @@
-from conftest import create_bound_models
+from conftest import FixedScoreReranker, configure_rerank, create_bound_models
 from fastapi.testclient import TestClient
 
 from app.db.models import Chunk, FAQEntry, Knowledge
@@ -20,8 +20,15 @@ def _create_faq_kb(client: TestClient) -> str:
     return response.json()["id"]
 
 
-def test_faq_entry_indexes_through_chunks_and_vector_store(client: TestClient, db_session, fake_vector_store):
+def test_faq_entry_indexes_through_chunks_and_vector_store(
+    client: TestClient,
+    db_session,
+    fake_vector_store,
+    monkeypatch,
+):
     kb_id = _create_faq_kb(client)
+    configure_rerank(client)
+    monkeypatch.setattr("app.services.knowledge_search.RerankerClient", lambda _config: FixedScoreReranker())
 
     response = client.post(
         f"/api/v1/knowledge-bases/{kb_id}/faqs",

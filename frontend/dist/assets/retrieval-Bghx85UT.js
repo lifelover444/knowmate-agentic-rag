@@ -1,0 +1,15 @@
+import{i as q,y as e,n as v,w as B,u as D}from"./index-DqcZHgFT.js";const r={strategy:"auto",chunk_size:512,chunk_overlap:80,separators:[`
+
+`,`
+`,"。"],token_limit:0,languages:[],enable_parent_child:!0,parent_chunk_size:4096,child_chunk_size:384},L=q("retrieval",()=>{const _=e("hybrid"),c=e(50),d=e(50),h=e(.15),k=e(.2),p=e(8),y=e(.2),t=e(""),f=e(!0),g=e(60),w=e(.65),m=e(.35),b=e(30),l=e([]),a=e(null),R=e([{file_types:["pdf"],engine:"builtin"},{file_types:["docx"],engine:"builtin"},{file_types:["md","markdown"],engine:"builtin"},{file_types:["txt"],engine:"builtin"},{file_types:["csv","json","xlsx"],engine:"builtin"}]),z=e("auto"),C=e(512),K=e(80),S=e("\\n\\n,\\n,。"),T=e(0),x=e(""),E=e(!0),I=e(4096),P=e(384),J=e(`# 产品手册
+
+## 安装
+
+安装步骤一。安装步骤二。
+
+## 使用
+
+使用说明一。使用说明二。`),i=e(null),o=e(!1),s=e(!1),u=e(!1);function N(n){_.value=n.retrieval_mode||"hybrid",c.value=n.embedding_top_k,d.value=n.keyword_top_k||50,h.value=n.vector_threshold,k.value=n.keyword_threshold,p.value=n.rerank_top_k,y.value=n.rerank_threshold,t.value=n.rerank_model_id||t.value||"",f.value=!!n.enable_rerank,g.value=n.rrf_k,w.value=n.rrf_vector_weight,m.value=n.rrf_keyword_weight,b.value=n.rrf_top_k||30,z.value=r.strategy,C.value=r.chunk_size,K.value=r.chunk_overlap,S.value="\\n\\n,\\n,。",T.value=r.token_limit,x.value="",E.value=!0,I.value=r.parent_chunk_size,P.value=r.child_chunk_size}function V(){return{...r,separators:[`
+
+`,`
+`,"。"],languages:[],enable_parent_child:!0}}function F(){return R.value.map(n=>({file_types:n.file_types,engine:n.engine}))}async function G(){o.value=!0;try{const n=await v("/retrieval-config");return N(n),n}finally{o.value=!1}}async function M(){s.value=!0;try{const n=await B("/retrieval-config",{rerank_model_id:t.value||null,retrieval_mode:"hybrid",vector_engine:"qdrant",keyword_engine:"paradedb_bm25",embedding_top_k:50,keyword_top_k:50,vector_threshold:.15,keyword_threshold:.2,rerank_top_k:8,rerank_threshold:.2,enable_rerank:!0,rrf_k:60,rrf_vector_weight:.65,rrf_keyword_weight:.35,rrf_top_k:30});return N(n),n}finally{s.value=!1}}async function O(){l.value=await v("/parser-engines")}async function W(){return a.value=await v("/runtime-status"),l.value=a.value.parser_engines,a.value}async function j(){u.value=!0;try{return i.value=await D("/chunker/preview",{text:J.value,chunking_config:V()}),i.value}finally{u.value=!1}}return{retrievalMode:_,retrievalEmbeddingTopK:c,retrievalKeywordTopK:d,retrievalVectorThreshold:h,retrievalKeywordThreshold:k,retrievalRerankTopK:p,retrievalRerankThreshold:y,selectedRerankModelId:t,retrievalEnableRerank:f,retrievalRrfK:g,retrievalRrfVectorWeight:w,retrievalRrfKeywordWeight:m,retrievalRrfTopK:b,parserEngines:l,runtimeStatus:a,parserEngineRules:R,chunkStrategy:z,chunkSize:C,chunkOverlap:K,separatorsText:S,tokenLimit:T,languagesText:x,enableParentChild:E,parentChunkSize:I,childChunkSize:P,previewSample:J,previewResult:i,loading:o,saving:s,previewing:u,loadRetrievalConfig:G,saveRetrievalConfig:M,loadParserEngines:O,loadRuntimeStatus:W,previewChunking:j,chunkingPayload:V,parserEngineRulesPayload:F}});export{L as u};

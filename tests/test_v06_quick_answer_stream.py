@@ -27,6 +27,35 @@ class RewriteFailingHistoryChatModel:
         yield "历史回答"
 
 
+class FixedScoreReranker:
+    def rerank(self, *, query: str, documents: list[str], top_n: int):
+        return [(index, 1.0 - index * 0.1) for index in range(min(len(documents), top_n))]
+
+
+def create_rerank_model(client: TestClient) -> str:
+    response = client.post(
+        "/api/v1/models",
+        json={
+            "name": "Test Rerank",
+            "type": "Rerank",
+            "provider": "qwen",
+            "source": "remote",
+            "base_url": "https://example.com/v1/reranks",
+            "api_key": "sk-test-1234",
+            "model_name": "qwen3-rerank",
+        },
+    )
+    assert response.status_code == 201, response.text
+    return response.json()["id"]
+
+
+def configure_rerank(client: TestClient) -> str:
+    rerank_id = create_rerank_model(client)
+    response = client.put("/api/v1/retrieval-config", json={"rerank_model_id": rerank_id})
+    assert response.status_code == 200, response.text
+    return rerank_id
+
+
 def create_kb(client: TestClient) -> str:
     chat_id, embedding_id = create_bound_models(client)
     response = client.post(
@@ -52,8 +81,15 @@ def parse_sse_events(body: str) -> list[tuple[str, dict]]:
     return events
 
 
-def test_quick_answer_stream_creates_session_messages_and_final_sources(client, fake_vector_store, db_session):
+def test_quick_answer_stream_creates_session_messages_and_final_sources(
+    client,
+    fake_vector_store,
+    db_session,
+    monkeypatch,
+):
     kb_id = create_kb(client)
+    configure_rerank(client)
+    monkeypatch.setattr("app.services.knowledge_search.RerankerClient", lambda _config: FixedScoreReranker())
     fake_vector_store.results = [
         {
             "chunk_id": "chunk-stream",
@@ -79,10 +115,11 @@ def test_quick_answer_stream_creates_session_messages_and_final_sources(client, 
     assert event_names[-2:] == ["final", "done"]
 
     final = dict(events)["final"]
-    assert final["answer"] == "流式回答会持续返回来源依据。"
+    assert "流式回答会持续返回来源依据。" in final["answer"]
     assert final["sources"][0]["chunk_id"] == "chunk-stream"
     assert final["retrieval_trace"]["original_query"] == "流式回答是什么？"
-    assert final["retrieval_trace"]["rewrite_enabled"] is False
+    assert final["retrieval_trace"]["rewrite_enabled"] is True
+    assert final["retrieval_trace"]["rewrite_skipped"] is True
 
     messages = db_session.query(ChatMessage).order_by(ChatMessage.created_at).all()
     assert [message.role for message in messages] == ["user", "assistant"]
@@ -135,8 +172,10 @@ def test_quick_answer_stream_saves_attachment_metadata_and_truncation(client, fa
     assert fake_vector_store.points == []
 
 
-def test_quick_answer_stream_trace_marks_inapplicable_retrieval_stages_skipped(client, fake_vector_store):
+def test_quick_answer_stream_trace_runs_fixed_hybrid_retrieval_stages(client, fake_vector_store, monkeypatch):
     kb_id = create_kb(client)
+    rerank_id = configure_rerank(client)
+    monkeypatch.setattr("app.services.knowledge_search.RerankerClient", lambda _config: FixedScoreReranker())
     fake_vector_store.results = [
         {
             "chunk_id": "chunk-stream-vector",
@@ -157,11 +196,22 @@ def test_quick_answer_stream_trace_marks_inapplicable_retrieval_stages_skipped(c
     trace = dict(parse_sse_events(response.text))["final"]["retrieval_trace"]
     stages = {stage["name"]: stage for stage in trace["stages"]}
     assert stages["vector"]["status"] == "done"
-    assert stages["keyword"]["status"] == "skipped"
-    assert stages["rrf"]["status"] == "skipped"
+    assert stages["keyword"]["status"] == "done"
+    assert stages["rrf"]["status"] == "done"
     assert stages["parent_expand"]["status"] == "done"
     assert stages["deduplicate"]["status"] == "done"
-    assert stages["rerank"]["status"] == "skipped"
+    assert stages["rerank"]["status"] == "done"
+    assert stages["rerank"]["output"]["rerank_input_count"] == 1
+    assert stages["context_select"]["status"] == "done"
+    assert trace["query_original"] == "流式向量检索是什么？"
+    assert trace["query_normalized"] == "流式向量检索是什么？"
+    assert trace["query_rewritten"] is None
+    assert trace["vector_hits"] == 1
+    assert trace["rrf_hits"] == 1
+    assert trace["rerank_hits"] == 1
+    assert trace["model_config_used"]["rerank_model_id"] == rerank_id
+    assert len(trace["selected_contexts"]) == 1
+    assert trace["selected_contexts"][0]["chunk_id"] == "chunk-stream-vector"
 
 
 def test_quick_answer_stream_missing_model_config_returns_chinese_error(client, fake_vector_store, db_session):
@@ -195,12 +245,14 @@ def test_quick_answer_stream_missing_model_config_returns_chinese_error(client, 
         json={"knowledge_base_id": kb_id, "query": "问题", "mode": "vector_only"},
     )
 
-    assert response.status_code == 404
-    assert "模型" in response.text
+    assert response.status_code == 400
+    assert "系统未完成 rerank 模型配置" in response.text
 
 
-def test_quick_answer_stream_query_rewrite_trace_enabled_with_history(client, fake_vector_store):
+def test_quick_answer_stream_query_rewrite_trace_enabled_with_history(client, fake_vector_store, monkeypatch):
     kb_id = create_kb(client)
+    configure_rerank(client)
+    monkeypatch.setattr("app.services.knowledge_search.RerankerClient", lambda _config: FixedScoreReranker())
     fake_vector_store.results = [
         {
             "chunk_id": "chunk-rewrite",
@@ -237,8 +289,10 @@ def test_quick_answer_stream_query_rewrite_trace_enabled_with_history(client, fa
     assert trace["rewritten_query"] == "fake answer"
 
 
-def test_quick_answer_stream_merges_recent_history_when_rewrite_fails(client, fake_vector_store):
+def test_quick_answer_stream_merges_recent_history_when_rewrite_fails(client, fake_vector_store, monkeypatch):
     kb_id = create_kb(client)
+    configure_rerank(client)
+    monkeypatch.setattr("app.services.knowledge_search.RerankerClient", lambda _config: FixedScoreReranker())
     model = RewriteFailingHistoryChatModel()
     client.app.state.chat_model = model
     fake_vector_store.results = [
@@ -279,8 +333,10 @@ def test_quick_answer_stream_merges_recent_history_when_rewrite_fails(client, fa
     assert "历史回答" in prompt
 
 
-def test_quick_answer_stream_uses_streaming_chat_client(client, fake_vector_store):
+def test_quick_answer_stream_uses_streaming_chat_client(client, fake_vector_store, monkeypatch):
     kb_id = create_kb(client)
+    configure_rerank(client)
+    monkeypatch.setattr("app.services.knowledge_search.RerankerClient", lambda _config: FixedScoreReranker())
     fake_vector_store.results = [
         {
             "chunk_id": "chunk-stream-client",

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { Message } from "@arco-design/web-vue";
-import { onMounted } from "vue";
+import { computed, onMounted } from "vue";
 import ChunkPreview from "../components/ChunkPreview.vue";
 import { useModelsStore } from "../stores/models";
 import { useRetrievalStore } from "../stores/retrieval";
@@ -8,6 +8,14 @@ import { formatApiError } from "../utils/api";
 
 const retrieval = useRetrievalStore();
 const modelStore = useModelsStore();
+
+const rerankStatusText = computed(() => (retrieval.selectedRerankModelId ? "已配置" : "未配置"));
+const rerankStatusColor = computed(() => (retrieval.selectedRerankModelId ? "green" : "gold"));
+const qdrantStatusText = computed(() => retrieval.runtimeStatus?.vector_store?.status || "unknown");
+const paradeDbStatusText = computed(() => {
+  const status = retrieval.runtimeStatus?.database?.status;
+  return status === "ok" ? "随 PostgreSQL/ParadeDB 迁移检查" : "待检查";
+});
 
 async function saveConfig() {
   try {
@@ -22,6 +30,7 @@ onMounted(() => {
   Promise.all([
     retrieval.loadRetrievalConfig(),
     retrieval.loadParserEngines(),
+    retrieval.loadRuntimeStatus(),
     modelStore.loadModels(),
   ]).catch((error) => {
     Message.error(formatApiError(error instanceof Error ? error.message : error));
@@ -31,38 +40,58 @@ onMounted(() => {
 
 <template>
   <main class="page-shell">
-    <a-page-header title="检索配置" subtitle="控制 quick-answer 的召回、RRF、Rerank 和解析切分默认参数。" />
+    <a-page-header title="检索配置" subtitle="v0.9 固定主链路：Qdrant dense + ParadeDB BM25 + RRF + 必需 rerank + parent-child context。" />
     <section class="content-card">
       <a-tabs default-active-key="retrieval">
         <a-tab-pane key="retrieval" title="检索参数">
+          <a-alert
+            type="info"
+            content="v0.9 固定主链路为混合检索；旧的单向量或单关键词模式不再作为用户可选项。Rerank 是 Quick Q&A 必需阶段。"
+          />
+          <div class="settings-status-grid retrieval-fixed-status">
+            <article class="settings-status-card">
+              <header>
+                <strong>Qdrant</strong>
+                <a-tag color="green">{{ qdrantStatusText }}</a-tag>
+              </header>
+              <p>dense vector retrieval，固定 topK {{ retrieval.retrievalEmbeddingTopK }}，threshold {{ retrieval.retrievalVectorThreshold }}。</p>
+            </article>
+            <article class="settings-status-card">
+              <header>
+                <strong>ParadeDB BM25</strong>
+                <a-tag color="arcoblue">{{ paradeDbStatusText }}</a-tag>
+              </header>
+              <p>keyword retrieval 固定使用 pg_search BM25，keyword topK {{ retrieval.retrievalKeywordTopK }}。</p>
+            </article>
+            <article class="settings-status-card">
+              <header>
+                <strong>rerank 必需</strong>
+                <a-tag :color="rerankStatusColor">{{ rerankStatusText }}</a-tag>
+              </header>
+              <p>RRF top{{ retrieval.retrievalRrfTopK }} 后强制 rerank top{{ retrieval.retrievalRerankTopK }}。</p>
+            </article>
+          </div>
           <div class="form-grid">
-            <a-form-item label="retrieval mode">
-              <a-select v-model="retrieval.retrievalMode" data-testid="retrieval-mode">
-                <a-option value="hybrid">Hybrid：向量 + 关键词</a-option>
-                <a-option value="vector_only">仅向量</a-option>
-                <a-option value="keyword_only">仅关键词</a-option>
-              </a-select>
-            </a-form-item>
             <a-form-item label="embedding topK">
-              <a-input-number v-model="retrieval.retrievalEmbeddingTopK" data-testid="retrieval-embedding-top-k" :min="1" :max="500" />
+              <a-input-number v-model="retrieval.retrievalEmbeddingTopK" data-testid="retrieval-embedding-top-k" disabled />
             </a-form-item>
             <a-form-item label="vector threshold">
-              <a-input-number v-model="retrieval.retrievalVectorThreshold" data-testid="retrieval-vector-threshold" :min="0" :max="1" :step="0.01" />
+              <a-input-number v-model="retrieval.retrievalVectorThreshold" data-testid="retrieval-vector-threshold" disabled />
+            </a-form-item>
+            <a-form-item label="keyword topK">
+              <a-input-number v-model="retrieval.retrievalKeywordTopK" data-testid="retrieval-keyword-top-k" disabled />
             </a-form-item>
             <a-form-item label="keyword threshold">
-              <a-input-number v-model="retrieval.retrievalKeywordThreshold" data-testid="retrieval-keyword-threshold" :min="0" :max="1" :step="0.01" />
+              <a-input-number v-model="retrieval.retrievalKeywordThreshold" data-testid="retrieval-keyword-threshold" disabled />
             </a-form-item>
             <a-form-item label="RRF K">
-              <a-input-number v-model="retrieval.retrievalRrfK" data-testid="retrieval-rrf-k" :min="1" :max="500" />
+              <a-input-number v-model="retrieval.retrievalRrfK" data-testid="retrieval-rrf-k" disabled />
             </a-form-item>
             <a-form-item label="vector weight">
-              <a-input-number v-model="retrieval.retrievalRrfVectorWeight" data-testid="retrieval-rrf-vector-weight" :min="0.1" :max="10" :step="0.1" />
+              <a-input-number v-model="retrieval.retrievalRrfVectorWeight" data-testid="retrieval-rrf-vector-weight" disabled />
             </a-form-item>
             <a-form-item label="keyword weight">
-              <a-input-number v-model="retrieval.retrievalRrfKeywordWeight" data-testid="retrieval-rrf-keyword-weight" :min="0.1" :max="10" :step="0.1" />
-            </a-form-item>
-            <a-form-item label="enable rerank">
-              <a-switch v-model="retrieval.retrievalEnableRerank" data-testid="retrieval-enable-rerank" />
+              <a-input-number v-model="retrieval.retrievalRrfKeywordWeight" data-testid="retrieval-rrf-keyword-weight" disabled />
             </a-form-item>
             <a-form-item label="rerank model">
               <a-select v-model="retrieval.selectedRerankModelId" data-testid="rerank-model-select" allow-clear>
@@ -72,10 +101,10 @@ onMounted(() => {
               </a-select>
             </a-form-item>
             <a-form-item label="rerank topK">
-              <a-input-number v-model="retrieval.retrievalRerankTopK" data-testid="retrieval-rerank-top-k" :min="1" :max="50" />
+              <a-input-number v-model="retrieval.retrievalRerankTopK" data-testid="retrieval-rerank-top-k" disabled />
             </a-form-item>
             <a-form-item label="rerank threshold">
-              <a-input-number v-model="retrieval.retrievalRerankThreshold" data-testid="retrieval-rerank-threshold" :min="-10" :max="10" :step="0.01" />
+              <a-input-number v-model="retrieval.retrievalRerankThreshold" data-testid="retrieval-rerank-threshold" disabled />
             </a-form-item>
           </div>
           <div class="actions-row">
@@ -102,36 +131,31 @@ onMounted(() => {
               </a-select>
             </a-form-item>
             <a-form-item label="strategy">
-              <a-select v-model="retrieval.chunkStrategy" data-testid="chunk-strategy">
-                <a-option value="auto">自动：标题 → 启发式 → 传统递归</a-option>
-                <a-option value="heading">标题优先</a-option>
-                <a-option value="heuristic">启发式边界</a-option>
-                <a-option value="legacy">传统递归</a-option>
-              </a-select>
+              <a-tag>auto</a-tag>
             </a-form-item>
             <a-form-item label="chunk size">
-              <a-input-number v-model="retrieval.chunkSize" data-testid="chunk-size" :min="50" :max="10000" />
+              <a-tag>512</a-tag>
             </a-form-item>
             <a-form-item label="overlap">
-              <a-input-number v-model="retrieval.chunkOverlap" data-testid="chunk-overlap" :min="0" :max="2000" />
+              <a-tag>80</a-tag>
             </a-form-item>
             <a-form-item label="separators">
-              <a-input v-model="retrieval.separatorsText" data-testid="chunk-separators" />
+              <a-tag>"\n\n", "\n", "。"</a-tag>
             </a-form-item>
             <a-form-item label="token limit">
-              <a-input-number v-model="retrieval.tokenLimit" data-testid="token-limit" :min="0" :max="8192" />
+              <a-tag>0</a-tag>
             </a-form-item>
             <a-form-item label="languages">
-              <a-input v-model="retrieval.languagesText" data-testid="chunk-languages" placeholder="zh,en" />
+              <a-tag>未指定</a-tag>
             </a-form-item>
             <a-form-item label="Parent-Child">
-              <a-switch v-model="retrieval.enableParentChild" data-testid="enable-parent-child" />
+              <a-tag color="green">parent-child 固定启用</a-tag>
             </a-form-item>
             <a-form-item label="parent size">
-              <a-input-number v-model="retrieval.parentChunkSize" data-testid="parent-chunk-size" :min="512" :max="8192" :disabled="!retrieval.enableParentChild" />
+              <a-tag>4096</a-tag>
             </a-form-item>
             <a-form-item label="child size">
-              <a-input-number v-model="retrieval.childChunkSize" data-testid="child-chunk-size" :min="64" :max="2048" :disabled="!retrieval.enableParentChild" />
+              <a-tag>384</a-tag>
             </a-form-item>
           </div>
           <ChunkPreview />

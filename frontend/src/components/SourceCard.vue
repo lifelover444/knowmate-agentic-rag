@@ -14,6 +14,10 @@ function metadataText(metadata?: Record<string, unknown> | null): string {
   return JSON.stringify(metadata, null, 2);
 }
 
+function sourceTitle(source: SourceRead): string {
+  return source.document_title || source.title || source.document_id;
+}
+
 function retrievalMethodText(value?: string | null): string {
   const labels: Record<string, string> = {
     vector: "向量",
@@ -28,7 +32,7 @@ function retrievalMethodText(value?: string | null): string {
   <article class="source-card">
     <header class="source-card__header">
       <div>
-        <strong>{{ source.title || source.document_id }}</strong>
+        <strong>{{ sourceTitle(source) }}</strong>
         <small v-if="source.knowledge_base_name">真实来源：{{ source.knowledge_base_name }}</small>
         <small>{{ source.document_id }} / {{ source.chunk_id }}</small>
       </div>
@@ -42,13 +46,19 @@ function retrievalMethodText(value?: string | null): string {
       <span v-if="source.rerank_score !== null && source.rerank_score !== undefined">rerank_score {{ score(source.rerank_score) }}</span>
     </div>
     <div class="source-card__meta">
+      <span v-if="source.source_type">source_type: {{ source.source_type }}</span>
       <span v-if="source.context_chunk_id">context_chunk_id: {{ source.context_chunk_id }}</span>
       <span v-if="source.parent_chunk_id">parent_chunk_id: {{ source.parent_chunk_id }}</span>
       <span v-if="source.chunk_type">chunk_type: {{ source.chunk_type }}</span>
       <span v-if="source.context_header">context_header: {{ source.context_header }}</span>
     </div>
-    <p>{{ source.content }}</p>
-    <pre v-if="metadataText(source.metadata)" class="source-card__metadata">{{ metadataText(source.metadata) }}</pre>
+    <p>{{ source.snippet || source.content }}</p>
+    <details v-if="source.content && source.snippet && source.content !== source.snippet" class="source-card__detail">
+      <summary>匹配 child 内容</summary>
+      <p>{{ source.content }}</p>
+    </details>
+    <pre v-if="metadataText(source.metadata)" class="source-card__metadata">metadata 摘要
+{{ metadataText(source.metadata) }}</pre>
   </article>
 </template>
 
@@ -107,5 +117,15 @@ function retrievalMethodText(value?: string | null): string {
   padding: 10px;
   color: var(--km-text-secondary);
   background: var(--km-bg-page);
+}
+
+.source-card__detail {
+  color: var(--km-text-secondary);
+  font-size: 12px;
+}
+
+.source-card__detail p {
+  margin: 8px 0 0;
+  color: var(--km-text-secondary);
 }
 </style>

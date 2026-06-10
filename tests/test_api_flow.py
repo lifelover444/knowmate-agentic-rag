@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from conftest import create_bound_models
+from conftest import FixedScoreReranker, configure_rerank, create_bound_models
 from fastapi.testclient import TestClient
 
 from app.db.models import Chunk, Knowledge
@@ -43,6 +43,8 @@ def test_knowledge_upload_processing_and_quick_answer_flow(
     holder["app"] = app
     local_client = TestClient(app)
     chat_id, embedding_id = create_bound_models(local_client)
+    configure_rerank(local_client)
+    monkeypatch.setattr("app.services.knowledge_search.RerankerClient", lambda _config: FixedScoreReranker())
     create_response = local_client.post(
         "/api/v1/knowledge-bases",
         json={
@@ -69,7 +71,8 @@ def test_knowledge_upload_processing_and_quick_answer_flow(
 
     chunks_response = local_client.get(f"/api/v1/documents/{document['id']}/chunks")
     assert chunks_response.status_code == 200
-    assert len(chunks_response.json()) == 1
+    chunks = chunks_response.json()
+    assert {chunk["chunk_type"] for chunk in chunks} == {"parent", "child"}
 
     answer_response = local_client.post(
         "/api/v1/quick-answer",
@@ -77,11 +80,13 @@ def test_knowledge_upload_processing_and_quick_answer_flow(
     )
     assert answer_response.status_code == 200
     payload = answer_response.json()
-    assert payload["answer"] == "Knowmate is a FastAPI RAG assistant."
+    assert "Knowmate is a FastAPI RAG assistant." in payload["answer"]
     assert payload["sources"][0]["document_id"] == document["id"]
     assert payload["sources"][0]["content"] == "Knowmate is a FastAPI RAG assistant."
+    assert payload["sources"][0]["parent_chunk_id"]
+    assert payload["sources"][0]["document_title"] == "intro.txt"
 
     db_document = db_session.get(Knowledge, document["id"])
     assert db_document is not None
     assert db_document.parse_status == "completed"
-    assert db_session.query(Chunk).filter_by(knowledge_id=document["id"]).count() == 1
+    assert db_session.query(Chunk).filter_by(knowledge_id=document["id"]).count() == 2

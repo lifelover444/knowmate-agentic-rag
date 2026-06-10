@@ -10,6 +10,7 @@ from fastapi import UploadFile
 
 from app.core.config import Settings
 from app.db.models import Knowledge
+from app.db.repositories.chunk import ChunkRepository
 from app.db.repositories.document import DocumentRepository
 from app.db.repositories.knowledge_base import KnowledgeBaseRepository
 
@@ -130,6 +131,7 @@ class DocumentService:
 
     def soft_delete(self, document: Knowledge, vector_store=None) -> Knowledge:
         deleted = self.document_repo.soft_delete(document)
+        ChunkRepository(self.document_repo.db).bm25_delete_by_document(document.id)
         if vector_store is not None and hasattr(vector_store, "delete_by_knowledge_id"):
             vector_store.delete_by_knowledge_id(document.id)
         return deleted

@@ -1,5 +1,6 @@
 from app.core.config import Settings
 from app.db.models import KnowledgeBase
+from app.db.repositories.chunk import ChunkRepository
 from app.db.repositories.document import DocumentRepository
 from app.db.repositories.knowledge_base import KnowledgeBaseRepository
 from app.db.repositories.vector_store import VectorStoreRepository
@@ -9,13 +10,13 @@ from app.services.model_config import MODEL_CONFIG_REQUIRED_MESSAGE, ModelConfig
 
 def default_chunking_config(settings: Settings) -> dict:
     return {
-        "chunk_size": settings.default_chunk_size,
-        "chunk_overlap": settings.default_chunk_overlap,
+        "chunk_size": 512,
+        "chunk_overlap": 80,
         "separators": ["\n\n", "\n", "。"],
         "strategy": "auto",
         "token_limit": 0,
         "languages": [],
-        "enable_parent_child": False,
+        "enable_parent_child": True,
         "parent_chunk_size": 4096,
         "child_chunk_size": 384,
     }
@@ -25,6 +26,14 @@ def normalize_chunking_config(config: dict | None, settings: Settings) -> dict:
     normalized = default_chunking_config(settings)
     if config:
         normalized.update(config)
+    normalized["chunk_size"] = 512
+    normalized["chunk_overlap"] = 80
+    normalized["separators"] = ["\n\n", "\n", "。"]
+    normalized["token_limit"] = 0
+    normalized["enable_parent_child"] = True
+    normalized["parent_chunk_size"] = 4096
+    normalized["child_chunk_size"] = 384
+    normalized["strategy"] = "auto"
     return normalized
 
 
@@ -42,8 +51,8 @@ def default_indexing_strategy() -> dict:
     return {
         "enable_vector": True,
         "enable_keyword": True,
-        "enable_parent_child": False,
-        "enable_rerank": False,
+        "enable_parent_child": True,
+        "enable_rerank": True,
         "enable_wiki": False,
         "enable_knowledge_graph": False,
     }
@@ -53,6 +62,10 @@ def normalize_indexing_strategy(strategy: dict | None) -> dict:
     normalized = default_indexing_strategy()
     if strategy:
         normalized.update({key: bool(value) for key, value in strategy.items() if key in normalized})
+    normalized["enable_vector"] = True
+    normalized["enable_keyword"] = True
+    normalized["enable_parent_child"] = True
+    normalized["enable_rerank"] = True
     normalized["enable_wiki"] = False
     normalized["enable_knowledge_graph"] = False
     return normalized
@@ -187,9 +200,14 @@ class KnowledgeBaseService:
 
     def soft_delete(self, kb: KnowledgeBase, vector_store=None) -> KnowledgeBase:
         documents = DocumentRepository(self.repo.db).soft_delete_by_knowledge_base(kb.id)
+        chunk_repo = ChunkRepository(self.repo.db)
         if vector_store is not None and hasattr(vector_store, "delete_by_knowledge_id"):
             for document in documents:
+                chunk_repo.bm25_delete_by_document(document.id)
                 vector_store.delete_by_knowledge_id(document.id)
+        else:
+            for document in documents:
+                chunk_repo.bm25_delete_by_document(document.id)
         return self.repo.soft_delete(kb)
 
 

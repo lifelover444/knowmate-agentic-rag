@@ -13,6 +13,7 @@ from app.rag.quick_answer import AnswerResult, AnswerSource
 from app.schemas.quick_answer import SourceRead
 from app.services.knowledge_search import KnowledgeSearchService
 from app.services.model_config import ModelConfigService
+from app.services.retrieval_config import RetrievalConfigService
 
 
 @dataclass
@@ -43,7 +44,6 @@ class QuickAnswerService:
         knowledge_base_id: str | None,
         query: str,
         top_k: int | None = None,
-        mode: str | None = None,
         enable_rerank: bool | None = None,
         knowledge_base_ids: list[str] | None = None,
         knowledge_ids: list[str] | None = None,
@@ -55,7 +55,6 @@ class QuickAnswerService:
             knowledge_ids=knowledge_ids,
             query=query,
             top_k=top_k,
-            mode=mode,
             enable_rerank=enable_rerank,
             attachments=attachments,
         )
@@ -69,10 +68,9 @@ class QuickAnswerService:
         knowledge_ids: list[str] | None = None,
         query: str,
         top_k: int | None = None,
-        mode: str | None = None,
         enable_rerank: bool | None = None,
         history: list[ChatMessage] | None = None,
-        enable_query_rewrite: bool = False,
+        enable_query_rewrite: bool = True,
         temperature: float | None = None,
         system_prompt: str | None = None,
         generate_answer: bool = True,
@@ -119,20 +117,33 @@ class QuickAnswerService:
             knowledge_base_ids=knowledge_base_ids,
             knowledge_ids=knowledge_ids,
             query=search_query,
-            mode=mode,
             top_k=top_k,
             enable_rerank=enable_rerank,
         )
         hits = search_result.hits
         stages.extend(search_result.diagnostics.get("stages") or [])
+        effective_retrieval_mode = search_result.diagnostics.get("mode")
+        effective_enable_rerank = search_result.diagnostics.get("enable_rerank")
         model_config = self._model_config_payload(primary_kb_id)
+        retrieval_config = RetrievalConfigService(self.db, self.settings).get()
+        trace_counts = _retrieval_trace_counts(search_result.diagnostics)
+        model_config_used = _trace_model_config_used(model_config, search_result.diagnostics)
         answer_started = time.perf_counter()
         retrieval_trace = {
             **rewrite_trace,
-            "retrieval_mode": mode,
+            "query_original": query,
+            "query_normalized": search_query,
+            "query_rewritten": rewritten_query,
+            "retrieval_mode": effective_retrieval_mode,
             "top_k": top_k,
-            "enable_rerank": enable_rerank,
+            "enable_rerank": effective_enable_rerank,
             "hit_count": len(hits),
+            "vector_hits": trace_counts["vector_hits"],
+            "keyword_hits": trace_counts["keyword_hits"],
+            "rrf_hits": trace_counts["rrf_hits"],
+            "rerank_hits": trace_counts["rerank_hits"],
+            "selected_contexts": [],
+            "model_config_used": model_config_used,
             "diagnostics": search_result.diagnostics,
             "context_chunk_ids": [hit.chunk_id for hit in hits],
             "context_char_count": 0,
@@ -168,13 +179,42 @@ class QuickAnswerService:
             )
 
         sources = [_hit_to_source(hit) for hit in hits]
-        context_blocks = [_source_context(source) for source in sources]
+        context_started = time.perf_counter()
+        sources, context_blocks, selected_contexts, selection_truncated = _select_final_contexts(
+            sources,
+            max_count=retrieval_config.final_context_count,
+            max_chars=retrieval_config.max_context_chars,
+        )
+        retrieval_trace["stages"].append(
+            _trace_stage(
+                "context_select",
+                "done",
+                context_started,
+                input={
+                    "candidate_count": len(hits),
+                    "final_context_count": retrieval_config.final_context_count,
+                    "max_context_chars": retrieval_config.max_context_chars,
+                },
+                output={
+                    "selected_context_count": len(selected_contexts),
+                    "selected_chunk_ids": [item["chunk_id"] for item in selected_contexts],
+                    "context_char_count": sum(item["char_count"] for item in selected_contexts),
+                    "max_context_chars": retrieval_config.max_context_chars,
+                    "truncated": selection_truncated,
+                },
+            )
+        )
         raw_context = "\n\n---\n\n".join(context_blocks)
         combined_context = "\n\n---\n\n".join([part for part in [raw_context, attachments_context] if part])
-        rendered_context, context_truncated = _truncate_text(combined_context, max_chars=6000)
+        rendered_context, context_truncated = _truncate_text(
+            combined_context,
+            max_chars=retrieval_config.max_context_chars,
+        )
         prompt_context_summary = _build_prompt_context_summary(sources, attachment_metadata=attachment_metadata)
+        retrieval_trace["selected_contexts"] = selected_contexts
+        retrieval_trace["context_chunk_ids"] = [source.chunk_id for source in sources]
         retrieval_trace["context_char_count"] = len(combined_context)
-        retrieval_trace["context_truncated"] = context_truncated
+        retrieval_trace["context_truncated"] = context_truncated or selection_truncated
         retrieval_trace["prompt_context_summary"] = prompt_context_summary
         retrieval_trace["rendered_context"] = rendered_context
         chat_model = self._chat_model(primary_kb_id)
@@ -291,6 +331,8 @@ class QuickAnswerService:
 
 
 def _hit_to_source(hit) -> AnswerSource:
+    metadata = hit.metadata or {}
+    title = hit.title or metadata.get("title") or hit.document_id
     return AnswerSource(
         document_id=hit.document_id,
         knowledge_base_id=hit.knowledge_base_id,
@@ -298,11 +340,14 @@ def _hit_to_source(hit) -> AnswerSource:
         chunk_id=hit.chunk_id,
         content=hit.content,
         score=hit.score,
-        title=hit.title,
+        document_title=title,
+        title=title,
+        snippet=_source_snippet_text(hit.context_content or hit.content),
+        source_type=str(metadata.get("source_type") or hit.chunk_type or "document"),
         context_header=hit.context_header,
         parent_chunk_id=hit.parent_chunk_id,
         chunk_type=hit.chunk_type,
-        metadata=hit.metadata or {},
+        metadata=metadata,
         retrieval_method=hit.retrieval_method,
         vector_score=hit.vector_score,
         keyword_score=hit.keyword_score,
@@ -319,7 +364,10 @@ def _source_to_read(source: AnswerSource) -> SourceRead:
         knowledge_base_id=source.knowledge_base_id,
         knowledge_base_name=source.knowledge_base_name,
         chunk_id=source.chunk_id,
+        document_title=source.document_title or source.title,
         title=source.title,
+        snippet=source.snippet or _source_snippet(source),
+        source_type=source.source_type or _source_type(source),
         content=source.content,
         score=source.score,
         context_header=source.context_header,
@@ -339,6 +387,105 @@ def _source_to_read(source: AnswerSource) -> SourceRead:
 def _source_context(source: AnswerSource) -> str:
     body = source.context_content or source.content
     return f"{source.context_header}\n\n{body}" if source.context_header else body
+
+
+def _select_final_contexts(
+    sources: list[AnswerSource],
+    *,
+    max_count: int,
+    max_chars: int,
+) -> tuple[list[AnswerSource], list[str], list[dict], bool]:
+    selected_sources: list[AnswerSource] = []
+    context_blocks: list[str] = []
+    selected_contexts: list[dict] = []
+    seen_keys: set[str] = set()
+    used_chars = 0
+    truncated = False
+    for source in sources:
+        if len(selected_sources) >= max_count:
+            break
+        context_text = _compress_context_text(_source_context(source))
+        if not context_text:
+            continue
+        dedup_key = source.context_chunk_id or source.parent_chunk_id or source.chunk_id or context_text[:200]
+        if dedup_key in seen_keys:
+            continue
+        next_index = len(selected_sources) + 1
+        title = source.document_title or source.title or source.document_id
+        parent = f", parent_chunk_id={source.parent_chunk_id}" if source.parent_chunk_id else ""
+        header = f"[{next_index}] {title} (document_id={source.document_id}, chunk_id={source.chunk_id}{parent})"
+        block = f"{header}\n{context_text}"
+        separator_chars = 5 if context_blocks else 0
+        remaining = max_chars - used_chars - separator_chars
+        if remaining <= 0:
+            truncated = True
+            break
+        block_truncated = False
+        if len(block) > remaining:
+            block, block_truncated = _truncate_text(block, max_chars=remaining)
+            truncated = True
+        selected_source = _with_source_preview(source)
+        selected_sources.append(selected_source)
+        context_blocks.append(block)
+        seen_keys.add(dedup_key)
+        used_chars += len(block) + separator_chars
+        selected_contexts.append(
+            {
+                "index": next_index,
+                "document_id": selected_source.document_id,
+                "document_title": selected_source.document_title or selected_source.title,
+                "chunk_id": selected_source.chunk_id,
+                "parent_chunk_id": selected_source.parent_chunk_id,
+                "context_chunk_id": selected_source.context_chunk_id,
+                "source_type": selected_source.source_type or _source_type(selected_source),
+                "score": selected_source.score,
+                "rerank_score": selected_source.rerank_score,
+                "char_count": len(block),
+                "truncated": block_truncated,
+                "snippet": selected_source.snippet or _source_snippet(selected_source),
+            }
+        )
+    return selected_sources, context_blocks, selected_contexts, truncated
+
+
+def _with_source_preview(source: AnswerSource) -> AnswerSource:
+    from dataclasses import replace
+
+    return replace(
+        source,
+        document_title=source.document_title or source.title,
+        snippet=source.snippet or _source_snippet(source),
+        source_type=source.source_type or _source_type(source),
+    )
+
+
+def _compress_context_text(value: str) -> str:
+    lines = [line.rstrip() for line in (value or "").strip().splitlines()]
+    compact: list[str] = []
+    blank = False
+    for line in lines:
+        if not line.strip():
+            if not blank:
+                compact.append("")
+            blank = True
+            continue
+        compact.append(line)
+        blank = False
+    return "\n".join(compact).strip()
+
+
+def _source_type(source: AnswerSource) -> str:
+    metadata = source.metadata or {}
+    return str(metadata.get("source_type") or source.chunk_type or "document")
+
+
+def _source_snippet(source: AnswerSource, *, max_chars: int = 240) -> str:
+    return _source_snippet_text(source.context_content or source.content, max_chars=max_chars)
+
+
+def _source_snippet_text(value: str, *, max_chars: int = 240) -> str:
+    text = " ".join((value or "").split())
+    return text[:max_chars]
 
 
 def _build_prompt_context_summary(
@@ -411,6 +558,41 @@ def _truncate_text(value: str, *, max_chars: int) -> tuple[str, bool]:
     if len(text) <= max_chars:
         return text, False
     return text[:max_chars].rstrip() + "\n...[已截断]", True
+
+
+def _retrieval_trace_counts(diagnostics: dict) -> dict[str, int]:
+    stages = {stage.get("name"): stage for stage in diagnostics.get("stages") or []}
+    return {
+        "vector_hits": _summary_number((stages.get("vector") or {}).get("output", {}).get("hit_count")),
+        "keyword_hits": _summary_number((stages.get("keyword") or {}).get("output", {}).get("hit_count")),
+        "rrf_hits": _summary_number((stages.get("rrf") or {}).get("output", {}).get("output_count")),
+        "rerank_hits": _summary_number((stages.get("rerank") or {}).get("output", {}).get("rerank_output_count")),
+    }
+
+
+def _summary_number(value) -> int:
+    if isinstance(value, list):
+        return sum(_summary_number(item) for item in value)
+    if isinstance(value, int | float):
+        return int(value)
+    return 0
+
+
+def _trace_model_config_used(model_config: dict, diagnostics: dict) -> dict:
+    payload = {
+        "knowledge_base_id": model_config.get("knowledge_base_id"),
+        "embedding_model_id": model_config.get("embedding_model_id"),
+        "qa_model_id": model_config.get("qa_model_id"),
+    }
+    rerank_model_id = None
+    for stage in diagnostics.get("stages") or []:
+        if stage.get("name") == "rerank":
+            model_used = (stage.get("output") or {}).get("model_config_used")
+            if model_used and model_used != "injected":
+                rerank_model_id = model_used
+            break
+    payload["rerank_model_id"] = rerank_model_id
+    return payload
 
 
 def _complete(chat_model, messages: list[dict[str, str]], temperature: float) -> str:

@@ -62,11 +62,56 @@ def test_frontend_uses_qwen_rerank_preset_instead_of_qwen_plus():
     assert "compatible-api/v1/reranks" in app
 
 
-def test_frontend_can_edit_existing_kb_rerank_strategy_and_warn_chat():
+def test_frontend_keeps_kb_parent_child_and_rerank_fixed_on():
     app = frontend_source()
+    kb_view = (ROOT / "frontend" / "src" / "views" / "KnowledgeBaseView.vue").read_text(encoding="utf-8")
+    kb_detail = (ROOT / "frontend" / "src" / "views" / "KnowledgeBaseDetailView.vue").read_text(encoding="utf-8")
 
     assert "updateKnowledgeBase" in app
     assert "edit-kb-config" in app
     assert "submitEdit" in app
-    assert "当前知识库未启用重排" in app
-    assert "selectedKbAllowsRerank" in app
+    assert "enable_parent_child: true" in kb_view
+    assert "enable_rerank: true" in kb_view
+    assert "enable_parent_child: true" in kb_detail
+    assert "enable_rerank: true" in kb_detail
+    assert "v0.9 固定启用" in kb_view
+    assert "v0.9 固定启用" in kb_detail
+    assert "v-model=\"createForm.enable_parent_child\"" not in kb_view
+    assert "v-model=\"createForm.enable_rerank\"" not in kb_view
+    assert "v-model=\"editForm.enable_parent_child\"" not in kb_view
+    assert "v-model=\"editForm.enable_rerank\"" not in kb_view
+    assert "v-model=\"settingsForm.enableParentChild\"" not in kb_detail
+    assert "v-model=\"settingsForm.enableRerank\"" not in kb_detail
+
+
+def test_frontend_kb_model_vectorstore_and_indexing_are_fixed_to_v09_mainline():
+    models_store = (ROOT / "frontend" / "src" / "stores" / "models.ts").read_text(encoding="utf-8")
+    kb_view = (ROOT / "frontend" / "src" / "views" / "KnowledgeBaseView.vue").read_text(encoding="utf-8")
+    kb_detail = (ROOT / "frontend" / "src" / "views" / "KnowledgeBaseDetailView.vue").read_text(encoding="utf-8")
+
+    assert "isRealSelectableModel" in models_store
+    assert 'model.model_name !== "fake-embedding"' in models_store
+    assert 'model.type === "Embedding"' in models_store
+    assert 'model.type === "KnowledgeQA"' in models_store
+
+    for source in (kb_view, kb_detail):
+        assert 'v-model="createForm.vector_store_id"' not in source
+        assert 'v-model="editForm.vector_store_id"' not in source
+        assert 'v-model="settingsForm.vector_store_id"' not in source
+        assert 'v-model="createForm.enable_vector"' not in source
+        assert 'v-model="createForm.enable_keyword"' not in source
+        assert 'v-model="editForm.enable_vector"' not in source
+        assert 'v-model="editForm.enable_keyword"' not in source
+        assert 'v-model="settingsForm.enableVector"' not in source
+        assert 'v-model="settingsForm.enableKeyword"' not in source
+        assert "VectorStore：默认 Qdrant" in source
+        assert "vector 固定开启" in source
+        assert "keyword 固定开启" in source
+        assert "Wiki 关闭" in source
+        assert "Knowledge Graph 关闭" in source
+
+    assert "vector_store_id: null" in kb_view
+    assert "enable_vector: true" in kb_view
+    assert "enable_keyword: true" in kb_view
+    assert "enable_vector: true" in kb_detail
+    assert "enable_keyword: true" in kb_detail

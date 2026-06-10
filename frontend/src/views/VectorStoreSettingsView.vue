@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { Message } from "@arco-design/web-vue";
-import { onMounted, reactive, ref } from "vue";
+import { computed, onMounted, reactive, ref } from "vue";
 import { useVectorStoresStore } from "../stores/vectorStores";
 import { formatApiError } from "../utils/api";
 
@@ -70,20 +70,19 @@ async function remove(id: string) {
   }
 }
 
-function typeStatusText(status: string): string {
-  if (status === "available") return "可用";
-  if (status === "planned") return "planned";
-  return "unavailable";
-}
+const defaultQdrant = computed(() => store.vectorStores.find((item) => item.is_default) || store.vectorStores[0]);
 
-function typeStatusColor(status: string): string {
-  if (status === "available") return "green";
-  if (status === "planned") return "orange";
-  return "gray";
+function safeConfig(record: any): string {
+  const config = { ...(record.config_json || {}) };
+  if (config.api_key) {
+    const value = String(config.api_key);
+    config.api_key = { configured: true, last4: value.slice(-4) };
+  }
+  return JSON.stringify(config, null, 2);
 }
 
 onMounted(() => {
-  Promise.all([store.loadVectorStores(), store.loadVectorStoreTypes()]).catch((error) => {
+  store.loadVectorStores().catch((error) => {
     Message.error(formatApiError(error instanceof Error ? error.message : error));
   });
 });
@@ -96,28 +95,29 @@ onMounted(() => {
     <section class="content-card">
       <div class="section-heading">
         <div>
-          <h2>VectorStore Types</h2>
-          <p>当前仅 Qdrant 可用，OpenSearch、Elasticsearch、Milvus、Weaviate、Doris、Tencent VectorDB 为 planned。</p>
+          <h2>Qdrant 配置状态</h2>
+          <p>v0.9 固定向量检索后端为 Qdrant，其他向量库不在当前设置页展示。</p>
         </div>
+        <a-tag :color="defaultQdrant ? 'green' : 'gold'">{{ defaultQdrant ? "已注册" : "未注册" }}</a-tag>
       </div>
       <div class="vector-type-grid">
-        <article v-for="item in store.vectorStoreTypes" :key="item.type" class="vector-type-card">
+        <article class="vector-type-card">
           <header>
-            <strong>{{ item.label }}</strong>
-            <a-tag :color="typeStatusColor(item.status)">{{ typeStatusText(item.status) }}</a-tag>
+            <strong>Qdrant</strong>
+            <a-tag color="green">固定后端</a-tag>
           </header>
-          <p>{{ item.description }}</p>
+          <p>dense vector retrieval 使用 Qdrant collection；凭据保存后只显示 configured/last4。</p>
           <div class="vector-field-list">
             <span>connection_fields</span>
-            <a-tag v-for="field in item.connection_fields" :key="`${item.type}-conn-${field.name}`">
-              {{ field.label }}{{ field.sensitive ? " · sensitive" : "" }}
-            </a-tag>
+            <a-tag>Host</a-tag>
+            <a-tag>Port</a-tag>
+            <a-tag>API Key · sensitive</a-tag>
+            <a-tag>TLS</a-tag>
           </div>
           <div class="vector-field-list">
             <span>index_fields</span>
-            <a-tag v-for="field in item.index_fields" :key="`${item.type}-index-${field.name}`">
-              {{ field.label }}
-            </a-tag>
+            <a-tag>Collection</a-tag>
+            <a-tag>Embedding Dimension</a-tag>
           </div>
         </article>
       </div>
@@ -157,7 +157,7 @@ onMounted(() => {
           </a-table-column>
           <a-table-column title="配置">
             <template #cell="{ record }">
-              <code>{{ record.config_json }}</code>
+              <pre class="safe-config">{{ safeConfig(record) }}</pre>
             </template>
           </a-table-column>
           <a-table-column title="操作">

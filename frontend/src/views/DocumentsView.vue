@@ -3,7 +3,7 @@ import { Message } from "@arco-design/web-vue";
 import { computed, nextTick, onMounted, ref } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import DocumentUpload from "../components/DocumentUpload.vue";
-import { useKnowledgeBaseStore } from "../stores/knowledgeBase";
+import { DocumentProcessingTimeoutError, useKnowledgeBaseStore } from "../stores/knowledgeBase";
 import { formatApiError } from "../utils/api";
 import type { ChunkRead, DocumentRead, GeneratedQuestion } from "../types/api";
 
@@ -17,6 +17,7 @@ interface UploadQueueItem {
   documentId?: string;
   taskId?: string;
   errorMessage?: string;
+  noticeMessage?: string;
 }
 
 const route = useRoute();
@@ -217,7 +218,14 @@ async function uploadFiles(files: File[]) {
         queueItem.status = "processing";
         await kbStore.pollDocument(uploadedDocument.id);
         queueItem.status = "completed";
+        queueItem.noticeMessage = undefined;
       } catch (error) {
+        if (error instanceof DocumentProcessingTimeoutError) {
+          queueItem.status = "processing";
+          queueItem.noticeMessage = "解析仍在后台进行，请稍后刷新状态。";
+          await kbStore.loadDocuments(kbId.value, filters.value);
+          continue;
+        }
         const reason = formatApiError(error instanceof Error ? error.message : error);
         queueItem.status = "failed";
         queueItem.errorMessage = queueItem.documentId ? `解析失败：${reason}` : `上传失败：${reason}`;
@@ -661,6 +669,7 @@ onMounted(() => {
             <span>Document ID：{{ queueItem.documentId || "-" }}</span>
             <span>Task ID：{{ queueItem.taskId || "-" }}</span>
           </div>
+          <p v-if="queueItem.noticeMessage" class="muted-text">{{ queueItem.noticeMessage }}</p>
           <p v-if="queueItem.errorMessage" class="inline-error">{{ queueItem.errorMessage }}</p>
         </article>
       </div>

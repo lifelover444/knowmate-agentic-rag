@@ -23,7 +23,7 @@ from app.services.knowledge_base import normalize_indexing_strategy
 from app.services.model_config import ModelConfigService
 from app.services.retrieval_config import RetrievalConfigService
 
-RERANK_REQUIRED_MESSAGE = "启用重排需要先配置可用的 Rerank 模型"
+RERANK_REQUIRED_MESSAGE = "系统未完成 rerank 模型配置，请先在模型配置中配置可用的重排模型。"
 FAQ_BOOST_MIN_SCORE = 0.8
 FAQ_BOOST_FACTOR = 1.2
 
@@ -50,7 +50,6 @@ class KnowledgeSearchService:
         knowledge_base_ids: list[str] | None = None,
         knowledge_ids: list[str] | None = None,
         query: str,
-        mode: str | None = None,
         top_k: int | None = None,
         enable_rerank: bool | None = None,
     ) -> list[RetrievalHit]:
@@ -59,7 +58,6 @@ class KnowledgeSearchService:
             knowledge_base_ids=knowledge_base_ids,
             knowledge_ids=knowledge_ids,
             query=query,
-            mode=mode,
             top_k=top_k,
             enable_rerank=enable_rerank,
         ).hits
@@ -71,7 +69,6 @@ class KnowledgeSearchService:
         knowledge_base_ids: list[str] | None = None,
         knowledge_ids: list[str] | None = None,
         query: str,
-        mode: str | None = None,
         top_k: int | None = None,
         enable_rerank: bool | None = None,
     ) -> KnowledgeSearchResult:
@@ -86,11 +83,11 @@ class KnowledgeSearchService:
         _validate_same_embedding_model(resolved_kbs)
 
         config = RetrievalConfigService(self.db, self.settings).get()
-        resolved_mode = mode or config.retrieval_mode
+        resolved_mode = config.retrieval_mode
         if resolved_mode not in RETRIEVAL_MODES:
             raise ValueError("不支持的检索模式")
         limit = top_k or config.rerank_top_k
-        should_rerank = enable_rerank if enable_rerank is not None else config.enable_rerank
+        should_rerank = bool(config.enable_rerank)
         diagnostics = _DiagnosticsBuilder(
             query=query,
             mode=resolved_mode,
@@ -98,7 +95,7 @@ class KnowledgeSearchService:
             effective_top_k=limit,
             knowledge_base_ids=[kb.id for kb in resolved_kbs],
             knowledge_ids=knowledge_ids or [],
-            enable_rerank=should_rerank,
+            enable_rerank=config.enable_rerank,
         )
         hits: list[RetrievalHit] = []
         knowledge_ids_by_kb = _knowledge_ids_by_kb(self.db, knowledge_ids or [])
@@ -145,18 +142,6 @@ class KnowledgeSearchService:
                 duration_ms=_duration_ms(retriever_started),
             )
             hits.extend(replace(hit, knowledge_base_name=kb.name) for hit in kb_hits)
-        parent_input_count = len(hits)
-        hits = diagnostics.run_stage(
-            "parent_expand",
-            "done",
-            input_summary={"hit_count": parent_input_count},
-            action=lambda: ParentChildExpander(ChunkRepository(self.db)).expand(hits),
-            output_summary=lambda expanded: {
-                "input_count": parent_input_count,
-                "output_count": len(expanded),
-                "expanded_count": sum(1 for hit in expanded if hit.context_chunk_id),
-            },
-        )
         deduplicate_input_count = len(hits)
         hits = diagnostics.run_stage(
             "deduplicate",
@@ -205,22 +190,19 @@ class KnowledgeSearchService:
                 try:
                     hits = self._rerank(query, hits, config)
                 except Exception as exc:
-                    if isinstance(exc, RuntimeError) and str(exc) == RERANK_REQUIRED_MESSAGE:
-                        raise
-                    if isinstance(exc, LookupError):
-                        raise
                     diagnostics.add_stage(
                         "rerank",
                         "failed",
                         duration_ms=_duration_ms(rerank_started),
                         input_summary=rerank_input,
                         output_summary={
-                            "input_count": rerank_input_count,
-                            "output_count": rerank_input_count,
-                            "fallback": True,
+                            "rerank_input_count": rerank_input_count,
+                            "rerank_output_count": 0,
+                            "fallback": False,
                         },
-                        error_message=f"重排失败，已回退原始检索结果：{exc}",
+                        error_message=str(exc),
                     )
+                    raise
                 else:
                     rerank_diagnostics = dict(self._last_rerank_diagnostics)
                     diagnostics.add_stage(
@@ -229,8 +211,9 @@ class KnowledgeSearchService:
                         duration_ms=_duration_ms(rerank_started),
                         input_summary=rerank_input,
                         output_summary={
-                            "input_count": rerank_input_count,
-                            "output_count": len(hits),
+                            "rerank_input_count": rerank_input_count,
+                            "rerank_output_count": len(hits),
+                            "model_config_used": config.rerank_model_id or "injected",
                             "threshold": config.rerank_threshold,
                             "fallback": False,
                             **rerank_diagnostics,
@@ -244,12 +227,27 @@ class KnowledgeSearchService:
                     output_summary={"reason": "no_hits"},
                 )
         else:
+            rerank_skip_output = {"enabled": False}
+            if config.enable_rerank and not (config.rerank_model_id or self.reranker is not None):
+                rerank_skip_output = {"enabled": True, "reason": "missing_rerank_model"}
             diagnostics.add_stage(
                 "rerank",
                 "skipped",
                 input_summary={"candidate_count": len(hits)},
-                output_summary={"enabled": False},
+                output_summary=rerank_skip_output,
             )
+        parent_input_count = len(hits)
+        hits = diagnostics.run_stage(
+            "parent_expand",
+            "done",
+            input_summary={"hit_count": parent_input_count},
+            action=lambda: ParentChildExpander(ChunkRepository(self.db)).expand(hits),
+            output_summary=lambda expanded: {
+                "input_count": parent_input_count,
+                "output_count": len(expanded),
+                "expanded_count": sum(1 for hit in expanded if hit.context_chunk_id),
+            },
+        )
         final_hits = hits[:limit]
         diagnostics.finish(final_hit_count=len(final_hits))
         return KnowledgeSearchResult(hits=final_hits, diagnostics=diagnostics.to_dict())
@@ -304,14 +302,14 @@ class KnowledgeSearchService:
                 "done",
                 input_summary={
                     "knowledge_base_id": kb.id,
-                    "limit": config.embedding_top_k,
+                    "limit": config.keyword_top_k,
                     "threshold": config.keyword_threshold,
                     "knowledge_ids": knowledge_ids or [],
                 },
                 action=lambda: keyword.search(
                     query,
                     knowledge_base_id=kb.id,
-                    limit=config.embedding_top_k,
+                    limit=config.keyword_top_k,
                     knowledge_ids=knowledge_ids,
                 ),
                 output_summary=lambda found: {"hit_count": len(found), "knowledge_base_id": kb.id},
@@ -341,7 +339,7 @@ class KnowledgeSearchService:
                     rrf_k=config.rrf_k,
                     vector_weight=config.rrf_vector_weight,
                     keyword_weight=config.rrf_keyword_weight,
-                    limit=config.embedding_top_k,
+                    limit=config.rrf_top_k,
                 ),
                 output_summary=lambda merged: {
                     "input_count": len(vector_hits) + len(keyword_hits),
@@ -457,10 +455,11 @@ def _deduplicate_hits(hits: list[RetrievalHit]) -> list[RetrievalHit]:
 def _merge_faq_hits(hits: list[RetrievalHit]) -> list[RetrievalHit]:
     merged: list[RetrievalHit] = []
     for hit in hits:
-        if not _is_faq_hit(hit) or float(hit.score or 0) < FAQ_BOOST_MIN_SCORE:
+        confidence_score = max(float(value or 0) for value in (hit.score, hit.vector_score, hit.keyword_score))
+        if not _is_faq_hit(hit) or confidence_score < FAQ_BOOST_MIN_SCORE:
             merged.append(hit)
             continue
-        original_score = float(hit.score or 0)
+        original_score = confidence_score
         boosted_score = min(original_score * FAQ_BOOST_FACTOR, 1.0)
         metadata = dict(hit.metadata or {})
         metadata.update(
@@ -684,9 +683,9 @@ def _validate_mode_allowed(mode: str, strategy: dict) -> None:
 
 
 class CompositeKnowledgeRetriever:
-    engine = "qdrant+postgres"
+    engine = "qdrant+paradedb_bm25"
     vector_engine = "qdrant"
-    keyword_engine = "postgres"
+    keyword_engine = "paradedb_bm25"
 
     def __init__(self, service: KnowledgeSearchService) -> None:
         self.service = service

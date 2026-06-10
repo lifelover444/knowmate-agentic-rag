@@ -8,7 +8,6 @@ class KnowledgeSearchRequest(BaseModel):
     knowledge_base_ids: list[str] = Field(default_factory=list)
     knowledge_ids: list[str] = Field(default_factory=list)
     query: str = Field(min_length=1)
-    mode: str | None = None
     top_k: int | None = Field(default=None, ge=1, le=50)
     enable_rerank: bool | None = None
 
