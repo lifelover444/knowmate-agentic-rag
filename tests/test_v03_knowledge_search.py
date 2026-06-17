@@ -142,6 +142,93 @@ def test_knowledge_search_returns_hybrid_retrieval_diagnostics(client, db_sessio
     assert retriever["hit_count"] == 1
 
 
+def test_knowledge_search_keeps_weknora_style_over_retrieval_pool(client, fake_vector_store, monkeypatch):
+    kb_id = create_kb(client)
+    configure_rerank(client)
+    monkeypatch.setattr("app.services.knowledge_search.RerankerClient", lambda _config: FixedScoreReranker())
+    fake_vector_store.results = [
+        {
+            "chunk_id": f"chunk-over-retrieval-{index}",
+            "knowledge_id": f"doc-over-retrieval-{index}",
+            "knowledge_base_id": kb_id,
+            "content": f"over retrieval candidate {index}",
+            "title": "候选池文档",
+            "score": 1.0 - index * 0.001,
+        }
+        for index in range(60)
+    ]
+
+    response = client.post(
+        "/api/v1/knowledge-search",
+        json={"knowledge_base_id": kb_id, "query": "候选池放大", "mode": "hybrid"},
+    )
+
+    assert response.status_code == 200, response.text
+    stages = {stage["name"]: stage for stage in response.json()["diagnostics"]["stages"]}
+    assert stages["vector"]["output"]["hit_count"] == 50
+    assert stages["rrf"]["input"]["vector_count"] == 50
+    assert stages["rrf"]["output"]["output_count"] == 50
+    assert stages["rerank"]["output"]["rerank_input_count"] == 50
+
+
+def test_knowledge_search_expands_low_recall_query_with_keyword_variants(
+    client,
+    db_session,
+    fake_vector_store,
+    monkeypatch,
+):
+    kb_id = create_kb(client)
+    configure_rerank(client)
+    monkeypatch.setattr("app.services.knowledge_search.RerankerClient", lambda _config: FixedScoreReranker())
+    fake_vector_store.results = []
+    db_session.add(
+        Knowledge(
+            id="doc-query-expansion",
+            tenant_id=10000,
+            knowledge_base_id=kb_id,
+            type="file",
+            title="交通事故保险责任",
+            source="upload",
+            parse_status="completed",
+            enable_status="enabled",
+            file_size=0,
+            storage_size=0,
+        )
+    )
+    db_session.add(
+        Chunk(
+            id="chunk-query-expansion",
+            tenant_id=10000,
+            knowledge_base_id=kb_id,
+            knowledge_id="doc-query-expansion",
+            content="交强险和商业三者险的赔付顺序说明。",
+            search_text="交强险 商业三者险",
+            chunk_index=0,
+            start_at=0,
+            end_at=18,
+            chunk_type="text",
+            chunk_metadata={"title": "交通事故保险责任"},
+        )
+    )
+    db_session.commit()
+
+    response = client.post(
+        "/api/v1/knowledge-search",
+        json={
+            "knowledge_base_id": kb_id,
+            "query": "请问这个问题涉及很多背景、交强险 商业三者险、其他无关描述一二三四五六七八九十怎么赔付",
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert [hit["chunk_id"] for hit in payload["hits"]] == ["chunk-query-expansion"]
+    stages = {stage["name"]: stage for stage in payload["diagnostics"]["stages"]}
+    assert stages["query_expansion"]["status"] == "done"
+    assert "交强险 商业三者险" in stages["query_expansion"]["output"]["variants"]
+    assert stages["query_expansion"]["output"]["added_hit_count"] == 1
+
+
 def test_knowledge_search_faq_merge_boosts_high_confidence_faq_and_traces_stage(
     client,
     fake_vector_store,

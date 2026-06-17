@@ -24,11 +24,23 @@ class FakeEmbedder:
 
 class FakeChatModel:
     def complete(self, messages: list[dict[str, str]]) -> str:
+        system_prompt = messages[0]["content"] if messages else ""
+        if "rewrite_query" in system_prompt and "intent" in system_prompt:
+            query = _extract_query_understand_question(messages[-1]["content"])
+            return f'{{"rewrite_query":"{query}","intent":"kb_search","image_description":""}}'
         context = messages[-1]["content"]
         marker = "Context:\n"
         if marker in context:
             return context.split(marker, 1)[1].split("\n\nQuestion:", 1)[0].strip()
         return "fake answer"
+
+
+def _extract_query_understand_question(content: str) -> str:
+    marker = "## User Question\n"
+    if marker not in content:
+        return ""
+    value = content.split(marker, 1)[1].split("\n\n## JSON Output", 1)[0].strip()
+    return value.replace("\\", "\\\\").replace('"', '\\"')
 
 
 class FakeVectorStore:

@@ -22,11 +22,20 @@ class DocumentProcessingCancelled(RuntimeError):
 
 
 class DocumentProcessingService:
-    def __init__(self, db: Session, upload_dir: Path, vector_store, settings=None, embedder=None) -> None:
+    def __init__(
+        self,
+        db: Session,
+        upload_dir: Path,
+        vector_store,
+        settings=None,
+        embedder=None,
+        generated_question_generator=None,
+    ) -> None:
         self.db = db
         self.upload_dir = upload_dir
         self.embedder = embedder
         self.vector_store = vector_store
+        self.generated_question_generator = generated_question_generator
         self.settings = settings or Settings()
         self.documents = DocumentRepository(db)
         self.knowledge_bases = KnowledgeBaseRepository(db)
@@ -80,6 +89,11 @@ class DocumentProcessingService:
                     chunk.pre_chunk_id = db_chunks[idx - 1].id
                 if idx < len(db_chunks) - 1:
                     chunk.next_chunk_id = db_chunks[idx + 1].id
+            _apply_generated_questions(
+                document=document,
+                chunks=embedding_chunks,
+                generator=self.generated_question_generator,
+            )
             spans.end_stage(
                 document.id,
                 attempt,
@@ -273,5 +287,54 @@ def _embedding_content(chunk: Chunk) -> str:
     return f"{chunk.context_header}\n\n{content}" if chunk.context_header else content
 
 
-def _search_text(title: str | None, context_header: str | None, content: str) -> str:
-    return "\n".join(item for item in (title, context_header, content) if item).strip()
+def _apply_generated_questions(document, chunks: list[Chunk], generator) -> None:
+    if generator is None:
+        return
+    for chunk in chunks:
+        questions = _normalize_generated_questions(_call_generated_question_generator(generator, chunk))
+        if not questions:
+            continue
+        metadata = dict(chunk.chunk_metadata or {})
+        metadata["generated_questions"] = questions
+        chunk.chunk_metadata = metadata
+        chunk.search_text = _search_text(
+            document.title,
+            chunk.context_header,
+            chunk.content,
+            generated_questions=questions,
+        )
+        _apply_chunk_contract(document, chunk)
+
+
+def _call_generated_question_generator(generator, chunk: Chunk):
+    if hasattr(generator, "generate"):
+        return generator.generate(chunk)
+    return generator(chunk)
+
+
+def _normalize_generated_questions(raw_questions) -> list[dict[str, str]]:
+    questions: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for raw in raw_questions or []:
+        if isinstance(raw, dict):
+            question = str(raw.get("question") or raw.get("content") or "").strip()
+            question_id = str(raw.get("id") or uuid.uuid4())
+        else:
+            question = str(raw or "").strip()
+            question_id = str(uuid.uuid4())
+        if not question or question in seen:
+            continue
+        seen.add(question)
+        questions.append({"id": question_id, "question": question})
+    return questions
+
+
+def _search_text(
+    title: str | None,
+    context_header: str | None,
+    content: str,
+    *,
+    generated_questions: list[dict[str, str]] | None = None,
+) -> str:
+    questions = [item["question"] for item in generated_questions or [] if item.get("question")]
+    return "\n".join(item for item in (title, context_header, content, *questions) if item).strip()

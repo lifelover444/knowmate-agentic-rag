@@ -16,6 +16,7 @@ const commandPaletteOpen = ref(false);
 const commandPaletteQuery = ref("");
 
 const currentKbId = computed(() => String(route.params.kbId || ""));
+const isChatRoute = computed(() => route.path.startsWith("/chat"));
 const commands = computed<CommandItem[]>(() => [
   { id: "chat", label: "快速问答", description: "进入 Chat / Quick Q&A", keywords: "chat qa 问答", to: "/chat" },
   {
@@ -104,7 +105,13 @@ onBeforeUnmount(() => window.removeEventListener("keydown", handleShortcut));
 </script>
 
 <template>
-  <button type="button" class="command-button" data-testid="open-command-palette" @click="openCommandPalette">
+  <button
+    type="button"
+    class="command-button"
+    :class="{ 'command-button--chat': isChatRoute }"
+    data-testid="open-command-palette"
+    @click="openCommandPalette"
+  >
     <span>命令</span>
     <small>Ctrl+K</small>
   </button>
@@ -153,6 +160,11 @@ onBeforeUnmount(() => window.removeEventListener("keydown", handleShortcut));
 .command-button small {
   color: var(--km-text-secondary);
   font-size: 12px;
+}
+
+.command-button--chat {
+  opacity: 0;
+  pointer-events: none;
 }
 
 .command-list {

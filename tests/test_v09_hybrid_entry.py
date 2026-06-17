@@ -85,7 +85,7 @@ def test_public_retrieval_requests_do_not_expose_legacy_mode_field():
     assert "mode" not in QuickAnswerRequest.model_fields
 
 
-def test_quick_answer_fixed_hybrid_entry_uses_top50_and_rrf_top30(
+def test_quick_answer_fixed_hybrid_entry_uses_weknora_style_over_retrieval_pool(
     client: TestClient,
     db_session,
     fake_vector_store,
@@ -129,7 +129,8 @@ def test_quick_answer_fixed_hybrid_entry_uses_top50_and_rrf_top30(
     assert stages["keyword"]["status"] == "done"
     assert stages["keyword"]["input"]["limit"] == 50
     assert stages["rrf"]["status"] == "done"
-    assert stages["rrf"]["output"]["output_count"] == 30
+    assert stages["rrf"]["input"]["over_retrieval_limit"] == 50
+    assert stages["rrf"]["output"]["output_count"] == 40
     assert stages["context_select"]["status"] == "done"
     assert stages["context_select"]["output"]["selected_context_count"] == 1
     assert len(response.json()["sources"]) == 1

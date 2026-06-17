@@ -2,7 +2,7 @@
 import MarkdownIt from "markdown-it";
 import hljs from "highlight.js";
 import { Message } from "@arco-design/web-vue";
-import { computed, onMounted, ref, watch } from "vue";
+import { computed, nextTick, onMounted, ref, watch } from "vue";
 import SourceCard from "../components/SourceCard.vue";
 import { useChatStore } from "../stores/chat";
 import { useKnowledgeBaseStore } from "../stores/knowledgeBase";
@@ -21,6 +21,8 @@ const renameVisible = ref(false);
 const renameTitle = ref("");
 const renamingSessionId = ref("");
 const attachmentInput = ref<HTMLInputElement | null>(null);
+const messageListRef = ref<HTMLElement | null>(null);
+const shouldStickToBottom = ref(true);
 const chatAttachments = ref<AttachmentInput[]>([]);
 
 const acceptedAttachmentTypes = ".txt,.md,.markdown,.csv,.json";
@@ -78,9 +80,44 @@ const lastRequestStatusText = computed(() => {
   if (status === "failed") return "失败";
   return "暂无";
 });
+const currentChatTitle = computed(() => {
+  const title = chat.currentSession?.title || selectedKb.value?.name || "新对话";
+  return title.replace(/^我\s+/, "");
+});
+
+function isMessageListNearBottom(): boolean {
+  const el = messageListRef.value;
+  if (!el) return true;
+  return el.scrollHeight - el.scrollTop - el.clientHeight < 96;
+}
+
+function scrollMessagesToBottom(behavior: ScrollBehavior = "auto") {
+  const el = messageListRef.value;
+  if (!el) return;
+  el.scrollTo({ top: el.scrollHeight, behavior });
+}
+
+function scheduleScrollToBottom(behavior: ScrollBehavior = "auto") {
+  nextTick(() => {
+    requestAnimationFrame(() => scrollMessagesToBottom(behavior));
+  });
+}
+
+function handleMessageListScroll() {
+  shouldStickToBottom.value = isMessageListNearBottom();
+}
+
+function forceMessageListStickToBottom(behavior: ScrollBehavior = "auto") {
+  shouldStickToBottom.value = true;
+  scheduleScrollToBottom(behavior);
+}
 
 function renderMarkdown(content: string): string {
   return md.render(content || "");
+}
+
+function displayUserContent(content: string): string {
+  return (content || "").replace(/^我\s*\n/, "");
 }
 
 function shortTime(value: string): string {
@@ -181,6 +218,7 @@ async function selectSession(session: ChatSessionRead) {
     await chat.loadSession(session.id);
     selectedKbId.value = session.knowledge_base_id;
     enableQueryRewrite.value = Boolean((session.settings as Record<string, unknown>)?.enable_query_rewrite);
+    forceMessageListStickToBottom();
   } catch (error) {
     Message.error(formatApiError(error instanceof Error ? error.message : error));
   }
@@ -191,6 +229,7 @@ async function openHistoryResult(sessionId: string) {
     const session = await chat.loadSession(sessionId);
     selectedKbId.value = session.knowledge_base_id;
     enableQueryRewrite.value = Boolean((session.settings as Record<string, unknown>)?.enable_query_rewrite);
+    forceMessageListStickToBottom();
   } catch (error) {
     Message.error(formatApiError(error instanceof Error ? error.message : error));
   }
@@ -274,6 +313,7 @@ async function askQuestion() {
     Message.error("当前知识库未启用重排，请先到知识库列表编辑配置打开 rerank。");
     return;
   }
+  forceMessageListStickToBottom();
   try {
     await chat.askQuestion(requestParams());
     chatAttachments.value = [];
@@ -444,6 +484,7 @@ onMounted(() => {
     } else if (selectedKbId.value) {
       chat.loadRecommendedQuestions(selectedKbId.value);
     }
+    forceMessageListStickToBottom();
   }).catch((error) => {
     Message.error(formatApiError(error instanceof Error ? error.message : error));
   });
@@ -462,12 +503,24 @@ watch(selectedKbId, (kbId) => {
     });
   }
 });
+
+watch(() => chat.currentSession?.knowledge_base_id, (kbId) => {
+  if (kbId && kbId !== selectedKbId.value) {
+    selectedKbId.value = kbId;
+  }
+});
+
+watch(
+  () => chat.messages.map((message) => `${message.id}:${message.status || ""}:${message.content.length}`).join("|"),
+  () => {
+    if (shouldStickToBottom.value) scheduleScrollToBottom();
+  },
+  { flush: "post" },
+);
 </script>
 
 <template>
   <main class="page-shell chat-page">
-    <a-page-header title="快速问答" subtitle="会话、流式回答、来源依据和检索 trace。" />
-
     <section class="chat-workbench">
       <aside class="chat-sidebar">
         <div class="chat-sidebar__top">
@@ -549,15 +602,24 @@ watch(selectedKbId, (kbId) => {
       </aside>
 
       <section class="chat-main">
+        <header class="chat-session-header">
+          <h1>{{ currentChatTitle }}</h1>
+        </header>
         <div class="chat-toolbar">
-          <a-form-item label="知识库">
-            <a-select v-model="selectedKbId" placeholder="请选择知识库" data-testid="knowledge-base-select">
-              <a-option v-for="kb in kbStore.knowledgeBases" :key="kb.id" :value="kb.id">
-                {{ kb.name }} · {{ kb.document_count }} 文档 · {{ kb.chunk_count }} chunks
-              </a-option>
-            </a-select>
-          </a-form-item>
-          <a-space>
+          <div class="chat-toolbar__primary">
+            <a-form-item label="知识库" class="kb-select-item chat-toolbar__kb">
+              <a-select v-model="selectedKbId" placeholder="请选择知识库" data-testid="knowledge-base-select">
+                <a-option v-for="kb in kbStore.knowledgeBases" :key="kb.id" :value="kb.id">
+                  {{ kb.name }} · {{ kb.document_count }} 文档 · {{ kb.chunk_count }} chunks
+                </a-option>
+              </a-select>
+            </a-form-item>
+            <div class="chat-toolbar__meta">
+              <strong>{{ chat.currentSession?.title || "未选择会话" }}</strong>
+              <span>{{ selectedKb ? `${selectedKb.document_count} 文档 · ${selectedKb.chunk_count} chunks` : "请选择知识库" }}</span>
+            </div>
+          </div>
+          <div class="chat-toolbar__actions">
             <a-switch v-model="enableQueryRewrite" data-testid="enable-query-rewrite" />
             <span class="setting-label">Query rewrite</span>
             <a-button v-if="chat.currentSession" size="small" @click="openRename(chat.currentSession)">重命名</a-button>
@@ -567,7 +629,7 @@ watch(selectedKbId, (kbId) => {
             <a-popconfirm v-if="chat.currentSession" content="确认删除当前会话？" @ok="deleteSession(chat.currentSession)">
               <a-button size="small" status="danger">删除</a-button>
             </a-popconfirm>
-          </a-space>
+          </div>
         </div>
         <section class="last-request-state" data-testid="last-request-state">
           <header>
@@ -592,10 +654,10 @@ watch(selectedKbId, (kbId) => {
         />
         <!-- MentionSelector: knowmate 当前用显式选择器复刻 WeKnora @ KB/file scope。 -->
         <section class="mention-scope-panel">
-          <div class="section-heading">
+          <div class="mention-scope-header">
             <div>
-              <h2>引用范围</h2>
-              <p>选择知识库或当前知识库下的文件，发送时提交 knowledge_base_ids、knowledge_ids 和 mentioned_items。</p>
+              <strong>引用范围</strong>
+              <span>默认使用当前知识库，可追加 KB 或文件范围。</span>
             </div>
             <a-button size="small" @click="clearMentionScope">清除范围</a-button>
           </div>
@@ -624,7 +686,12 @@ watch(selectedKbId, (kbId) => {
           </div>
         </section>
 
-        <div class="message-list" data-testid="chat-message-list">
+        <div
+          ref="messageListRef"
+          class="message-list"
+          data-testid="chat-message-list"
+          @scroll.passive="handleMessageListScroll"
+        >
           <section
             v-if="!chat.messages.length && chat.recommendedQuestions.length"
             class="recommended-question-list"
@@ -665,11 +732,11 @@ watch(selectedKbId, (kbId) => {
             </div>
             <div class="message__bubble">
               <div v-if="message.role === 'assistant'" class="markdown-body" v-html="renderMarkdown(message.content)"></div>
-              <p v-else>{{ message.content }}</p>
+              <p v-else>{{ displayUserContent(message.content) }}</p>
               <a-alert v-if="message.error_message" type="error" :content="message.error_message" />
             </div>
             <a-collapse v-if="message.role === 'assistant' && (message.sources.length || message.retrieval_trace)" :bordered="false">
-              <a-collapse-item key="sources" header="来源依据 / Retrieval Trace">
+              <a-collapse-item key="sources" header="引用来源 / 检索过程">
                 <div class="trace-panel" data-testid="message-trace">
                   <div class="trace-grid">
                     <span>问题原文: {{ messageTrace(message).query_original || messageTrace(message).original_query || message.original_query || "-" }}</span>
@@ -727,58 +794,80 @@ watch(selectedKbId, (kbId) => {
         </div>
 
         <div class="chat-input">
-          <a-textarea
-            v-model="chat.question"
-            data-testid="question"
-            :auto-size="{ minRows: 3, maxRows: 8 }"
-            placeholder="请输入问题"
-            @keydown.ctrl.enter.prevent="askQuestion"
-          />
-          <div class="chat-attachment-panel">
-            <input
-              ref="attachmentInput"
-              data-testid="chat-attachment-input"
-              type="file"
-              multiple
-              :accept="acceptedAttachmentTypes"
-              @change="handleAttachmentChange"
-            />
-            <a-button size="small" @click="attachmentInput?.click()">添加临时附件</a-button>
-            <span class="muted-text">支持 txt/md/csv/json，单个不超过 64KB。</span>
-            <div v-if="chatAttachments.length" class="message-attachments">
+          <div class="chat-input__box">
+            <div v-if="mentionedItems.length || chatAttachments.length" class="composer-chip-row">
+              <a-tag
+                v-for="item in mentionedItems"
+                :key="`composer-${item.type}-${item.id}`"
+                :color="item.type === 'kb' ? 'green' : 'gray'"
+              >
+                {{ item.type === "kb" ? "KB" : "文件" }} · {{ item.name }}
+              </a-tag>
               <a-tag
                 v-for="attachment in chatAttachments"
-                :key="attachment.filename"
+                :key="`composer-${attachment.filename}`"
                 :color="attachment.truncated ? 'orange' : 'blue'"
                 closable
                 @close="removeAttachment(attachment.filename)"
               >
-                {{ attachment.filename }}{{ attachment.truncated ? " · 附件内容已截断" : "" }}
+                附件 · {{ attachment.filename }}{{ attachment.truncated ? " · 已截断" : "" }}
               </a-tag>
             </div>
+            <a-textarea
+              v-model="chat.question"
+              data-testid="question"
+              :auto-size="{ minRows: 3, maxRows: 8 }"
+              placeholder="向知友提问，Ctrl + Enter 发送"
+              @keydown.ctrl.enter.prevent="askQuestion"
+            />
             <a-alert
               v-if="chatAttachments.some((attachment) => attachment.truncated)"
               type="warning"
               content="附件内容已截断，将只作为本轮临时上下文使用。"
             />
+            <div class="chat-input__footer">
+              <div class="chat-attachment-panel">
+                <input
+                  ref="attachmentInput"
+                  data-testid="chat-attachment-input"
+                  type="file"
+                  multiple
+                  :accept="acceptedAttachmentTypes"
+                  @change="handleAttachmentChange"
+                />
+                <a-select v-model="selectedKbId" class="composer-kb-select" placeholder="全部知识库">
+                  <a-option v-for="kb in kbStore.knowledgeBases" :key="kb.id" :value="kb.id">
+                    {{ kb.name }}
+                  </a-option>
+                </a-select>
+                <a-button size="small" class="composer-tool" @click="enableQueryRewrite = !enableQueryRewrite">
+                  快速
+                </a-button>
+                <a-button size="small" class="composer-tool" @click="attachmentInput?.click()">图片</a-button>
+              </div>
+              <div class="chat-input__actions">
+                <a-button
+                  type="primary"
+                  shape="circle"
+                  class="send-button"
+                  data-testid="ask-question"
+                  :loading="chat.answering"
+                  :disabled="!selectedKbId || !chat.question.trim() || Boolean(rerankBlockedByKb)"
+                  @click="askQuestion"
+                >
+                  ↑
+                </a-button>
+                <a-button
+                  v-if="chat.answering"
+                  data-testid="stop-generation"
+                  status="warning"
+                  @click="stopGeneration"
+                >
+                  停止生成
+                </a-button>
+              </div>
+            </div>
           </div>
-          <a-button
-            type="primary"
-            data-testid="ask-question"
-            :loading="chat.answering"
-            :disabled="!selectedKbId || !chat.question.trim() || Boolean(rerankBlockedByKb)"
-            @click="askQuestion"
-          >
-            发送
-          </a-button>
-          <a-button
-            v-if="chat.answering"
-            data-testid="stop-generation"
-            status="warning"
-            @click="stopGeneration"
-          >
-            停止生成
-          </a-button>
         </div>
 
         <a-collapse class="search-debug" data-testid="knowledge-search-panel">
@@ -830,24 +919,28 @@ watch(selectedKbId, (kbId) => {
 
 <style scoped>
 .chat-page {
-  min-height: calc(100vh - 48px);
+  min-height: 100vh;
+  padding: 20px 20px 0 0;
+  background: #f4f5f7;
 }
 
 .chat-workbench {
   display: grid;
-  grid-template-columns: 280px minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr);
+  height: calc(100vh - 20px);
   min-height: 720px;
-  border: 1px solid var(--km-border);
-  border-radius: var(--km-radius);
+  border: 1px solid #e8eaee;
+  border-radius: 26px 26px 0 0;
   overflow: hidden;
-  background: var(--km-bg-card);
+  background: #ffffff;
+  box-shadow: 0 10px 34px rgba(24, 30, 38, 0.04);
 }
 
 .chat-sidebar {
-  display: grid;
+  display: none;
   grid-template-rows: auto auto minmax(0, 1fr);
   border-right: 1px solid var(--km-border);
-  background: #fbfdfc;
+  background: #f8faf9;
 }
 
 .chat-sidebar__top {
@@ -871,7 +964,7 @@ watch(selectedKbId, (kbId) => {
   gap: 10px;
   padding: 12px 14px;
   border-bottom: 1px solid var(--km-border);
-  background: #fff;
+  background: #ffffff;
 }
 
 .history-search-panel header {
@@ -897,7 +990,7 @@ watch(selectedKbId, (kbId) => {
   display: grid;
   gap: 4px;
   border: 1px solid var(--km-border);
-  border-radius: var(--km-radius);
+  border-radius: 6px;
   padding: 9px 10px;
   color: var(--km-text-primary);
   background: var(--km-bg-card);
@@ -924,8 +1017,8 @@ watch(selectedKbId, (kbId) => {
 .session-list {
   display: grid;
   align-content: start;
-  gap: 6px;
-  padding: 10px;
+  gap: 4px;
+  padding: 10px 8px;
   overflow: auto;
 }
 
@@ -936,8 +1029,8 @@ watch(selectedKbId, (kbId) => {
   align-items: start;
   width: 100%;
   border: 1px solid transparent;
-  border-radius: var(--km-radius);
-  padding: 10px;
+  border-radius: 6px;
+  padding: 9px 10px;
   color: var(--km-text-primary);
   background: transparent;
 }
@@ -956,8 +1049,8 @@ watch(selectedKbId, (kbId) => {
 
 .session-item:hover,
 .session-item--active {
-  border-color: #bfead6;
-  background: var(--km-bg-deep);
+  border-color: rgba(22, 199, 132, 0.18);
+  background: rgba(22, 199, 132, 0.08);
 }
 
 .session-item span {
@@ -975,7 +1068,8 @@ watch(selectedKbId, (kbId) => {
 .recommended-question-list {
   display: grid;
   gap: 10px;
-  max-width: 720px;
+  width: min(760px, 100%);
+  margin: 0 auto;
 }
 
 .recommended-question-list header {
@@ -996,8 +1090,8 @@ watch(selectedKbId, (kbId) => {
   justify-content: space-between;
   gap: 12px;
   border: 1px solid var(--km-border);
-  border-radius: var(--km-radius);
-  padding: 10px 12px;
+  border-radius: 6px;
+  padding: 11px 13px;
   color: var(--km-text-primary);
   background: var(--km-bg-card);
   text-align: left;
@@ -1017,34 +1111,113 @@ watch(selectedKbId, (kbId) => {
 
 .chat-main {
   display: grid;
-  grid-template-rows: auto minmax(360px, 1fr) auto auto;
+  grid-template-rows: auto auto auto auto minmax(0, 1fr) auto auto;
+  min-width: 0;
+  min-height: 0;
+  background: #ffffff;
+}
+
+.chat-session-header {
+  padding: 22px 28px 12px;
+}
+
+.chat-session-header h1 {
+  color: #070a0f;
+  font-size: 24px;
+  font-weight: 800;
+  line-height: 1.3;
+}
+
+.chat-toolbar {
+  display: none;
+  grid-template-columns: minmax(360px, 1fr) auto;
+  gap: 12px;
+  align-items: start;
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--km-border);
+  background: #ffffff;
+}
+
+.chat-toolbar__primary {
+  display: grid;
+  grid-template-columns: minmax(260px, 420px) minmax(0, 1fr);
+  gap: 12px;
+  align-items: center;
   min-width: 0;
 }
 
-.chat-toolbar,
-.chat-input {
+.kb-select-item {
+  margin-bottom: 0;
+}
+
+.chat-toolbar__meta {
   display: grid;
-  grid-template-columns: minmax(260px, 1fr) auto;
-  gap: 12px;
+  gap: 3px;
+  min-width: 0;
+}
+
+.chat-toolbar__meta strong,
+.chat-toolbar__meta span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-toolbar__meta strong {
+  color: var(--km-text-primary);
+  font-size: 14px;
+}
+
+.chat-toolbar__meta span {
+  color: var(--km-text-secondary);
+  font-size: 12px;
+}
+
+.chat-toolbar__actions {
+  display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  padding: 14px;
-  border-bottom: 1px solid var(--km-border);
+  justify-content: flex-end;
+  gap: 8px;
 }
 
 .mention-scope-panel {
-  display: grid;
+  display: none;
   gap: 10px;
   border-bottom: 1px solid var(--km-border);
-  padding: 14px;
+  padding: 12px 18px;
   background: #fbfdfc;
 }
 
-.last-request-state {
+.mention-scope-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.mention-scope-header div {
   display: grid;
-  gap: 8px;
+  gap: 3px;
+}
+
+.mention-scope-header strong {
+  font-size: 14px;
+}
+
+.mention-scope-header span {
+  color: var(--km-text-secondary);
+  font-size: 12px;
+}
+
+.last-request-state {
+  display: none;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 8px 14px;
+  align-items: center;
   border-bottom: 1px solid var(--km-border);
-  padding: 10px 14px;
-  background: #fff;
+  padding: 10px 18px;
+  background: #ffffff;
 }
 
 .last-request-state header {
@@ -1060,7 +1233,9 @@ watch(selectedKbId, (kbId) => {
 }
 
 .mention-chip-list,
-.message-mentions {
+.message-mentions,
+.message-attachments,
+.composer-chip-row {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
@@ -1073,41 +1248,123 @@ watch(selectedKbId, (kbId) => {
 .message-list {
   display: grid;
   align-content: start;
-  gap: 16px;
-  padding: 18px;
+  gap: 28px;
+  min-height: 0;
+  padding: 26px clamp(32px, 13vw, 240px) 120px;
   overflow: auto;
-  background: var(--km-bg-page);
+  overscroll-behavior: contain;
+  scroll-padding-bottom: 120px;
+  background: #ffffff;
 }
 
 .message {
   display: grid;
   gap: 10px;
-  max-width: 82%;
+  width: min(1000px, 100%);
+  max-width: 100%;
+  color: #2d3137;
+  font-size: 18px;
+  line-height: 1.8;
 }
 
 .message--user {
   justify-self: end;
+  width: min(990px, 82%);
+  max-width: 990px;
 }
 
 .message--assistant {
   justify-self: start;
+  width: min(1080px, 100%);
 }
 
 .message__bubble {
-  border: 1px solid var(--km-border);
-  border-radius: var(--km-radius);
-  padding: 12px 14px;
+  border: 0;
+  border-radius: 20px;
+  padding: 18px 20px;
   background: var(--km-bg-card);
 }
 
+.message--assistant .message__bubble {
+  border-color: transparent;
+  padding: 0;
+  background: transparent;
+}
+
 .message--user .message__bubble {
-  border-color: #bfead6;
-  background: var(--km-bg-deep);
+  background: #f2f2f2;
+}
+
+.message__role {
+  display: none;
+  margin-bottom: 6px;
+  color: var(--km-text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.message--user .message__role {
+  text-align: right;
 }
 
 .message__bubble p {
+  margin: 0;
   white-space: pre-wrap;
-  line-height: 1.7;
+  line-height: 1.75;
+}
+
+.message .markdown-body {
+  color: #2b2f35;
+  font-size: 18px;
+  line-height: 1.85;
+}
+
+.message .markdown-body :deep(h1),
+.message .markdown-body :deep(h2),
+.message .markdown-body :deep(h3) {
+  margin: 24px 0 10px;
+  color: #171a20;
+  font-weight: 800;
+  line-height: 1.45;
+}
+
+.message .markdown-body :deep(h1) {
+  font-size: 24px;
+}
+
+.message .markdown-body :deep(h2),
+.message .markdown-body :deep(h3) {
+  font-size: 22px;
+}
+
+.message .markdown-body :deep(ul),
+.message .markdown-body :deep(ol) {
+  padding-left: 28px;
+}
+
+.message .markdown-body :deep(li) {
+  margin: 10px 0;
+}
+
+.message :deep(.arco-collapse) {
+  width: min(760px, 100%);
+  border: 1px solid var(--km-border);
+  border-radius: 6px;
+  overflow: hidden;
+  background: #ffffff;
+  box-shadow: 0 2px 4px rgba(7, 192, 95, 0.06);
+}
+
+.message :deep(.arco-collapse-item-header) {
+  min-height: 34px;
+  padding: 7px 12px;
+  color: var(--km-text-primary);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.message :deep(.arco-collapse-item-content-box) {
+  padding: 10px 12px 12px;
 }
 
 .trace-panel,
@@ -1120,7 +1377,7 @@ watch(selectedKbId, (kbId) => {
   display: grid;
   gap: 6px;
   border: 1px solid var(--km-border);
-  border-radius: var(--km-radius);
+  border-radius: 6px;
   padding: 10px;
   background: #fbfdfc;
 }
@@ -1137,7 +1394,7 @@ watch(selectedKbId, (kbId) => {
   display: grid;
   gap: 8px;
   border: 1px solid var(--km-border);
-  border-radius: var(--km-radius);
+  border-radius: 6px;
   padding: 10px;
   background: #fbfdfc;
 }
@@ -1179,7 +1436,7 @@ watch(selectedKbId, (kbId) => {
   display: grid;
   gap: 4px;
   border: 1px solid var(--km-border);
-  border-radius: var(--km-radius);
+  border-radius: 6px;
   padding: 8px;
   background: var(--km-bg-card);
 }
@@ -1208,16 +1465,145 @@ watch(selectedKbId, (kbId) => {
   font-size: 12px;
 }
 
+.last-request-state .trace-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.last-request-state .trace-grid span {
+  max-width: 240px;
+  border: 1px solid #eef0f2;
+  border-radius: 4px;
+  padding: 3px 7px;
+  overflow: hidden;
+  background: #fbfdfc;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-input {
+  border-top: 0;
+  padding: 0 28px 28px;
+  background: #ffffff;
+}
+
+.chat-input__box {
+  display: grid;
+  gap: 12px;
+  width: min(1210px, 100%);
+  margin: 0 auto;
+  border: 1px solid #e5e7eb;
+  border-radius: 30px;
+  padding: 22px 26px 20px;
+  background: #ffffff;
+  box-shadow: 0 12px 30px rgba(31, 35, 41, 0.1);
+}
+
+.chat-input__box :deep(.arco-textarea-wrapper) {
+  border: 0;
+  padding: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.chat-input__box :deep(textarea) {
+  min-height: 44px;
+  color: #242830;
+  font-size: 18px;
+  line-height: 1.7;
+}
+
+.chat-input__box :deep(textarea::placeholder) {
+  color: #c5cad2;
+}
+
+.chat-input__footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border-top: 0;
+  padding-top: 0;
+}
+
+.chat-attachment-panel {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 18px;
+  min-width: 0;
+}
+
+.chat-attachment-panel input {
+  display: none;
+}
+
+.chat-input__actions {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 8px;
+}
+
+.composer-kb-select {
+  width: 160px;
+}
+
+.composer-kb-select :deep(.arco-select-view-single) {
+  border: 0;
+  padding-left: 0;
+  background: transparent;
+  color: #20242b;
+  font-size: 16px;
+}
+
+.composer-tool {
+  border: 0;
+  padding: 0;
+  color: #20242b;
+  background: transparent;
+  font-size: 16px;
+}
+
+.composer-tool:hover {
+  color: #0eaf69;
+  background: transparent;
+}
+
+.send-button {
+  width: 40px;
+  height: 40px;
+  border: 0;
+  color: #ffffff;
+  background: #abeecb;
+  font-size: 24px;
+  font-weight: 700;
+}
+
+.send-button:not(.arco-btn-disabled):hover {
+  background: #8fe6ba;
+}
+
 .search-debug {
+  display: none;
   border-top: 1px solid var(--km-border);
+  background: #ffffff;
 }
 
 @media (max-width: 980px) {
   .chat-workbench,
   .chat-toolbar,
-  .chat-input,
+  .chat-toolbar__primary,
+  .last-request-state,
   .trace-grid {
     grid-template-columns: 1fr;
+  }
+
+  .chat-workbench {
+    height: auto;
+    min-height: calc(100vh - 16px);
+    border-radius: 18px 18px 0 0;
   }
 
   .chat-sidebar {
@@ -1226,8 +1612,36 @@ watch(selectedKbId, (kbId) => {
     border-bottom: 1px solid var(--km-border);
   }
 
+  .chat-toolbar__actions {
+    justify-content: flex-start;
+  }
+
+  .mention-scope-controls,
+  .trace-stage-list {
+    grid-template-columns: 1fr;
+  }
+
   .message {
+    font-size: 15px;
     max-width: 100%;
+  }
+
+  .message--user {
+    width: 100%;
+    max-width: 100%;
+  }
+
+  .message-list {
+    padding: 18px 16px 48px;
+  }
+
+  .chat-input__footer {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .chat-input__actions {
+    justify-content: flex-end;
   }
 }
 </style>

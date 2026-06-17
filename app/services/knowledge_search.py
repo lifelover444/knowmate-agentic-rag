@@ -1,3 +1,4 @@
+import re
 import time
 from dataclasses import dataclass, replace
 
@@ -17,6 +18,7 @@ from app.rag.retriever import (
     RerankPipeline,
     RetrievalHit,
     VectorRetriever,
+    tokenize_query,
 )
 from app.schemas.retrieval import RETRIEVAL_MODES, RetrievalConfigSchema
 from app.services.knowledge_base import normalize_indexing_strategy
@@ -42,6 +44,11 @@ class KnowledgeSearchService:
         self.vector_store = vector_store
         self.reranker = reranker
         self._last_rerank_diagnostics: dict = {}
+        self._last_expansion_diagnostics: dict = {
+            "status": "skipped",
+            "input": {},
+            "output": {"reason": "not_run", "variants": [], "added_hit_count": 0},
+        }
 
     def search(
         self,
@@ -87,12 +94,14 @@ class KnowledgeSearchService:
         if resolved_mode not in RETRIEVAL_MODES:
             raise ValueError("不支持的检索模式")
         limit = top_k or config.rerank_top_k
+        over_retrieval_limit = _over_retrieval_limit(config, scope_count=len(resolved_kbs))
         should_rerank = bool(config.enable_rerank)
         diagnostics = _DiagnosticsBuilder(
             query=query,
             mode=resolved_mode,
             requested_top_k=top_k,
             effective_top_k=limit,
+            over_retrieval_limit=over_retrieval_limit,
             knowledge_base_ids=[kb.id for kb in resolved_kbs],
             knowledge_ids=knowledge_ids or [],
             enable_rerank=config.enable_rerank,
@@ -112,6 +121,7 @@ class KnowledgeSearchService:
                     query,
                     kb=kb,
                     config=config,
+                    over_retrieval_limit=over_retrieval_limit,
                     mode=resolved_mode,
                     diagnostics=diagnostics,
                     knowledge_ids=scoped_knowledge_ids,
@@ -142,6 +152,24 @@ class KnowledgeSearchService:
                 duration_ms=_duration_ms(retriever_started),
             )
             hits.extend(replace(hit, knowledge_base_name=kb.name) for hit in kb_hits)
+        expansion_hits = self._expand_low_recall_query(
+            query=query,
+            current_hits=hits,
+            resolved_kbs=resolved_kbs,
+            config=config,
+            over_retrieval_limit=over_retrieval_limit,
+            knowledge_ids_by_kb=knowledge_ids_by_kb,
+            has_knowledge_filter=bool(knowledge_ids),
+        )
+        if expansion_hits:
+            hits.extend(expansion_hits)
+        expansion_stage = self._last_expansion_diagnostics
+        diagnostics.add_stage(
+            "query_expansion",
+            expansion_stage["status"],
+            input_summary=expansion_stage["input"],
+            output_summary=expansion_stage["output"],
+        )
         deduplicate_input_count = len(hits)
         hits = diagnostics.run_stage(
             "deduplicate",
@@ -258,6 +286,7 @@ class KnowledgeSearchService:
         *,
         kb,
         config: RetrievalConfigSchema,
+        over_retrieval_limit: int,
         mode: str,
         diagnostics,
         knowledge_ids: list[str] | None,
@@ -269,20 +298,25 @@ class KnowledgeSearchService:
                 VectorRetriever(embedder=self._embedder(kb.embedding_model_id), vector_store=self.vector_store),
                 config.vector_threshold,
             )
+            vector_limit = max(config.embedding_top_k, over_retrieval_limit)
             vector_hits = diagnostics.run_stage(
                 "vector",
                 "done",
                 input_summary={
                     "knowledge_base_id": kb.id,
-                    "limit": config.embedding_top_k,
+                    "limit": vector_limit,
+                    "configured_limit": config.embedding_top_k,
+                    "over_retrieval_limit": over_retrieval_limit,
                     "threshold": config.vector_threshold,
                     "knowledge_ids": knowledge_ids or [],
                 },
-                action=lambda: vector.search(
-                    query,
-                    knowledge_base_id=kb.id,
-                    limit=config.embedding_top_k,
-                    knowledge_ids=knowledge_ids,
+                action=lambda: _filter_answer_candidate_hits(
+                    vector.search(
+                        query,
+                        knowledge_base_id=kb.id,
+                        limit=vector_limit,
+                        knowledge_ids=knowledge_ids,
+                    )
                 ),
                 output_summary=lambda found: {"hit_count": len(found), "knowledge_base_id": kb.id},
                 aggregate_output_keys=("hit_count",),
@@ -297,20 +331,25 @@ class KnowledgeSearchService:
 
         if mode in {"keyword_only", "hybrid"}:
             keyword = _ThresholdRetriever(KeywordRetriever(ChunkRepository(self.db)), config.keyword_threshold)
+            keyword_limit = max(config.keyword_top_k, over_retrieval_limit)
             keyword_hits = diagnostics.run_stage(
                 "keyword",
                 "done",
                 input_summary={
                     "knowledge_base_id": kb.id,
-                    "limit": config.keyword_top_k,
+                    "limit": keyword_limit,
+                    "configured_limit": config.keyword_top_k,
+                    "over_retrieval_limit": over_retrieval_limit,
                     "threshold": config.keyword_threshold,
                     "knowledge_ids": knowledge_ids or [],
                 },
-                action=lambda: keyword.search(
-                    query,
-                    knowledge_base_id=kb.id,
-                    limit=config.keyword_top_k,
-                    knowledge_ids=knowledge_ids,
+                action=lambda: _filter_answer_candidate_hits(
+                    keyword.search(
+                        query,
+                        knowledge_base_id=kb.id,
+                        limit=keyword_limit,
+                        knowledge_ids=knowledge_ids,
+                    )
                 ),
                 output_summary=lambda found: {"hit_count": len(found), "knowledge_base_id": kb.id},
                 aggregate_output_keys=("hit_count",),
@@ -324,6 +363,7 @@ class KnowledgeSearchService:
             )
 
         if mode == "hybrid":
+            rrf_limit = max(config.rrf_top_k, over_retrieval_limit)
             return diagnostics.run_stage(
                 "rrf",
                 "done",
@@ -332,6 +372,9 @@ class KnowledgeSearchService:
                     "vector_count": len(vector_hits),
                     "keyword_count": len(keyword_hits),
                     "rrf_k": config.rrf_k,
+                    "limit": rrf_limit,
+                    "configured_limit": config.rrf_top_k,
+                    "over_retrieval_limit": over_retrieval_limit,
                 },
                 action=lambda: _merge_rrf(
                     vector_hits,
@@ -339,7 +382,7 @@ class KnowledgeSearchService:
                     rrf_k=config.rrf_k,
                     vector_weight=config.rrf_vector_weight,
                     keyword_weight=config.rrf_keyword_weight,
-                    limit=config.rrf_top_k,
+                    limit=rrf_limit,
                 ),
                 output_summary=lambda merged: {
                     "input_count": len(vector_hits) + len(keyword_hits),
@@ -435,12 +478,86 @@ class KnowledgeSearchService:
         self._last_rerank_diagnostics = pipeline.diagnostics
         return result
 
+    def _expand_low_recall_query(
+        self,
+        *,
+        query: str,
+        current_hits: list[RetrievalHit],
+        resolved_kbs,
+        config: RetrievalConfigSchema,
+        over_retrieval_limit: int,
+        knowledge_ids_by_kb: dict[str, list[str]],
+        has_knowledge_filter: bool,
+    ) -> list[RetrievalHit]:
+        threshold = min(config.rerank_top_k, over_retrieval_limit)
+        if len(current_hits) >= threshold:
+            self._last_expansion_diagnostics = {
+                "status": "skipped",
+                "input": {"hit_count": len(current_hits), "threshold": threshold},
+                "output": {"reason": "enough_hits", "variants": [], "added_hit_count": 0},
+            }
+            return []
+        variants = _expand_query_variants(query)
+        if not variants:
+            self._last_expansion_diagnostics = {
+                "status": "skipped",
+                "input": {"hit_count": len(current_hits), "threshold": threshold},
+                "output": {"reason": "no_variants", "variants": [], "added_hit_count": 0},
+            }
+            return []
+        lowered_threshold = round(max(config.keyword_threshold * 0.8, 0.0), 4)
+        keyword = _ThresholdRetriever(KeywordRetriever(ChunkRepository(self.db)), lowered_threshold)
+        expanded: list[RetrievalHit] = []
+        expanded_by_chunk_id: dict[str, RetrievalHit] = {}
+        for variant in variants:
+            for kb in resolved_kbs:
+                scoped_knowledge_ids = knowledge_ids_by_kb.get(kb.id) if has_knowledge_filter else None
+                if has_knowledge_filter and not scoped_knowledge_ids:
+                    continue
+                found = keyword.search(
+                    variant,
+                    knowledge_base_id=kb.id,
+                    limit=over_retrieval_limit,
+                    knowledge_ids=scoped_knowledge_ids,
+                )
+                for hit in found:
+                    if hit.chunk_type == "parent":
+                        continue
+                    expanded_hit = replace(hit, knowledge_base_name=kb.name, retrieval_method="keyword_expansion")
+                    existing = expanded_by_chunk_id.get(expanded_hit.chunk_id)
+                    if existing is None or float(expanded_hit.score or 0) > float(existing.score or 0):
+                        expanded_by_chunk_id[expanded_hit.chunk_id] = expanded_hit
+        expanded = sorted(expanded_by_chunk_id.values(), key=lambda item: float(item.score or 0), reverse=True)
+        self._last_expansion_diagnostics = {
+            "status": "done",
+            "input": {
+                "hit_count": len(current_hits),
+                "threshold": threshold,
+                "keyword_threshold": config.keyword_threshold,
+            },
+            "output": {
+                "variants": variants,
+                "lowered_keyword_threshold": lowered_threshold,
+                "added_hit_count": len(expanded),
+                "before_count": len(current_hits),
+                "after_count": len(current_hits) + len(expanded),
+            },
+        }
+        return expanded
+
 
 def _deduplicate_hits(hits: list[RetrievalHit]) -> list[RetrievalHit]:
     by_chunk: dict[str, RetrievalHit] = {}
     for hit in hits:
         existing = by_chunk.get(hit.chunk_id)
         if existing is None or float(hit.score or 0) > float(existing.score or 0):
+            if existing is not None and _is_expansion_hit(hit) and not _is_expansion_hit(existing):
+                by_chunk[hit.chunk_id] = replace(
+                    existing,
+                    keyword_score=existing.keyword_score or hit.keyword_score,
+                    rrf_score=existing.rrf_score or hit.rrf_score,
+                )
+                continue
             by_chunk[hit.chunk_id] = hit
         elif existing.retrieval_method != hit.retrieval_method:
             by_chunk[hit.chunk_id] = replace(
@@ -450,6 +567,14 @@ def _deduplicate_hits(hits: list[RetrievalHit]) -> list[RetrievalHit]:
                 rrf_score=existing.rrf_score or hit.rrf_score,
             )
     return sorted(by_chunk.values(), key=lambda item: float(item.score or 0), reverse=True)
+
+
+def _filter_answer_candidate_hits(hits: list[RetrievalHit]) -> list[RetrievalHit]:
+    return [hit for hit in hits if hit.chunk_type != "parent"]
+
+
+def _is_expansion_hit(hit: RetrievalHit) -> bool:
+    return hit.retrieval_method == "keyword_expansion"
 
 
 def _merge_faq_hits(hits: list[RetrievalHit]) -> list[RetrievalHit]:
@@ -524,6 +649,7 @@ class _DiagnosticsBuilder:
         mode: str,
         requested_top_k: int | None,
         effective_top_k: int,
+        over_retrieval_limit: int,
         knowledge_base_ids: list[str],
         knowledge_ids: list[str],
         enable_rerank: bool,
@@ -533,6 +659,7 @@ class _DiagnosticsBuilder:
             "mode": mode,
             "requested_top_k": requested_top_k,
             "effective_top_k": effective_top_k,
+            "over_retrieval_limit": over_retrieval_limit,
             "knowledge_base_ids": knowledge_base_ids,
             "knowledge_ids": knowledge_ids,
             "enable_rerank": enable_rerank,
@@ -696,6 +823,7 @@ class CompositeKnowledgeRetriever:
         *,
         kb,
         config: RetrievalConfigSchema,
+        over_retrieval_limit: int,
         mode: str,
         diagnostics: _DiagnosticsBuilder,
         knowledge_ids: list[str] | None,
@@ -704,10 +832,87 @@ class CompositeKnowledgeRetriever:
             query,
             kb=kb,
             config=config,
+            over_retrieval_limit=over_retrieval_limit,
             mode=mode,
             diagnostics=diagnostics,
             knowledge_ids=knowledge_ids,
         )
+
+
+def _over_retrieval_limit(config: RetrievalConfigSchema, *, scope_count: int) -> int:
+    per_scope = max(config.rerank_top_k * 5, 50)
+    return min(per_scope * max(scope_count, 1), 500)
+
+
+_STOPWORDS = {
+    "的",
+    "是",
+    "在",
+    "了",
+    "和",
+    "与",
+    "或",
+    "a",
+    "an",
+    "the",
+    "is",
+    "are",
+    "was",
+    "were",
+    "what",
+    "how",
+    "why",
+    "when",
+    "where",
+    "which",
+    "who",
+    "to",
+    "of",
+    "in",
+    "for",
+    "on",
+    "with",
+    "about",
+}
+_QUESTION_PREFIX = re.compile(
+    r"^(什么是|什么|如何|怎么|怎样|为什么|为何|哪个|哪些|谁|何时|何地|请问|帮我|我想知道|我想了解)"
+)
+_DELIMITERS = re.compile(r"[,，;；、。！？!?\s]+")
+_QUOTED_PHRASE = re.compile(r"[\"'“”‘’「」『』]([^\"'“”‘’「」『』]+)[\"'“”‘’「」『』]")
+_SPACED_PHRASE = re.compile(r"[\u4e00-\u9fffA-Za-z0-9]+(?:\s+[\u4e00-\u9fffA-Za-z0-9]+)+")
+
+
+def _expand_query_variants(query: str, *, limit: int = 5) -> list[str]:
+    normalized = (query or "").strip()
+    if not normalized:
+        return []
+    seen = {normalized.lower()}
+    variants: list[str] = []
+
+    def add(value: str) -> None:
+        item = value.strip()
+        if len(item) < 3:
+            return
+        key = item.lower()
+        if key in seen:
+            return
+        seen.add(key)
+        variants.append(item)
+
+    keywords = [term for term in tokenize_query(normalized) if term.lower() not in _STOPWORDS and len(term) > 1]
+    if len(keywords) >= 2:
+        add(" ".join(keywords))
+    for match in _QUOTED_PHRASE.findall(normalized):
+        add(match)
+    for match in _SPACED_PHRASE.findall(normalized):
+        add(match)
+    for segment in _DELIMITERS.split(normalized):
+        if len(segment.strip()) > 5:
+            add(segment)
+    without_question_words = _QUESTION_PREFIX.sub("", normalized).strip()
+    if without_question_words != normalized:
+        add(without_question_words)
+    return variants[:limit]
 
 
 class _ThresholdRetriever:

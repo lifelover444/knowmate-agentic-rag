@@ -2,6 +2,7 @@ from conftest import create_bound_models
 from fastapi.testclient import TestClient
 
 from app.db.models import ChatMessage, Chunk, Knowledge, KnowledgeBase
+from app.rag.prompt import build_quick_answer_messages
 from app.services.quick_answer import _build_conversation_context
 
 
@@ -13,6 +14,19 @@ def create_kb(client: TestClient) -> str:
     )
     assert response.status_code == 201, response.text
     return response.json()["id"]
+
+
+def test_quick_answer_default_prompt_applies_rules_from_context():
+    messages = build_quick_answer_messages(
+        "张某突发心脏病昏迷导致事故，是否担责？",
+        ["第一千一百九十条 完全民事行为能力人暂时没有意识或者失去控制造成损害；没有过错的，根据经济状况适当补偿。"],
+    )
+
+    system_prompt = messages[0]["content"]
+
+    assert "apply those rules to the user's facts" in system_prompt
+    assert "not repeated verbatim" in system_prompt
+    assert "specific part is not covered" in system_prompt
 
 
 def add_completed_document(db_session, kb_id: str) -> None:
@@ -97,6 +111,74 @@ def add_parent_child_document(db_session, kb_id: str) -> None:
     db_session.commit()
 
 
+def add_neighbor_context_document(db_session, kb_id: str) -> None:
+    db_session.add(
+        Knowledge(
+            id="doc-neighbor-context",
+            tenant_id=10000,
+            knowledge_base_id=kb_id,
+            type="file",
+            title="Neighbor Context Doc",
+            source="upload",
+            parse_status="completed",
+            enable_status="enabled",
+            file_size=0,
+            storage_size=0,
+        )
+    )
+    db_session.add_all(
+        [
+            Chunk(
+                id="neighbor-prev",
+                tenant_id=10000,
+                knowledge_base_id=kb_id,
+                knowledge_id="doc-neighbor-context",
+                content="PREV FACT: 事故发生前车辆已投保交强险。",
+                search_text="PREV FACT 事故 交强险",
+                chunk_index=0,
+                start_at=0,
+                end_at=24,
+                chunk_type="text",
+                next_chunk_id="neighbor-hit",
+                context_header="# 机动车事故责任",
+                chunk_metadata={"source_type": "document", "title": "Neighbor Context Doc"},
+            ),
+            Chunk(
+                id="neighbor-hit",
+                tenant_id=10000,
+                knowledge_base_id=kb_id,
+                knowledge_id="doc-neighbor-context",
+                content="HIT FACT: 保险赔偿顺序先交强险后商业三者险。",
+                search_text="HIT FACT 保险赔偿顺序 交强险 商业三者险",
+                chunk_index=1,
+                start_at=24,
+                end_at=52,
+                pre_chunk_id="neighbor-prev",
+                next_chunk_id="neighbor-next",
+                chunk_type="text",
+                context_header="# 机动车事故责任",
+                chunk_metadata={"source_type": "document", "title": "Neighbor Context Doc"},
+            ),
+            Chunk(
+                id="neighbor-next",
+                tenant_id=10000,
+                knowledge_base_id=kb_id,
+                knowledge_id="doc-neighbor-context",
+                content="NEXT FACT: 不足部分再由侵权人依法赔偿。",
+                search_text="NEXT FACT 侵权人 赔偿",
+                chunk_index=2,
+                start_at=52,
+                end_at=75,
+                pre_chunk_id="neighbor-hit",
+                chunk_type="text",
+                context_header="# 机动车事故责任",
+                chunk_metadata={"source_type": "document", "title": "Neighbor Context Doc"},
+            ),
+        ]
+    )
+    db_session.commit()
+
+
 class FailingReranker:
     def rerank(self, *, query: str, documents: list[str], top_n: int):
         raise RuntimeError("rerank provider down")
@@ -105,6 +187,28 @@ class FailingReranker:
 class FixedScoreReranker:
     def rerank(self, *, query: str, documents: list[str], top_n: int):
         return [(0, 0.6), (1, 0.4)][:top_n]
+
+
+class QueryUnderstandChatModel:
+    rewrite_query = "张某机动车交通事故交强险商业三者险医疗费误工费赔偿顺序"
+
+    def __init__(self) -> None:
+        self.complete_calls: list[list[dict[str, str]]] = []
+
+    def complete(self, messages: list[dict[str, str]], temperature: float | None = None) -> str:
+        self.complete_calls.append(messages)
+        system_prompt = messages[0]["content"]
+        if "rewrite_query" in system_prompt and "intent" in system_prompt:
+            return (
+                '{"rewrite_query":"'
+                + self.rewrite_query
+                + '","intent":"kb_search","image_description":""}'
+            )
+        context = messages[-1]["content"]
+        marker = "Context:\n"
+        if marker in context:
+            return context.split(marker, 1)[1].split("\n\nQuestion:", 1)[0].strip()
+        return "fake answer"
 
 
 def create_rerank_model(client: TestClient) -> str:
@@ -189,6 +293,44 @@ def test_quick_answer_response_includes_retrieval_diagnostic_stages(client, db_s
     assert stages["rerank"]["output"]["model_config_used"] == rerank_id
     assert stages["answer"]["status"] == "done"
     assert trace["diagnostics"]["mode"] == "hybrid"
+
+
+def test_quick_answer_runs_query_understand_without_history(client, fake_vector_store, monkeypatch):
+    kb_id = create_kb(client)
+    rerank_id = create_rerank_model(client)
+    config_response = client.put("/api/v1/retrieval-config", json={"rerank_model_id": rerank_id})
+    assert config_response.status_code == 200, config_response.text
+    model = QueryUnderstandChatModel()
+    client.app.state.chat_model = model
+    monkeypatch.setattr("app.services.knowledge_search.RerankerClient", lambda _config: FixedScoreReranker())
+    fake_vector_store.results = [
+        {
+            "chunk_id": "chunk-query-understand",
+            "knowledge_id": "doc-query-understand",
+            "knowledge_base_id": kb_id,
+            "content": "机动车交通事故中，交强险先赔，不足部分由商业三者险按合同赔偿。",
+            "title": "机动车交通事故责任",
+            "score": 0.91,
+        }
+    ]
+
+    response = client.post(
+        "/api/v1/quick-answer",
+        json={"knowledge_base_id": kb_id, "query": "张某撞伤李某后保险怎么赔？"},
+    )
+
+    assert response.status_code == 200, response.text
+    trace = response.json()["retrieval_trace"]
+    stages = {stage["name"]: stage for stage in trace["stages"]}
+    assert len(model.complete_calls) >= 2
+    assert stages["rewrite"]["status"] == "done"
+    assert trace["rewrite_skipped"] is False
+    assert trace["rewrite_failed"] is False
+    assert trace["rewritten_query"] == QueryUnderstandChatModel.rewrite_query
+    assert trace["query_rewritten"] == QueryUnderstandChatModel.rewrite_query
+    assert trace["query_normalized"] == QueryUnderstandChatModel.rewrite_query
+    assert trace["query_intent"] == "kb_search"
+    assert stages["rewrite"]["output"]["intent"] == "kb_search"
 
 
 def test_quick_answer_returns_error_when_rerank_provider_fails(client, db_session, fake_vector_store, monkeypatch):
@@ -313,6 +455,9 @@ def test_quick_answer_rerank_trace_records_threshold_degrade_and_mmr(
     assert rerank_output["model_config_used"] == rerank_id
     assert rerank_output["mmr_input_count"] == 2
     assert rerank_output["mmr_output_count"] == 2
+    assert rerank_output["score_details"][0]["base_score"] is not None
+    assert rerank_output["score_details"][0]["rerank_score"] is not None
+    assert rerank_output["score_details"][0]["composite_score"] is not None
 
 
 def test_quick_answer_response_includes_prompt_context_summary(client, db_session, fake_vector_store, monkeypatch):
@@ -395,7 +540,8 @@ def test_quick_answer_uses_parent_context_and_records_final_trace_contract(
     trace = payload["retrieval_trace"]
     assert trace["query_original"] == "What context should be used?"
     assert trace["query_normalized"] == "What context should be used?"
-    assert trace["query_rewritten"] is None
+    assert trace["query_rewritten"] == "What context should be used?"
+    assert trace["query_intent"] == "kb_search"
     assert trace["vector_hits"] == 1
     assert trace["keyword_hits"] >= 0
     assert trace["rrf_hits"] >= 1
@@ -415,6 +561,49 @@ def test_quick_answer_uses_parent_context_and_records_final_trace_contract(
     assert selected["document_title"] == "Parent Context Doc"
     assert selected["snippet"].startswith("PARENT CONTEXT FACT")
     assert "[1] Parent Context Doc" in trace["rendered_context"]
+
+
+def test_quick_answer_merges_short_hit_with_neighbor_chunks(
+    client,
+    db_session,
+    fake_vector_store,
+    monkeypatch,
+):
+    kb_id = create_kb(client)
+    rerank_id = create_rerank_model(client)
+    config_response = client.put("/api/v1/retrieval-config", json={"rerank_model_id": rerank_id})
+    assert config_response.status_code == 200, config_response.text
+    add_neighbor_context_document(db_session, kb_id)
+    monkeypatch.setattr("app.services.knowledge_search.RerankerClient", lambda _config: FixedScoreReranker())
+    fake_vector_store.results = [
+        {
+            "chunk_id": "neighbor-hit",
+            "knowledge_id": "doc-neighbor-context",
+            "knowledge_base_id": kb_id,
+            "content": "HIT FACT: 保险赔偿顺序先交强险后商业三者险。",
+            "title": "Neighbor Context Doc",
+            "score": 0.93,
+            "chunk_type": "text",
+            "context_header": "# 机动车事故责任",
+            "metadata": {"source_type": "document", "title": "Neighbor Context Doc"},
+        }
+    ]
+
+    response = client.post(
+        "/api/v1/quick-answer",
+        json={"knowledge_base_id": kb_id, "query": "保险赔偿顺序是什么？"},
+    )
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    source = payload["sources"][0]
+    assert source["chunk_id"] == "neighbor-hit"
+    assert source["content"] == "HIT FACT: 保险赔偿顺序先交强险后商业三者险。"
+    assert "PREV FACT" in source["context_content"]
+    assert "HIT FACT" in source["context_content"]
+    assert "NEXT FACT" in source["context_content"]
+    assert "PREV FACT" in payload["retrieval_trace"]["rendered_context"]
+    assert "NEXT FACT" in payload["answer"]
 
 
 def test_quick_answer_uses_text_attachment_context_without_sources(client, fake_vector_store):

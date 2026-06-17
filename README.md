@@ -2,7 +2,7 @@
 
 knowmate 知友是一个参考 [Tencent/WeKnora](https://github.com/Tencent/WeKnora) 核心思路实现的知识库 RAG 项目。后端技术栈从 WeKnora 的 Go 实现改为 Python / FastAPI；项目不是 Tencent/WeKnora 官方项目。
 
-当前版本为 v0.9，主线收敛为 WeKnora-style 固定 Quick Q&A 主链路。v0.9 在 v0.8 可解释性和管理闭环基础上，固定采用 Qdrant dense retrieval + ParadeDB pg_search BM25 + RRF + mandatory rerank + parent-child context，不再把 vector-only、keyword-only、rerank 开关或 planned vector backends 暴露为用户配置项：
+当前版本为 v0.91，主线是在 v0.9 WeKnora-style 固定 Quick Q&A 链路上补齐召回运行态排障、rerank 纠偏和 Chat 前端交互体验。v0.91 继续固定采用 Query Understand + over-retrieval + Qdrant dense retrieval + ParadeDB pg_search BM25 + RRF + mandatory composite rerank/MMR + parent-child context，不把 vector-only、keyword-only、rerank 开关或 planned vector backends 暴露为用户配置项。当前上线链路和召回排障说明见 [Quick Q&A WeKnora 对齐召回链路](docs/quick-answer-weknora-aligned-chain-2026-06-10.zh-CN.md)：
 
 ```text
 模型管理
@@ -19,13 +19,16 @@ knowmate 知友是一个参考 [Tencent/WeKnora](https://github.com/Tencent/WeKn
   -> FAQ 导入导出 / FAQ 检索测试
   -> FAQ 相似问法 / FAQ 索引模式
   -> quick-answer / knowledge-search
+  -> query understand / intent trace
   -> 多知识库 / 文件范围检索
-  -> Qdrant 向量召回 top50
-  -> ParadeDB BM25 关键词召回 top50
-  -> RRF hybrid merge top30
-  -> mandatory rerank top8
-  -> parent-child context expansion
-  -> optional query rewrite
+  -> over-retrieval 候选池放大
+  -> Qdrant 向量召回
+  -> ParadeDB BM25 关键词召回
+  -> low-recall query expansion
+  -> RRF hybrid merge
+  -> mandatory composite rerank top8
+  -> MMR 去冗余
+  -> parent-child / neighbor context expansion
   -> chat model 生成 answer
   -> 返回 answer + sources + retrieval trace
   -> 阶段化 retrieval trace
@@ -67,7 +70,7 @@ knowmate 知友是一个参考 [Tencent/WeKnora](https://github.com/Tencent/WeKn
 - WeKnora 风格检索配置：
   - 单租户 `retrieval_config` JSON。
   - v0.9 固定模式：`retrieval_mode=hybrid`、`vector_engine=qdrant`、`keyword_engine=paradedb_bm25`。
-  - v0.9 固定值：`embedding_top_k=50`、`keyword_top_k=50`、`vector_threshold=0.15`、`keyword_threshold=0.2`、`rrf_k=60`、`rrf_vector_weight=0.65`、`rrf_keyword_weight=0.35`、`rrf_top_k=30`、`rerank_top_k=8`、`rerank_threshold=0.2`、`final_context_count=6`、`max_context_chars=8000`。
+  - v0.9 固定值：`embedding_top_k=50`、`keyword_top_k=50`、`vector_threshold=0.15`、`keyword_threshold=0.2`、`rrf_k=60`、`rrf_vector_weight=0.65`、`rrf_keyword_weight=0.35`、`rrf_top_k=30`、`rerank_top_k=8`、`rerank_threshold=0.2`、`final_context_count=6`、`max_context_chars=8000`；实际检索内部会按 `min(max(rerank_top_k * 5, 50) * scope_count, 500)` 放大候选池，再进入 RRF、mandatory composite rerank 和 MMR。
   - 用户侧不再支持 `vector_only / keyword_only / hybrid` 模式切换；Quick Q&A 固定执行混合召回和 mandatory rerank。
 - v0.3 检索增强：
   - 新增统一 `app/rag/retriever/` 检索层。
@@ -122,7 +125,7 @@ knowmate 知友是一个参考 [Tencent/WeKnora](https://github.com/Tencent/WeKn
   - 新增 `POST /api/v1/quick-answer/stream` SSE 接口，保留旧 `/api/v1/quick-answer` 非流式行为。
   - 流式回答继续复用 `KnowledgeSearchService` / retriever pipeline，不另写检索链路。
   - assistant message 保存 `sources_json`、`retrieval_trace_json` 和非敏感 `model_config_json`。
-  - query rewrite 作为可选能力：有历史消息且开启时复用 KB 绑定 QA 模型改写追问，trace 展示 original / rewritten query 和失败/跳过状态。
+  - query rewrite 在 v0.6 作为历史追问增强引入；当前 v0.9+ 已升级为每轮 Quick Q&A 都执行的 query understand，trace 展示 original / rewritten query、intent 和失败/回退状态。
   - 前端 `/#/chat` 升级为会话化聊天工作台：左侧会话栏、流式消息、每条 assistant 消息 sources/trace 折叠面板、基础会话设置和保留的检索调试入口。
 - v0.61 WeKnora 对齐补强：
   - 新增知识库标签体系：标签 CRUD、文档/FAQ 标签筛选、批量设置标签，并把 `tag_id` 写入 Knowledge、FAQEntry、Chunk 和 Qdrant payload。
@@ -173,8 +176,14 @@ knowmate 知友是一个参考 [Tencent/WeKnora](https://github.com/Tencent/WeKn
   - Sources 补齐 `document_title`、`source_type`、`snippet`、child chunk id、parent chunk id、score、rerank score 和 metadata 摘要。
   - 前端设置页只展示 v0.9 固定主链路和 Qdrant 配置状态，不再展示 planned vector backends、retrieval mode 选择、关闭 rerank 或关闭 parent-child 的开关。
   - Docker Compose 提供完整后端栈 `postgres / redis / qdrant / api / worker`；`scripts/start-dev.ps1` 负责启动 Docker 后端和本机 Vite，不等同于自动化测试。
+- v0.91 召回质量和 Chat 体验修复：
+  - 修复本地运行态 embedding 维度与 Qdrant collection 不一致导致 `vector_hits=0` 的排障路径；切换 embedding 维度后必须重处理文档或保持模型配置维度与已入库向量一致。
+  - Rerank composite score 增加 query lexical coverage，降低错误主题高 rerank 分压过目标条文的概率；FAQ 命中仍由 FAQ merge/boost 独立控制。
+  - Quick Answer 默认 prompt 要求在上下文包含可适用规则时进行规则适用分析，不因事实没有逐字出现在上下文中就直接判定知识库不足。
+  - 前端品牌统一为 `knowmate知友`，移除右下角用户头像/身份区，侧边栏“开放能力”改为“设置”。
+  - Chat 消息区发送后和流式生成时自动滚到底部；用户主动上滑或滚轮离开底部时暂停自动跟随，避免回答被输入框挡住。
 - 自动化测试：覆盖多模型 CRUD、凭据加密、知识库模型校验、重处理、检索配置、hybrid/RRF/rerank/parent-child retrieval、knowledge-search API、前端关键逻辑、API 和文档处理 payload。
-- v0.9 质量验证详见下方“验证命令”和 [CHANGELOG.md](CHANGELOG.md)。
+- v0.91 质量验证详见下方“验证命令”和 [CHANGELOG.md](CHANGELOG.md)。
 
 暂未实现：
 
@@ -1004,24 +1013,26 @@ npm --prefix frontend run build
 
 最近一次本地验证结果：
 
-- `python -m pytest -q`：`209 passed`
+- `python -m pytest -q`：`220 passed`
 - `ruff check .`：通过
 - `python -m compileall app tests`：通过
 - `npm --prefix frontend run build`：通过，仍有既有 Vite 大 chunk 提示。
+- `python -m pytest tests/test_frontend_v06_chat.py tests/test_frontend_v07_chat_experience.py tests/test_frontend_v071_command_palette.py -q`：`9 passed`
+- Browser smoke：`http://localhost:8000/#/chat` 确认左上角为 `knowmate知友`，侧边栏入口为“设置”，右下角身份头像区不存在。
 - `docker compose up -d --build`：完整后端栈包含 PostgreSQL/ParadeDB、Redis、Qdrant、FastAPI 和 Celery worker；PostgreSQL 运行 `paradedb/paradedb:pg16` 并加载 `shared_preload_libraries=pg_search`。
 - 本地服务 E2E：使用真实 PostgreSQL/ParadeDB 和 Qdrant、进程内 fake Embedding/Chat/Rerank，验证知识库创建、文档上传、同步处理、parent-child chunks、Qdrant point、ParadeDB BM25 hit、knowledge-search 和 quick-answer trace/sources 均通过。
-- v0.9 分项验收详见 [CHANGELOG.md](CHANGELOG.md) 的 v0.9 Verification。
-- v0.9 本地服务端到端验证需要 PostgreSQL/ParadeDB `pg_search`、Redis、Qdrant、API、Celery Worker，以及可用 QA / Embedding / Rerank 模型配置；自动化验收可使用 fake model client，真实生产问答仍需人工配置可用模型。
+- v0.91 分项验收详见 [CHANGELOG.md](CHANGELOG.md) 的 v0.91 Verification。
+- v0.91 本地服务端到端验证需要 PostgreSQL/ParadeDB `pg_search`、Redis、Qdrant、API、Celery Worker，以及可用 QA / Embedding / Rerank 模型配置；自动化验收可使用 fake model client，真实生产问答仍需人工配置可用模型。
 
 ## 开发备注
 
-- v0.9 仍默认单租户，`DEFAULT_TENANT_ID=10000`。
+- v0.91 仍默认单租户，`DEFAULT_TENANT_ID=10000`。
 - Docker Compose 当前提供完整后端栈：`postgres / redis / qdrant / api / worker`。前端 dev server 仍通过 `npm --prefix frontend run dev` 或 `scripts/start-dev.ps1` 启动。
 - 默认开发方式是 Docker API + Docker worker + 本机 Vite。不要同时运行本机 `uvicorn` / `celery` 和 Docker `api` / `worker`，否则上传文件路径可能在 Windows 与 Linux 容器之间不兼容。
 - 文档上传后必须有 Celery Worker 在线；`docker compose up -d --build` 会自动启动 worker，否则文档会停留在 `pending` 或 `processing`。
 - 切换 embedding 模型、维度、parser/chunking 参数或 keyword 检索文本策略后，需要重处理文档或重建知识库来刷新 PostgreSQL chunks、Qdrant 向量和 ParadeDB BM25 索引。
 - 默认 keyword search 是 PostgreSQL + ParadeDB `pg_search` BM25；测试环境可使用 fake repository / injected client，生产 Quick Q&A 不会静默退回 simple FTS。
-- Rerank 是 v0.9 必需项；必须先创建可用的 `Rerank` 模型，并在检索配置中绑定 `rerank_model_id`，否则有候选命中时 Quick Q&A 返回中文明确错误。
+- Rerank 是 v0.91 必需项；必须先创建可用的 `Rerank` 模型，并在检索配置中绑定 `rerank_model_id`，否则有候选命中时 Quick Q&A 返回中文明确错误。
 - 当前 OCR / MinerU 未接入，图片类文件会明确显示 unsupported/unavailable。
 - 模型测试会透传 provider 的真实错误，例如认证失败、模型不存在、维度不匹配等，前端会渲染中文可读文本，不渲染 `[object Object]`。
 - 生产部署前需要更换默认数据库密码，固定并妥善保存 `MODEL_CONFIG_ENCRYPTION_KEY`，并增加鉴权和访问控制。

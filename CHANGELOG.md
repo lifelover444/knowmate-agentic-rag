@@ -1,5 +1,46 @@
 # Changelog
 
+## v0.91
+
+v0.91 是 v0.9 固定 Quick Q&A 主链路后的质量修复版本，重点解决真实运行态召回差、rerank 错排和 Chat 前端交互问题。主链路仍保持 WeKnora-style 固定链路：Query Understand + Qdrant dense + ParadeDB BM25 + RRF + mandatory rerank + parent-child context。
+
+### Fixed
+
+- 修复真实运行态中 embedding 配置维度与 Qdrant collection 维度不一致导致 `vector_hits=0` 的问题定位与本地配置修正：
+  - 现象：KB 的向量点在 `knowmate_embeddings_1024`，但模型配置被改为 `embedding_dimension=512`，查询会查不存在的 `knowmate_embeddings_512`。
+  - 处理：本地运行库将 `text-embedding-v4` 配置恢复为 1024 维；文档补充“切换 embedding 维度后必须重处理文档或保持配置与已入库向量一致”的排障规则。
+- 修复 rerank 模型分过度主导导致错误主题条文排在目标条文前的问题：
+  - `RerankPipeline` composite score 增加 query lexical coverage。
+  - `score_details` 追加 `lexical_score`，便于解释为什么目标 chunk 被提升或错误 chunk 被压低。
+  - FAQ 候选不使用通用 lexical 纠偏，继续由 FAQ merge / boost 策略控制，避免低置信 FAQ 被误提权。
+- 修复 parent chunk 进入初始候选后可能覆盖 child identity 的问题；vector / keyword 初始候选过滤 parent chunk，保持“child 检索、parent 回答上下文”契约。
+- 修复 Quick Answer 默认 prompt 过度保守的问题；当上下文包含可适用规则时，模型应基于上下文做规则适用分析，不应仅因用户事实没有逐字出现在上下文中就回答“知识库不足”。
+
+### Changed
+
+- Chat 前端品牌和导航口径调整：
+  - 左上角品牌改为 `knowmate知友`。
+  - 侧边栏“开放能力”改为“设置”。
+  - 移除右下角用户头像/身份标识区域，当前版本不继续展示 RBAC 相关入口。
+- Chat 消息滚动交互调整：
+  - 发送消息后自动滚动到底部。
+  - 流式生成 token 时持续跟随到底部。
+  - 用户主动上滑或滚轮离开底部时暂停自动跟随，滚回底部附近后恢复。
+  - 消息列表底部留白增加，减少回答内容被输入框遮挡。
+
+### Verification
+
+- `python -m pytest -q`：`220 passed`
+- `ruff check app/rag/prompt.py app/rag/retriever/__init__.py app/services/knowledge_search.py tests/test_quick_answer.py tests/test_v03_retriever.py`：通过
+- `python -m compileall app tests`：通过
+- `python -m pytest tests/test_frontend_v06_chat.py tests/test_frontend_v07_chat_experience.py tests/test_frontend_v071_command_palette.py -q`：`9 passed`
+- `npm --prefix frontend run build`：通过，仍有既有 Vite large chunk warning。
+- 本地服务复测法律交通事故问题：
+  - `vector_hits=50`、`keyword_hits=50`、`rrf_hits=50`、`rerank_hits=8`。
+  - top selected context 为 `第一千二百一十三条 / 机动车 / 交通事故 / 强制保险 / 商业保险`。
+  - answer 可引用 `第一千一百九十条` 和 `第一千二百一十三条` 进行规则适用分析。
+- Browser smoke：`http://localhost:8000/#/chat` 确认左上角为 `knowmate知友`，侧边栏为“设置”，右下角身份头像区不存在。
+
 ## v0.9
 
 v0.9 是 v0.8 之后的固定 Quick Q&A 主链路版本，聚合 TASK-046 到 TASK-055。目标是把 KnowMate 从“可配置实验型 RAG”收敛为单一、可解释、可验收的 WeKnora-style 快速问答链路：Qdrant dense retrieval + ParadeDB pg_search BM25 + RRF + mandatory rerank + parent-child context。

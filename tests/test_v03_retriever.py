@@ -37,6 +37,16 @@ class FixedScoreReranker:
         return self.scores[:top_n]
 
 
+class RecordingReranker:
+    def __init__(self, scores):
+        self.scores = scores
+        self.documents: list[str] = []
+
+    def rerank(self, *, query: str, documents: list[str], top_n: int):
+        self.documents = documents
+        return self.scores[:top_n]
+
+
 class FakeChunkRepo:
     def get(self, chunk_id: str):
         if chunk_id == "parent-1":
@@ -111,6 +121,75 @@ def test_rerank_pipeline_cleans_passages_filters_and_maps_scores():
     assert result[0].rerank_score == 0.91
     assert "```" not in clean_rerank_passage(hits[0].content)
     assert "|" not in clean_rerank_passage(hits[1].content)
+
+
+def test_rerank_pipeline_sends_enriched_passages_to_model():
+    reranker = RecordingReranker([(0, 0.9)])
+    hits = [
+        RetrievalHit(
+            chunk_id="with-generated-question",
+            document_id="doc-1",
+            knowledge_base_id="kb-1",
+            content="正文只包含合同条款。",
+            score=0.5,
+            context_header="# 合同责任",
+            metadata={"generated_questions": [{"question": "违约责任怎么承担？"}], "image_ocr_text": "图片OCR文本"},
+        )
+    ]
+
+    result = RerankPipeline(reranker, threshold=0.2, top_k=1).apply("违约责任", hits)
+
+    assert [hit.chunk_id for hit in result] == ["with-generated-question"]
+    assert "合同责任" in reranker.documents[0]
+    assert "违约责任怎么承担？" in reranker.documents[0]
+    assert "图片OCR文本" in reranker.documents[0]
+
+
+def test_rerank_pipeline_uses_composite_score_instead_of_model_score_only():
+    reranker = RecordingReranker([(0, 0.9), (1, 0.75)])
+    hits = [
+        RetrievalHit("model-high-base-low", "doc-1", "kb-1", "模型分更高但基础召回分低", 0.1),
+        RetrievalHit("model-lower-base-high", "doc-2", "kb-1", "模型分略低但基础召回分高", 0.95),
+    ]
+
+    pipeline = RerankPipeline(reranker, threshold=0.2, top_k=2)
+    result = pipeline.apply("问题", hits)
+
+    assert [hit.chunk_id for hit in result] == ["model-lower-base-high", "model-high-base-low"]
+    assert result[0].rerank_score == 0.75
+    assert round(result[0].score, 3) == 0.42
+    assert result[0].metadata["base_score"] == 0.95
+    assert result[0].metadata["lexical_score"] == 0
+    assert result[0].metadata["composite_score"] == result[0].score
+    assert pipeline.diagnostics["score_details"][0]["chunk_id"] == "model-lower-base-high"
+
+
+def test_rerank_pipeline_uses_query_lexical_coverage_to_guard_bad_model_scores():
+    reranker = RecordingReranker([(0, 0.65), (1, 0.56)])
+    query = "机动车交通事故 交强险 商业三者险 赔偿顺序"
+    hits = [
+        RetrievalHit(
+            "dangerous-object",
+            "doc-1",
+            "kb-1",
+            "高度危险物造成他人损害的，占有人承担侵权责任；能够证明不可抗力造成的，不承担责任。",
+            0.006,
+        ),
+        RetrievalHit(
+            "traffic-insurance",
+            "doc-2",
+            "kb-1",
+            "机动车发生交通事故造成损害，先由承保机动车强制保险的保险人在限额内赔偿；不足部分由商业保险赔偿。",
+            0.014,
+        ),
+    ]
+
+    pipeline = RerankPipeline(reranker, threshold=0.2, top_k=2)
+    result = pipeline.apply(query, hits)
+
+    assert [hit.chunk_id for hit in result] == ["traffic-insurance", "dangerous-object"]
+    assert result[0].metadata["lexical_score"] > result[1].metadata["lexical_score"]
+    assert pipeline.diagnostics["score_details"][0]["chunk_id"] == "traffic-insurance"
 
 
 def test_rerank_pipeline_degrades_high_threshold_before_returning_empty_results():

@@ -1,4 +1,4 @@
-import{i as q,y as e,n as v,w as B,u as D}from"./index-DqcZHgFT.js";const r={strategy:"auto",chunk_size:512,chunk_overlap:80,separators:[`
+import{i as q,w as e,n as v,u as B,t as D}from"./index-CZnD_IEP.js";const r={strategy:"auto",chunk_size:512,chunk_overlap:80,separators:[`
 
 `,`
 `,"。"],token_limit:0,languages:[],enable_parent_child:!0,parent_chunk_size:4096,child_chunk_size:384},L=q("retrieval",()=>{const _=e("hybrid"),c=e(50),d=e(50),h=e(.15),k=e(.2),p=e(8),y=e(.2),t=e(""),f=e(!0),g=e(60),w=e(.65),m=e(.35),b=e(30),l=e([]),a=e(null),R=e([{file_types:["pdf"],engine:"builtin"},{file_types:["docx"],engine:"builtin"},{file_types:["md","markdown"],engine:"builtin"},{file_types:["txt"],engine:"builtin"},{file_types:["csv","json","xlsx"],engine:"builtin"}]),z=e("auto"),C=e(512),K=e(80),S=e("\\n\\n,\\n,。"),T=e(0),x=e(""),E=e(!0),I=e(4096),P=e(384),J=e(`# 产品手册

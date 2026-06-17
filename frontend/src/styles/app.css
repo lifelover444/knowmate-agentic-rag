@@ -1,6 +1,6 @@
 :root {
-  --km-bg-page: #f7faf8;
-  --km-bg-sidebar: #ffffff;
+  --km-bg-page: #f4f5f7;
+  --km-bg-sidebar: #f4f5f7;
   --km-bg-card: #ffffff;
   --km-bg-hover: #f2f7f4;
   --km-bg-deep: #eaf9f1;
@@ -18,7 +18,7 @@
   --km-spacing-md: 16px;
   --km-spacing-lg: 24px;
   --km-radius: 6px;
-  --km-sidebar-width: 220px;
+  --km-sidebar-width: 280px;
   --km-font: -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
 }
 
@@ -71,7 +71,7 @@ h3 {
 .app-layout__content {
   min-height: 100vh;
   margin-left: var(--km-sidebar-width);
-  background: var(--km-bg-page);
+  background: #f4f5f7;
 }
 
 .page-shell {

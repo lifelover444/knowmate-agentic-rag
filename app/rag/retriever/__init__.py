@@ -214,7 +214,7 @@ class RerankPipeline:
         documents: list[str] = []
         hit_indexes: list[int] = []
         for index, hit in enumerate(hits):
-            passage = clean_rerank_passage(hit.context_content or hit.content)
+            passage = build_rerank_passage(hit)
             if not passage:
                 continue
             documents.append(passage)
@@ -233,9 +233,40 @@ class RerankPipeline:
             filtered = reranked[:1]
             self.diagnostics["top1_fallback"] = True
         results: list[RetrievalHit] = []
+        score_details: list[dict] = []
         for passage_index, score in filtered:
             original_index = hit_indexes[passage_index]
-            results.append(replace(hits[original_index], score=score, rerank_score=score))
+            hit = hits[original_index]
+            base_score = float(hit.score or 0)
+            lexical_score = 0.0 if _is_faq_candidate(hit) else _lexical_relevance_score(query, documents[passage_index])
+            composite_score = _composite_score(
+                hit,
+                model_score=score,
+                base_score=base_score,
+                lexical_score=lexical_score,
+            )
+            metadata = dict(hit.metadata or {})
+            metadata.update(
+                {
+                    "base_score": base_score,
+                    "rerank_score": score,
+                    "lexical_score": lexical_score,
+                    "composite_score": composite_score,
+                }
+            )
+            results.append(replace(hit, score=composite_score, rerank_score=score, metadata=metadata))
+            score_details.append(
+                {
+                    "chunk_id": hit.chunk_id,
+                    "base_score": base_score,
+                    "rerank_score": score,
+                    "lexical_score": lexical_score,
+                    "composite_score": composite_score,
+                }
+            )
+        results.sort(key=lambda item: float(item.score or 0), reverse=True)
+        score_details.sort(key=lambda item: float(item["composite_score"]), reverse=True)
+        self.diagnostics["score_details"] = score_details[:10]
         self.diagnostics["mmr_input_count"] = len(results)
         results = _apply_mmr(results, self.top_k)
         self.diagnostics["mmr_output_count"] = len(results)
@@ -246,6 +277,9 @@ class RerankPipeline:
 
 
 class ParentChildExpander:
+    short_context_min_chars = 350
+    short_context_max_chars = 850
+
     def __init__(self, chunk_repo) -> None:
         self.chunk_repo = chunk_repo
 
@@ -253,7 +287,7 @@ class ParentChildExpander:
         expanded: list[RetrievalHit] = []
         for hit in hits:
             if hit.chunk_type != "child" or not hit.parent_chunk_id:
-                expanded.append(hit)
+                expanded.append(self._expand_short_text_with_neighbors(hit))
                 continue
             parent = self.chunk_repo.get(hit.parent_chunk_id)
             if parent is None:
@@ -268,6 +302,57 @@ class ParentChildExpander:
                 )
             )
         return expanded
+
+    def _expand_short_text_with_neighbors(self, hit: RetrievalHit) -> RetrievalHit:
+        if hit.chunk_type != "text" or len(hit.content or "") >= self.short_context_min_chars:
+            return hit
+        base = self.chunk_repo.get(hit.chunk_id)
+        if base is None or not _chunk_enabled(base) or base.chunk_type != "text":
+            return hit
+        prev_chunk = self._neighbor_chunk(getattr(base, "pre_chunk_id", None), base.knowledge_id)
+        next_chunk = self._neighbor_chunk(getattr(base, "next_chunk_id", None), base.knowledge_id)
+        parts = [chunk.content for chunk in (prev_chunk, base, next_chunk) if chunk is not None and chunk.content]
+        merged = _merge_neighbor_parts(parts, max_chars=self.short_context_max_chars)
+        if not merged or merged == hit.content:
+            return hit
+        metadata = dict(hit.metadata or {})
+        metadata["context_merge"] = {
+            "strategy": "neighbor",
+            "chunk_ids": [
+                chunk.id for chunk in (prev_chunk, base, next_chunk) if chunk is not None and getattr(chunk, "id", None)
+            ],
+        }
+        return replace(
+            hit,
+            context_chunk_id=base.id,
+            context_content=merged,
+            context_header=base.context_header or hit.context_header,
+            metadata=metadata,
+        )
+
+    def _neighbor_chunk(self, chunk_id: str | None, knowledge_id: str):
+        if not chunk_id:
+            return None
+        chunk = self.chunk_repo.get(chunk_id)
+        if chunk is None or not _chunk_enabled(chunk):
+            return None
+        if chunk.knowledge_id != knowledge_id or chunk.chunk_type != "text":
+            return None
+        return chunk
+
+
+def _chunk_enabled(chunk) -> bool:
+    return getattr(chunk, "is_enabled", True) is not False and getattr(chunk, "deleted_at", None) is None
+
+
+def _merge_neighbor_parts(parts: list[str], *, max_chars: int) -> str:
+    merged_parts: list[str] = []
+    for part in parts:
+        text = (part or "").strip()
+        if text and text not in merged_parts:
+            merged_parts.append(text)
+    merged = "\n".join(merged_parts).strip()
+    return merged[:max_chars].rstrip()
 
 
 def clean_rerank_passage(content: str, *, max_chars: int = 4000) -> str:
@@ -289,12 +374,132 @@ def clean_rerank_passage(content: str, *, max_chars: int = 4000) -> str:
     return cleaned[:max_chars]
 
 
+def build_rerank_passage(hit: RetrievalHit, *, max_chars: int = 4000) -> str:
+    parts: list[str] = []
+    if hit.context_header:
+        parts.append(hit.context_header)
+    body = hit.context_content or hit.content
+    if body:
+        parts.append(body)
+    metadata = hit.metadata or {}
+    generated_questions = _metadata_generated_questions(metadata)
+    if generated_questions:
+        parts.append(" ".join(generated_questions))
+    image_text = _metadata_image_text(metadata)
+    if image_text:
+        parts.append(image_text)
+    return clean_rerank_passage("\n".join(parts), max_chars=max_chars)
+
+
+def _metadata_generated_questions(metadata: dict) -> list[str]:
+    questions: list[str] = []
+    for item in metadata.get("generated_questions") or []:
+        if isinstance(item, dict):
+            question = str(item.get("question") or "").strip()
+        else:
+            question = str(item or "").strip()
+        if question:
+            questions.append(question)
+    return questions
+
+
+def _metadata_image_text(metadata: dict) -> str:
+    values: list[str] = []
+    for key in ("image_ocr_text", "image_caption", "ocr_text", "caption"):
+        value = str(metadata.get(key) or "").strip()
+        if value:
+            values.append(value)
+    return "\n".join(values)
+
+
+def _composite_score(hit: RetrievalHit, *, model_score: float, base_score: float, lexical_score: float) -> float:
+    source_weight = 0.95 if str((hit.metadata or {}).get("source_type") or "").lower() == "web_search" else 1.0
+    composite = (
+        0.3 * float(model_score or 0)
+        + 0.1 * float(base_score or 0)
+        + 0.5 * float(lexical_score or 0)
+        + 0.1 * source_weight
+    )
+    if _is_faq_candidate(hit):
+        composite = max(composite, float(base_score or 0))
+    return max(0.0, min(1.0, composite))
+
+
+def _is_faq_candidate(hit: RetrievalHit) -> bool:
+    metadata = hit.metadata or {}
+    return hit.chunk_type == "faq" or str(metadata.get("source_type") or "").lower() == "faq"
+
+
+def _lexical_relevance_score(query: str, passage: str) -> float:
+    terms = _lexical_query_terms(query)
+    if not terms:
+        return 0.0
+    normalized_passage = _normalize_lexical_text(passage)
+    matched_weight = 0.0
+    total_weight = 0.0
+    for term in terms:
+        weight = _lexical_term_weight(term)
+        total_weight += weight
+        if _normalize_lexical_text(term) in normalized_passage:
+            matched_weight += weight
+    return matched_weight / total_weight if total_weight else 0.0
+
+
+def _lexical_query_terms(query: str) -> list[str]:
+    terms: list[str] = []
+    seen: set[str] = set()
+    for term in tokenize_query(query):
+        normalized = _normalize_lexical_text(term)
+        if len(normalized) < 2 or normalized in _LEXICAL_STOP_TERMS or normalized in seen:
+            continue
+        seen.add(normalized)
+        terms.append(term)
+        for synonym in _LEXICAL_SYNONYMS.get(normalized, ()):
+            synonym_normalized = _normalize_lexical_text(synonym)
+            if synonym_normalized not in seen:
+                seen.add(synonym_normalized)
+                terms.append(synonym)
+    return terms
+
+
+def _normalize_lexical_text(value: str) -> str:
+    return re.sub(r"\s+", "", (value or "").lower())
+
+
+def _lexical_term_weight(term: str) -> float:
+    normalized = _normalize_lexical_text(term)
+    if any("\u4e00" <= char <= "\u9fff" for char in normalized):
+        return 2.0 if len(normalized) >= 4 else 1.2
+    return 1.5 if len(normalized) >= 6 else 1.0
+
+
+_LEXICAL_STOP_TERMS = {
+    "是否",
+    "需要",
+    "承担",
+    "责任",
+    "损失",
+    "如果",
+    "什么",
+    "由谁",
+    "可以",
+    "不能",
+    "问题",
+}
+
+_LEXICAL_SYNONYMS = {
+    "交强险": ("强制保险", "机动车强制保险"),
+    "商业三者险": ("商业保险", "商业第三者责任保险"),
+    "三者险": ("商业保险", "商业第三者责任保险"),
+}
+
+
 def _apply_mmr(hits: list[RetrievalHit], top_k: int, *, lambda_mult: float = 0.7) -> list[RetrievalHit]:
     if top_k <= 0 or not hits:
         return []
     selected: list[RetrievalHit] = []
     selected_token_sets: list[set[str]] = []
-    candidate_token_sets = [_simple_token_set(hit.context_content or hit.content) for hit in hits]
+    candidate_token_sets = [_simple_token_set(build_rerank_passage(hit)) for hit in hits]
     selected_indexes: set[int] = set()
     while len(selected) < top_k and len(selected_indexes) < len(hits):
         best_index = -1

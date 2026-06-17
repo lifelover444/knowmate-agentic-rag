@@ -163,9 +163,10 @@ def quick_answer_stream(
                 {
                     "original_query": payload.query,
                     "rewritten_query": prepared.rewritten_query,
-                    "enabled": bool(payload.enable_query_rewrite),
+                    "enabled": bool(prepared.retrieval_trace.get("rewrite_enabled")),
                     "failed": bool(prepared.retrieval_trace.get("rewrite_failed")),
                     "skipped": bool(prepared.retrieval_trace.get("rewrite_skipped")),
+                    "intent": prepared.retrieval_trace.get("query_intent"),
                 },
             )
             yield _sse(

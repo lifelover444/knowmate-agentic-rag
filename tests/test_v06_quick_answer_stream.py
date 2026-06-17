@@ -114,12 +114,18 @@ def test_quick_answer_stream_creates_session_messages_and_final_sources(
     assert "token" in event_names
     assert event_names[-2:] == ["final", "done"]
 
+    rewrite_event = dict(events)["rewrite"]
+    assert rewrite_event["enabled"] is True
+    assert rewrite_event["skipped"] is False
+    assert rewrite_event["intent"] == "kb_search"
+
     final = dict(events)["final"]
     assert "流式回答会持续返回来源依据。" in final["answer"]
     assert final["sources"][0]["chunk_id"] == "chunk-stream"
     assert final["retrieval_trace"]["original_query"] == "流式回答是什么？"
     assert final["retrieval_trace"]["rewrite_enabled"] is True
-    assert final["retrieval_trace"]["rewrite_skipped"] is True
+    assert final["retrieval_trace"]["rewrite_skipped"] is False
+    assert final["retrieval_trace"]["query_intent"] == "kb_search"
 
     messages = db_session.query(ChatMessage).order_by(ChatMessage.created_at).all()
     assert [message.role for message in messages] == ["user", "assistant"]
@@ -205,7 +211,8 @@ def test_quick_answer_stream_trace_runs_fixed_hybrid_retrieval_stages(client, fa
     assert stages["context_select"]["status"] == "done"
     assert trace["query_original"] == "流式向量检索是什么？"
     assert trace["query_normalized"] == "流式向量检索是什么？"
-    assert trace["query_rewritten"] is None
+    assert trace["query_rewritten"] == "流式向量检索是什么？"
+    assert trace["query_intent"] == "kb_search"
     assert trace["vector_hits"] == 1
     assert trace["rrf_hits"] == 1
     assert trace["rerank_hits"] == 1
@@ -286,7 +293,8 @@ def test_quick_answer_stream_query_rewrite_trace_enabled_with_history(client, fa
     assert trace["rewrite_enabled"] is True
     assert trace["rewrite_skipped"] is False
     assert trace["rewrite_failed"] is False
-    assert trace["rewritten_query"] == "fake answer"
+    assert trace["rewritten_query"] == "那它怎么用？"
+    assert trace["query_intent"] == "kb_search"
 
 
 def test_quick_answer_stream_merges_recent_history_when_rewrite_fails(client, fake_vector_store, monkeypatch):

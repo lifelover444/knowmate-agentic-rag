@@ -42,6 +42,7 @@ def test_quick_answer_stream_returns_stage_trace(client, fake_vector_store, monk
         "vector",
         "keyword",
         "rrf",
+        "query_expansion",
         "deduplicate",
         "faq_merge",
         "rerank",
@@ -49,11 +50,13 @@ def test_quick_answer_stream_returns_stage_trace(client, fake_vector_store, monk
         "context_select",
         "answer",
     ]
-    assert stages["rewrite"]["status"] == "skipped"
+    assert stages["rewrite"]["status"] == "done"
+    assert stages["rewrite"]["output"]["intent"] == "kb_search"
     assert stages["vector"]["status"] == "done"
     assert stages["vector"]["output"]["hit_count"] == 1
     assert stages["keyword"]["status"] == "done"
     assert stages["rrf"]["status"] == "done"
+    assert stages["query_expansion"]["status"] in {"done", "skipped"}
     assert stages["deduplicate"]["status"] == "done"
     assert stages["faq_merge"]["status"] == "done"
     assert stages["faq_merge"]["output"]["boost_count"] == 0

@@ -8,7 +8,7 @@ from app.db.models import ChatMessage, Knowledge
 from app.integrations.llm_openai import OpenAIChatModel
 from app.rag.attachments import prepare_attachments
 from app.rag.prompt import build_quick_answer_messages
-from app.rag.query_rewrite import build_query_rewrite_messages
+from app.rag.query_rewrite import build_query_understand_messages, parse_query_understand_output
 from app.rag.quick_answer import AnswerResult, AnswerSource
 from app.schemas.quick_answer import SourceRead
 from app.services.knowledge_search import KnowledgeSearchService
@@ -100,6 +100,7 @@ class QuickAnswerService:
                 output={
                     "enabled": enable_query_rewrite,
                     "rewritten_query": rewritten_query,
+                    "intent": rewrite_trace.get("query_intent"),
                     "failed": rewrite_trace.get("rewrite_failed"),
                     "skipped": rewrite_trace.get("rewrite_skipped"),
                 },
@@ -262,26 +263,34 @@ class QuickAnswerService:
         trace = {
             "original_query": query,
             "rewritten_query": None,
+            "query_intent": "kb_search",
+            "image_description": "",
             "rewrite_enabled": enable_query_rewrite,
             "rewrite_failed": False,
             "rewrite_skipped": False,
+            "rewrite_structured": False,
         }
         if not enable_query_rewrite:
+            trace["rewrite_skipped"] = True
             return None, trace
         user_assistant_history = [
             {"role": message.role, "content": message.content}
             for message in history
             if message.role in {"user", "assistant"} and message.content
         ]
-        if not user_assistant_history:
-            trace["rewrite_skipped"] = True
-            return None, trace
         try:
-            rewritten = _complete(
+            raw_output = _complete(
                 self._chat_model(knowledge_base_id),
-                build_query_rewrite_messages(user_assistant_history, query),
+                build_query_understand_messages(user_assistant_history, query),
                 temperature or 0.2,
             ).strip()
+            parsed = parse_query_understand_output(raw_output)
+            trace["query_intent"] = parsed["intent"]
+            trace["image_description"] = parsed["image_description"]
+            trace["rewrite_structured"] = parsed["structured"]
+            if not parsed["structured"]:
+                trace["rewrite_failed"] = True
+            rewritten = parsed["rewrite_query"]
             if rewritten:
                 trace["rewritten_query"] = rewritten
                 return rewritten, trace

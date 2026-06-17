@@ -126,8 +126,8 @@ onMounted(() => {
     <section class="content-card">
       <div class="section-heading">
         <div>
-          <h2>新增 Qdrant</h2>
-          <p>v0.5 仅注册 Qdrant provider，后续可通过 registry 接入更多向量库。</p>
+          <h2>Qdrant 连接配置</h2>
+          <p>配置当前默认向量检索服务；API Key 保存后不会明文回显。</p>
         </div>
         <a-space>
           <a-button :loading="store.testing" @click="testConnection">测试连接</a-button>

@@ -5,7 +5,7 @@ import CommandPalette from "./components/CommandPalette.vue";
 
 <template>
   <a-layout class="app-layout">
-    <a-layout-sider class="app-layout__sider" :width="220">
+    <a-layout-sider class="app-layout__sider" :width="280">
       <AppSidebar />
     </a-layout-sider>
     <a-layout-content class="app-layout__content">

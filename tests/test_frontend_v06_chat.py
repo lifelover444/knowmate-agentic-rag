@@ -84,3 +84,20 @@ def test_frontend_chat_supports_text_attachments():
     assert "txt/md/csv/json" in app
     assert "附件内容已截断" in app
     assert "不支持的附件类型" in app
+
+
+def test_frontend_chat_auto_scroll_and_sidebar_branding():
+    app = frontend_source()
+
+    assert "knowmate知友" in app
+    assert "知识助理" not in app
+    assert "<span>设置</span>" in app
+    assert "开放能力" not in app
+    assert "sidebar-user__avatar" not in app
+    assert "messageListRef" in app
+    assert "shouldStickToBottom" in app
+    assert "handleMessageListScroll" in app
+    assert "forceMessageListStickToBottom" in app
+    assert "scrollMessagesToBottom" in app
+    assert "@scroll.passive=\"handleMessageListScroll\"" in app
+    assert "message.content.length" in app

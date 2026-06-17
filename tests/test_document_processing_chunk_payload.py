@@ -8,6 +8,11 @@ from app.rag.parser import ParsedDocument
 from app.services.document_processing import DocumentProcessingService
 
 
+class FakeGeneratedQuestionGenerator:
+    def generate(self, chunk) -> list[str]:
+        return [f"{chunk.context_header or '文档'} 应该如何检索？"]
+
+
 def test_document_processing_uses_context_headers_and_parent_child_payloads(
     client,
     db_session,
@@ -99,6 +104,81 @@ def test_document_processing_uses_context_headers_and_parent_child_payloads(
     assert kb is not None
     assert kb.chunking_config["strategy"] == "auto"
     assert kb.parser_engine_rules
+
+
+def test_document_processing_syncs_generated_questions_to_search_text_and_payload(
+    client,
+    db_session,
+    fake_embedder,
+    fake_vector_store,
+    monkeypatch,
+    tmp_path: Path,
+):
+    holder = {}
+
+    def run_processing_now(document_id: str) -> None:
+        with holder["app"].state.session_factory() as session:
+            DocumentProcessingService(
+                db=session,
+                upload_dir=tmp_path,
+                embedder=fake_embedder,
+                vector_store=fake_vector_store,
+                generated_question_generator=FakeGeneratedQuestionGenerator(),
+            ).process(document_id)
+
+    monkeypatch.setattr("app.workers.tasks.enqueue_document_processing", run_processing_now)
+    holder["app"] = client.app
+    chat_id, embedding_id = create_bound_models(client)
+
+    create_response = client.post(
+        "/api/v1/knowledge-bases",
+        json={
+            "name": "Generated Question KB",
+            "summary_model_id": chat_id,
+            "embedding_model_id": embedding_id,
+            "chunking_config": {
+                "strategy": "heading",
+                "chunk_size": 180,
+                "chunk_overlap": 20,
+                "enable_parent_child": True,
+                "parent_chunk_size": 512,
+                "child_chunk_size": 120,
+            },
+        },
+    )
+    assert create_response.status_code == 201, create_response.text
+    kb_id = create_response.json()["id"]
+
+    upload_response = client.post(
+        f"/api/v1/knowledge-bases/{kb_id}/documents/file",
+        files={
+            "file": (
+                "generated.md",
+                ("# 保险手册\n\n## 赔偿顺序\n" + "交强险和商业三者险。" * 80).encode(),
+                "text/markdown",
+            )
+        },
+    )
+    assert upload_response.status_code == 201, upload_response.text
+
+    child = (
+        db_session.query(Chunk)
+        .filter_by(knowledge_base_id=kb_id, chunk_type="child")
+        .order_by(Chunk.chunk_index)
+        .first()
+    )
+    assert child is not None
+    generated = child.chunk_metadata["generated_questions"]
+    assert generated[0]["question"].endswith("应该如何检索？")
+    assert "generated.md" in child.search_text
+    if child.context_header:
+        assert child.context_header in child.search_text
+    assert child.content in child.search_text
+    assert generated[0]["question"] in child.search_text
+
+    payload = fake_vector_store.points[0]["payload"]
+    assert payload["search_text"] == child.search_text
+    assert payload["metadata"]["generated_questions"] == generated
 
 
 def test_document_processing_ignores_legacy_parent_child_disable(
