@@ -25,6 +25,20 @@ def test_frontend_exposes_parser_and_chunking_settings():
     assert "previewResult" in app
 
 
+def test_frontend_exposes_mineru_parser_config_form():
+    app = frontend_source()
+    upload = (ROOT / "frontend" / "src" / "components" / "DocumentUpload.vue").read_text(encoding="utf-8")
+
+    assert "/parser-configs/mineru" in app
+    assert "save-mineru-config" in app
+    assert "mineru-api-key" in app
+    assert "model_version" in app
+    assert "MinerU 配置" in app
+    assert ".pptx" in upload
+    assert ".png" in upload
+    assert ".bmp" in upload
+
+
 def test_frontend_kb_chunking_config_is_fixed_read_only():
     retrieval_view = (ROOT / "frontend" / "src" / "views" / "RetrievalSettingsView.vue").read_text(encoding="utf-8")
     kb_view = (ROOT / "frontend" / "src" / "views" / "KnowledgeBaseView.vue").read_text(encoding="utf-8")

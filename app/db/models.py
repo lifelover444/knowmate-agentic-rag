@@ -141,6 +141,26 @@ class VectorStoreConfig(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
 
 
+class ParserProviderConfig(Base):
+    __tablename__ = "parser_provider_configs"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "provider", name="uq_parser_provider_configs_tenant_provider"),
+        Index("ix_parser_provider_configs_tenant_provider", "tenant_id", "provider"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    tenant_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    provider: Mapped[str] = mapped_column(String(50), nullable=False, default="mineru", index=True)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    base_url: Mapped[str] = mapped_column(String(512), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="active", index=True)
+    config_json: Mapped[dict] = mapped_column(JSON, nullable=False)
+    api_key_encrypted: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    api_key_last4: Mapped[str] = mapped_column(String(8), nullable=False, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+
 class ChatSession(Base):
     __tablename__ = "chat_sessions"
     __table_args__ = (

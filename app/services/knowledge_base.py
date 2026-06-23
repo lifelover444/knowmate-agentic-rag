@@ -39,11 +39,28 @@ def normalize_chunking_config(config: dict | None, settings: Settings) -> dict:
 
 def default_parser_engine_rules() -> list[dict]:
     return [
-        {"file_types": ["pdf"], "engine": "builtin"},
-        {"file_types": ["docx"], "engine": "builtin"},
+        {
+            "file_types": [
+                "pdf",
+                "doc",
+                "docx",
+                "ppt",
+                "pptx",
+                "xls",
+                "xlsx",
+                "png",
+                "jpg",
+                "jpeg",
+                "jp2",
+                "webp",
+                "gif",
+                "bmp",
+            ],
+            "engine": "mineru",
+        },
         {"file_types": ["md", "markdown"], "engine": "builtin"},
         {"file_types": ["txt"], "engine": "builtin"},
-        {"file_types": ["csv", "json", "xlsx"], "engine": "builtin"},
+        {"file_types": ["csv", "json"], "engine": "builtin"},
     ]
 
 

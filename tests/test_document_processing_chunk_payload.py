@@ -348,6 +348,7 @@ def test_document_processing_fails_empty_parsed_content_with_ocr_guidance(
             "name": "Empty PDF KB",
             "summary_model_id": chat_id,
             "embedding_model_id": embedding_id,
+            "parser_engine_rules": [{"file_types": ["pdf"], "engine": "builtin"}],
         },
     )
     assert create_response.status_code == 201, create_response.text

@@ -101,6 +101,8 @@ def test_runtime_status_reports_real_parser_storage_and_system_health(client):
     docreader = next(engine for engine in payload["parser_engines"] if engine["name"] == "docreader")
     assert builtin["status"] == "ok"
     assert "pdf" in builtin["file_types"]
-    assert mineru["status"] == "planned"
+    assert mineru["status"] == "missing"
+    assert mineru["api_key_configured"] is False
+    assert "MinerU API Key 未配置" in mineru["error_message"]
     assert docreader["status"] == "planned"
     assert any("Rerank" in suggestion for suggestion in payload["fix_suggestions"])

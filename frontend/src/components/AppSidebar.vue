@@ -1,8 +1,11 @@
 <script setup lang="ts">
+import { Message } from "@arco-design/web-vue";
+import { IconDelete, IconEdit } from "@arco-design/web-vue/es/icon";
 import { computed, onMounted, ref } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { useChatStore } from "../stores/chat";
-import { getRootJson } from "../utils/api";
+import type { ChatSessionRead } from "../types/api";
+import { formatApiError, getRootJson } from "../utils/api";
 
 const router = useRouter();
 const route = useRoute();
@@ -10,6 +13,9 @@ const chat = useChatStore();
 const healthText = ref("检查中");
 const healthOk = ref(false);
 const historyCollapsed = ref(false);
+const renameVisible = ref(false);
+const renameTitle = ref("");
+const renamingSessionId = ref("");
 
 const selectedKeys = computed(() => {
   if (route.path.startsWith("/knowledge-bases")) return ["/knowledge-bases"];
@@ -43,6 +49,31 @@ async function newConversation() {
 async function openSession(sessionId: string) {
   await chat.loadSession(sessionId);
   router.push("/chat");
+}
+
+function openRename(session: ChatSessionRead) {
+  renamingSessionId.value = session.id;
+  renameTitle.value = session.title;
+  renameVisible.value = true;
+}
+
+async function submitRename() {
+  try {
+    await chat.renameSession(renamingSessionId.value, renameTitle.value);
+    renameVisible.value = false;
+    Message.success("会话名称已更新。");
+  } catch (error) {
+    Message.error(formatApiError(error instanceof Error ? error.message : error));
+  }
+}
+
+async function deleteSession(session: ChatSessionRead) {
+  try {
+    await chat.deleteSession(session.id);
+    Message.success("会话已删除。");
+  } catch (error) {
+    Message.error(formatApiError(error instanceof Error ? error.message : error));
+  }
 }
 
 onMounted(() => {
@@ -82,16 +113,40 @@ onMounted(() => {
         <span>{{ historyCollapsed ? "⌄" : "⌃" }}</span>
       </button>
       <div v-show="!historyCollapsed" class="history-list">
-        <button
+        <div
           v-for="session in recentSessions"
           :key="session.id"
-          type="button"
+          class="history-item"
           :class="{ active: chat.currentSession?.id === session.id }"
-          @click="openSession(session.id)"
         >
-          <span>{{ session.title }}</span>
-          <small v-if="session.is_pinned">置顶</small>
-        </button>
+          <button class="history-item__content" type="button" @click="openSession(session.id)">
+            <span>{{ session.title }}</span>
+            <small v-if="session.is_pinned">置顶</small>
+          </button>
+          <div class="history-item__actions">
+            <a-button
+              size="mini"
+              shape="circle"
+              title="重命名会话"
+              aria-label="重命名会话"
+              @click.stop="openRename(session)"
+            >
+              <template #icon><IconEdit /></template>
+            </a-button>
+            <a-popconfirm content="确认删除这个会话？" @ok="deleteSession(session)">
+              <a-button
+                size="mini"
+                shape="circle"
+                status="danger"
+                title="删除会话"
+                aria-label="删除会话"
+                @click.stop
+              >
+                <template #icon><IconDelete /></template>
+              </a-button>
+            </a-popconfirm>
+          </div>
+        </div>
       </div>
     </section>
 
@@ -101,6 +156,10 @@ onMounted(() => {
       <span>{{ healthText }}</span>
     </div>
   </aside>
+
+  <a-modal v-model:visible="renameVisible" title="重命名会话" :on-before-ok="submitRename">
+    <a-input v-model="renameTitle" placeholder="请输入会话名称" />
+  </a-modal>
 </template>
 
 <style scoped>
@@ -295,7 +354,7 @@ onMounted(() => {
   padding-right: 4px;
 }
 
-.history-list button {
+.history-item {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
@@ -303,28 +362,66 @@ onMounted(() => {
   width: 100%;
   border: 0;
   border-radius: 14px;
-  padding: 10px 14px;
+  padding: 8px 8px 8px 14px;
   color: #23282f;
+  background: transparent;
+}
+
+.history-item__content {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  border: 0;
+  padding: 2px 0;
+  color: inherit;
   background: transparent;
   font-size: 17px;
   text-align: left;
   cursor: pointer;
 }
 
-.history-list button:hover,
-.history-list button.active {
+.history-item:hover,
+.history-item.active,
+.history-item:focus-within {
   background: #e9e9ea;
 }
 
-.history-list span {
+.history-item__content span {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.history-list small {
+.history-item__content small {
   color: #8a929e;
   font-size: 12px;
+}
+
+.history-item__actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.16s ease;
+}
+
+.history-item:hover .history-item__actions,
+.history-item.active .history-item__actions,
+.history-item:focus-within .history-item__actions {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.history-item__actions :deep(.arco-btn) {
+  color: #667085;
+  background: rgba(255, 255, 255, 0.4);
+}
+
+.history-item__actions :deep(.arco-btn:hover) {
+  background: #ffffff;
 }
 
 .sidebar-spacer {

@@ -22,6 +22,23 @@ class ParsedDocument:
 
 ParserCallable = Callable[[Path], ParsedDocument]
 
+MINERU_FILE_TYPES = [
+    "pdf",
+    "doc",
+    "docx",
+    "ppt",
+    "pptx",
+    "xls",
+    "xlsx",
+    "png",
+    "jpg",
+    "jpeg",
+    "jp2",
+    "webp",
+    "gif",
+    "bmp",
+]
+
 
 class ParserEngineRegistry:
     def __init__(self) -> None:
@@ -30,12 +47,11 @@ class ParserEngineRegistry:
         self._availability: dict[str, tuple[bool, str]] = {}
         self._register_builtin()
         self.register(
-            "ocr",
+            "mineru",
             {},
-            "OCR / image parser placeholder",
-            available=False,
-            unavailable_reason="当前版本未接入外部 OCR/MinerU 服务",
-            advertised_file_types=["jpg", "jpeg", "png", "gif", "bmp", "tiff", "webp"],
+            "MinerU OCR / advanced parser",
+            available=True,
+            advertised_file_types=MINERU_FILE_TYPES,
         )
 
     def register(

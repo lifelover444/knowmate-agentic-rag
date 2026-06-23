@@ -40,11 +40,13 @@ export const useRetrievalStore = defineStore("retrieval", () => {
   const parserEngines = ref<ParserEngine[]>([]);
   const runtimeStatus = ref<RuntimeStatus | null>(null);
   const parserEngineRules = ref<ParserEngineRule[]>([
-    { file_types: ["pdf"], engine: "builtin" },
-    { file_types: ["docx"], engine: "builtin" },
+    {
+      file_types: ["pdf", "doc", "docx", "ppt", "pptx", "xls", "xlsx", "png", "jpg", "jpeg", "jp2", "webp", "gif", "bmp"],
+      engine: "mineru",
+    },
     { file_types: ["md", "markdown"], engine: "builtin" },
     { file_types: ["txt"], engine: "builtin" },
-    { file_types: ["csv", "json", "xlsx"], engine: "builtin" },
+    { file_types: ["csv", "json"], engine: "builtin" },
   ]);
 
   const chunkStrategy = ref("auto");

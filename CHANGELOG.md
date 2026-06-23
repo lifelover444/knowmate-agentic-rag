@@ -1,5 +1,57 @@
 # Changelog
 
+## v0.92
+
+v0.92 是 v0.91 之后的解析能力和模型配置体验版本。主链路继续保持 WeKnora-style 固定 Quick Q&A：Query Understand + Qdrant dense + ParadeDB BM25 + RRF + mandatory rerank + parent-child context；本版本重点把文档解析从 builtin 扩展到 MinerU 标准精准解析，并补齐大 PDF 自动分片。
+
+### Added
+
+- 新增解析器配置中心：
+  - 新增独立 `parser_provider_configs` 表，不复用模型配置表。
+  - 新增 `/api/v1/parser-configs` 和 `/api/v1/parser-configs/{provider}` 系列 API。
+  - MinerU API Key 使用后端加密保存，读取接口只返回 `api_key_configured` 和 `api_key_last4`。
+- 新增 MinerU 标准精准解析：
+  - 默认 `provider=mineru`、`base_url=https://mineru.net/api/v4`、`model_version=vlm`、`language=ch`。
+  - 通过批量签名 URL 上传原文件、异步轮询解析结果、下载 zip 并读取 `full.md`。
+  - `document.doc_metadata` 写入 `mineru_batch_id`、`mineru_state`、`mineru_trace_id`、`full_zip_url`、`model_version` 和输出文件摘要。
+- 新增默认 parser rules：
+  - `pdf/doc/docx/ppt/pptx/xls/xlsx/png/jpg/jpeg/jp2/webp/gif/bmp` 默认走 MinerU。
+  - `txt/md/markdown/csv/json` 继续走 builtin。
+  - 既有文档知识库迁移到 MinerU 规则，文本类规则保留 builtin。
+- 新增 PDF 超 200 页自动分片：
+  - 本地使用 `pypdf` 读取页数并按 200 页生成临时 PDF 分片。
+  - 逐片调用 MinerU，合并 Markdown 时插入 `## 第 x-y 页` 标题。
+  - 文档元数据记录 `mineru_split`、`mineru_split_part_count`、`mineru_split_max_pages`、`page_count` 和 `mineru_parts`。
+  - 任一分片失败时整个文档解析失败，错误包含分片序号和页码范围。
+- 前端设置中心新增“解析器”页，支持配置 MinerU Key、查看尾号、保存 `vlm/ch/表格/公式/OCR` 等参数；文档上传 accept 扩展到 MinerU 支持格式。
+
+### Fixed
+
+- 修复 DeepSeek QA 模型名被 provider preset 重置的问题；保存 `deepseek-v4-pro` 等自定义模型名后不再回落到 `deepseek-chat`。
+- 修复模型测试失败时前端仍显示成功样式的问题；现在会按 `chat_ok/embedding_ok/rerank_ok` 判断，并展示中文可读错误。
+
+### Changed
+
+- 解析模块从“仅 builtin/占位 MinerU 状态”升级为正式 provider registry + provider config 路径。
+- MinerU 缺少配置、Token 错误、任务失败、超时、zip 缺少 Markdown、PDF 加密或页数读取失败都会返回中文明确错误，不静默回退 builtin。
+- v0.92 后续质量优化方向转为量化评测闭环：优先建设 RAG eval 数据集、retrieval Recall@K/MRR/nDCG、answer faithfulness/relevancy 和 source hit rate。
+
+### Not Included
+
+- 非 PDF 文件超过 MinerU 页数限制时，v0.92 暂不自动拆分；需要人工拆分或后续增加 Office 转 PDF 后分片。
+- 不接入离线 MinerU、本地 OCR/VLM/ASR 或 WeKnoraCloud。
+- 不内置 DeepEval/Ragas/Phoenix 评测平台；本版本仅记录下一阶段评测方向。
+
+### Verification
+
+- `python -m pytest tests/test_mineru_integration.py -q`：`8 passed`
+- `python -m pytest tests/test_mineru_integration.py tests/test_document_processing_chunk_payload.py tests/test_v07_processing_spans.py -q`：`17 passed`
+- `python -m pytest -q`：`233 passed`
+- `ruff check .`：通过
+- `python -m compileall app tests`：通过
+- `npm --prefix frontend run build`：通过，仍有既有 Vite large chunk warning。
+- Browser mock smoke：模型设置页保存 `deepseek-v4-pro` 后不会被重置为 `deepseek-chat`；模型测试失败时显示 error message，而不是成功提示。
+
 ## v0.91
 
 v0.91 是 v0.9 固定 Quick Q&A 主链路后的质量修复版本，重点解决真实运行态召回差、rerank 错排和 Chat 前端交互问题。主链路仍保持 WeKnora-style 固定链路：Query Understand + Qdrant dense + ParadeDB BM25 + RRF + mandatory rerank + parent-child context。

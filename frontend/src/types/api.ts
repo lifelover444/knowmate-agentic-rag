@@ -126,6 +126,30 @@ export interface ParserEngine {
   status?: string;
   error_message?: string | null;
   fix_suggestion?: string | null;
+  api_key_configured?: boolean;
+  api_key_last4?: string | null;
+}
+
+export interface ParserConfigRead {
+  id?: string | null;
+  tenant_id: number;
+  provider: string;
+  name: string;
+  base_url: string;
+  status: string;
+  config: Record<string, unknown>;
+  api_key_configured: boolean;
+  api_key_last4?: string | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+}
+
+export interface ParserConfigPayload {
+  name: string;
+  base_url: string;
+  api_key?: string | null;
+  status: string;
+  config: Record<string, unknown>;
 }
 
 export interface RuntimeStatus {

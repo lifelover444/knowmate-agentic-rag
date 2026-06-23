@@ -1,6 +1,7 @@
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
+from tempfile import TemporaryDirectory
 
 from sqlalchemy.orm import Session
 
@@ -10,10 +11,13 @@ from app.db.repositories.chunk import ChunkRepository
 from app.db.repositories.document import DocumentRepository
 from app.db.repositories.knowledge_base import KnowledgeBaseRepository
 from app.integrations.llm_openai import OpenAIEmbedder
+from app.integrations.mineru import MinerUClient, MinerUConfig, MinerUError, MinerUParseResult
+from app.integrations.pdf_splitter import PdfSplitError, get_pdf_page_count, split_pdf_by_page_limit
 from app.rag.chunker import AdaptiveTextChunker, ChunkingConfig, ParsedChunk, split_parent_child
-from app.rag.parser import DocumentParser
+from app.rag.parser import DocumentParser, ParsedDocument
 from app.services.knowledge_base import normalize_chunking_config
 from app.services.model_config import ModelConfigService
+from app.services.parser_config import MINERU_PROVIDER, ParserProviderConfigService
 from app.services.processing_spans import ProcessingSpanService
 
 
@@ -66,10 +70,8 @@ class DocumentProcessingService:
             )
             self._raise_if_cancelled(document)
             file_path = Path(document.file_path or "")
-            parsed = DocumentParser().parse(
-                file_path,
-                engine=_select_parser_engine(kb.parser_engine_rules, document.file_type),
-            )
+            selected_engine = _select_parser_engine(kb.parser_engine_rules, document.file_type)
+            parsed = self._parse_document(file_path, selected_engine)
             if not parsed.content.strip():
                 raise ValueError("未解析出可入库文本；该文件可能是扫描版或图片型 PDF，请接入 OCR/MinerU 后重试。")
             document.doc_metadata = {**(document.doc_metadata or {}), **parsed.metadata, "pages": parsed.pages}
@@ -180,6 +182,87 @@ class DocumentProcessingService:
         if document.parse_status == "cancelled":
             raise DocumentProcessingCancelled(document.error_message or "用户已取消解析")
 
+    def _parse_document(self, file_path: Path, engine: str | None) -> ParsedDocument:
+        if engine != MINERU_PROVIDER:
+            return DocumentParser().parse(file_path, engine=engine)
+
+        runtime = ParserProviderConfigService(self.db, self.settings).runtime_config(MINERU_PROVIDER)
+        client = MinerUClient(
+            MinerUConfig(
+                base_url=runtime.base_url,
+                api_key=runtime.api_key,
+                model_version=str(runtime.config.get("model_version") or "vlm"),
+                language=str(runtime.config.get("language") or "ch"),
+                enable_table=bool(runtime.config.get("enable_table", True)),
+                enable_formula=bool(runtime.config.get("enable_formula", True)),
+                is_ocr=bool(runtime.config.get("is_ocr", False)),
+                poll_interval_seconds=float(runtime.config.get("poll_interval_seconds") or 3),
+                poll_timeout_seconds=float(runtime.config.get("poll_timeout_seconds") or 600),
+            )
+        )
+        max_pages_per_part = _mineru_max_pages_per_part(runtime.config.get("max_pages_per_part"))
+        return _parse_with_mineru(file_path, client, max_pages_per_part=max_pages_per_part)
+
+
+def _parse_with_mineru(file_path: Path, client: MinerUClient, *, max_pages_per_part: int) -> ParsedDocument:
+    file_type = file_path.suffix.lower().lstrip(".")
+    if file_type != "pdf":
+        result = client.parse_file(file_path)
+        return _mineru_result_to_parsed_document(file_path, result)
+
+    try:
+        page_count = get_pdf_page_count(file_path)
+    except PdfSplitError as exc:
+        raise ValueError(str(exc)) from exc
+
+    if page_count <= max_pages_per_part:
+        result = client.parse_file(file_path)
+        metadata = {
+            "file_name": file_path.name,
+            "file_type": file_type,
+            **result.metadata,
+            "page_count": page_count,
+        }
+        pages = [{"page": index + 1, "start": 0, "end": 0} for index in range(page_count)]
+        return ParsedDocument(title=file_path.name, content=result.markdown, metadata=metadata, pages=pages)
+
+    with TemporaryDirectory(prefix="mineru_pdf_parts_") as temp_dir:
+        try:
+            parts = split_pdf_by_page_limit(file_path, Path(temp_dir), max_pages=max_pages_per_part)
+        except PdfSplitError as exc:
+            raise ValueError(str(exc)) from exc
+
+        sections: list[str] = []
+        part_metadata: list[dict] = []
+        pages: list[dict] = []
+        for part in parts:
+            try:
+                result = client.parse_file(part.path)
+            except Exception as exc:
+                raise MinerUError(
+                    f"MinerU 分片 {part.index}/{len(parts)}（第 {part.page_start}-{part.page_end} 页）解析失败：{exc}"
+                ) from exc
+            markdown = result.markdown.strip()
+            section_title = f"## 第 {part.page_start}-{part.page_end} 页"
+            sections.append(f"{section_title}\n\n{markdown}" if markdown else section_title)
+            part_metadata.append(_mineru_part_metadata(part, result))
+            pages.append({"part_index": part.index, "page_start": part.page_start, "page_end": part.page_end})
+
+    metadata = {
+        "file_name": file_path.name,
+        "file_type": file_type,
+        "parser": "mineru",
+        "mineru_split": True,
+        "mineru_split_part_count": len(part_metadata),
+        "mineru_split_max_pages": max_pages_per_part,
+        "page_count": page_count,
+        "mineru_parts": part_metadata,
+    }
+    first_part = part_metadata[0] if part_metadata else {}
+    if first_part.get("model_version"):
+        metadata["model_version"] = first_part["model_version"]
+    return ParsedDocument(title=file_path.name, content="\n\n".join(sections).strip(), metadata=metadata, pages=pages)
+
 
 def _select_parser_engine(rules: list | None, file_type: str | None) -> str | None:
     normalized = (file_type or "").lower().lstrip(".")
@@ -187,6 +270,37 @@ def _select_parser_engine(rules: list | None, file_type: str | None) -> str | No
         if normalized in {item.lower().lstrip(".") for item in rule.get("file_types", [])}:
             return rule.get("engine")
     return "builtin"
+
+
+def _mineru_max_pages_per_part(raw_value) -> int:
+    try:
+        value = int(raw_value or 200)
+    except (TypeError, ValueError):
+        value = 200
+    return min(max(value, 1), 200)
+
+
+def _mineru_result_to_parsed_document(file_path: Path, result: MinerUParseResult) -> ParsedDocument:
+    metadata = {
+        "file_name": file_path.name,
+        "file_type": file_path.suffix.lower().lstrip("."),
+        **result.metadata,
+    }
+    return ParsedDocument(title=file_path.name, content=result.markdown, metadata=metadata)
+
+
+def _mineru_part_metadata(part, result: MinerUParseResult) -> dict:
+    return {
+        "part_index": part.index,
+        "page_start": part.page_start,
+        "page_end": part.page_end,
+        "file_name": part.path.name,
+        "mineru_batch_id": result.metadata.get("mineru_batch_id"),
+        "mineru_state": result.metadata.get("mineru_state"),
+        "mineru_trace_id": result.metadata.get("mineru_trace_id"),
+        "full_zip_url": result.metadata.get("full_zip_url"),
+        "model_version": result.metadata.get("model_version"),
+    }
 
 
 def _chunking_config(data: dict, *, size_key: str = "chunk_size") -> ChunkingConfig:

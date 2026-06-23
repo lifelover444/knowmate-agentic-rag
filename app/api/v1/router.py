@@ -11,6 +11,7 @@ from app.api.v1 import (
     messages,
     model_config,
     models,
+    parser_configs,
     parser_engines,
     quick_answer,
     retrieval_config,
@@ -32,6 +33,7 @@ api_router.include_router(chunks.router, prefix="/chunks", tags=["chunks"])
 api_router.include_router(quick_answer.router, prefix="/quick-answer", tags=["quick-answer"])
 api_router.include_router(model_config.router, prefix="/model-config", tags=["model-config"])
 api_router.include_router(models.router, prefix="/models", tags=["models"])
+api_router.include_router(parser_configs.router, prefix="/parser-configs", tags=["parser-configs"])
 api_router.include_router(retrieval_config.router, prefix="/retrieval-config", tags=["retrieval-config"])
 api_router.include_router(runtime_status.router, prefix="/runtime-status", tags=["runtime-status"])
 api_router.include_router(chunker.router, prefix="/chunker", tags=["chunker"])

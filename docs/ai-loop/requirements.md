@@ -3,9 +3,9 @@
 长期目标：以 Tencent/WeKnora 为产品和架构参照，把 `knowmate 知友` 做成 FastAPI 技术栈下的近似复现。推进方式为单任务循环：每次只选一个可测试的小任务，对照 WeKnora 源码实现，完成测试后再进入下一项。
 
 参考基线：
-- knowmate 当前主线：v0.9 已完成 TASK-046 到 TASK-055，基于 v0.8 可解释性和管理闭环收敛为固定 Quick Q&A 主链路：Qdrant dense retrieval + ParadeDB pg_search BM25 + RRF + mandatory rerank + parent-child context。v0.9 不再向用户暴露 retrieval mode、关闭 rerank、关闭 parent-child 或 planned vector backends。
+- knowmate 当前主线：v0.92 已在 v0.9 固定 Quick Q&A 主链路和 v0.91 召回/Chat 体验修复基础上补齐 MinerU 标准精准解析、解析器配置管理、PDF 超 200 页自动分片和 DeepSeek 模型配置修复。主链路仍固定为 Qdrant dense retrieval + ParadeDB pg_search BM25 + RRF + mandatory rerank + parent-child context，不向用户暴露 retrieval mode、关闭 rerank、关闭 parent-child 或 planned vector backends。
 - WeKnora 参考源码：`D:/myproject/_references/WeKnora`，`VERSION=0.6.0`，commit `e352721`，迁移已到 `000057_models_display_name`，仅作为只读参考。
-- 差距文档：`docs/weknora-full-gap-analysis-2026-06-02.zh-CN.md`；Quick Q&A 任务提示词见 `docs/quick-qa-weknora-task-prompts.zh-CN.md` 和 `docs/v0.9-task-prompts.zh-CN.md`。v0.9 Quick Q&A 任务包已完成，当前剩余差距集中在 Auth/RBAC-lite、per-user 偏好、文件夹上传、Web Search provider、Markdown/Mermaid 安全渲染、高级解析、Agent/Wiki/DataSource 等后续范围。
+- 差距文档：`docs/weknora-full-gap-analysis-2026-06-02.zh-CN.md`；Quick Q&A 任务提示词见 `docs/quick-qa-weknora-task-prompts.zh-CN.md` 和 `docs/v0.9-task-prompts.zh-CN.md`。v0.9 Quick Q&A 任务包已完成，v0.92 已接入 MinerU 云解析；当前剩余差距集中在 Auth/RBAC-lite、per-user 偏好、文件夹上传、Web Search provider、Markdown/Mermaid 安全渲染、离线/本地解析能力、RAG 量化评测、Agent/Wiki/DataSource 等后续范围。
 
 ## Active
 
@@ -18,7 +18,8 @@
 - Agent Mode MVP：Agent 列表、Agent 编辑器、knowledge-search 工具、流式工具调用展示。
 - Wiki Mode MVP：Wiki KB 类型、从 chunks 生成只读 Markdown wiki pages、Wiki browser、基础互链。
 - RBAC-lite：登录、用户、workspace/tenant shell、Owner/Admin/Viewer、KB ownership、审计日志。
-- 高级解析：OCR、MinerU、图片/VLM、PPT、ASR。
+- 高级解析剩余项：离线 MinerU、本地 OCR/VLM/ASR、Office 超 200 页自动拆分或 Office 转 PDF 后分片。
+- RAG 量化评测：建立 eval dataset、retrieval Recall@K/MRR/nDCG、answer faithfulness/relevancy、source hit rate，并评估 DeepEval/Ragas/Phoenix 等工具接入。
 - 外部数据源同步：Feishu / Notion / Yuque。
 - CLI / MCP server / Chrome Extension / WeChat Mini Program / IM channels。
 - Langfuse 或等价可观测性。
@@ -29,5 +30,5 @@
 - Split large requests into the smallest independently shippable task.
 - Before production code changes, confirm the selected `TASK-*` with the user.
 - For each task: compare WeKnora source first, write/update focused tests, implement, run smallest relevant verification, then broaden.
-- Local runtime convention: use `scripts/start-dev.ps1` or `docker compose up -d --build` for the backend stack; do not mix local `uvicorn` / `celery` with Docker `api` / `worker`.
+- Local runtime convention: use `scripts/start-dev.ps1` for the smart Docker backend stack and local Vite; force rebuild only with `scripts/start-dev.ps1 -Rebuild` or `rebuild-dev.bat`; do not mix local `uvicorn` / `celery` with Docker `api` / `worker`.
 - When a task finishes, append an entry to `done.md` and remove it from `## Active`.

@@ -2,6 +2,7 @@
 import { computed, onMounted } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import ModelSettingsView from "./ModelSettingsView.vue";
+import ParserSettingsView from "./ParserSettingsView.vue";
 import RetrievalSettingsView from "./RetrievalSettingsView.vue";
 import VectorStoreSettingsView from "./VectorStoreSettingsView.vue";
 import { useRetrievalStore } from "../stores/retrieval";
@@ -34,6 +35,7 @@ const settingsGroups = [
 
 const componentMap = {
   models: ModelSettingsView,
+  parser: ParserSettingsView,
   "vector-stores": VectorStoreSettingsView,
   retrieval: RetrievalSettingsView,
 } as const;
@@ -53,7 +55,9 @@ const activeComponent = computed(() => {
   return undefined;
 });
 
-const parserEngines = computed(() => retrieval.runtimeStatus?.parser_engines || retrieval.parserEngines);
+const parserEngines = computed(() =>
+  (retrieval.runtimeStatus?.parser_engines || retrieval.parserEngines).filter((engine) => engine.status !== "planned"),
+);
 
 const storageProviders = computed(() => [
   ...(
@@ -65,17 +69,15 @@ const storageProviders = computed(() => [
         description: "开发环境使用本地上传目录保存原始文件。",
       },
       { provider: "minio", label: "MinIO", status: "planned", description: "MinIO 对象存储 provider 暂未启用。" },
-      { provider: "s3", label: "S3", status: "planned", description: "S3 对象存储 provider 占位。" },
-      { provider: "oss", label: "OSS", status: "planned", description: "OSS 对象存储 provider 占位。" },
-      { provider: "cos", label: "COS", status: "planned", description: "COS 对象存储 provider 占位。" },
-      { provider: "obs", label: "OBS", status: "planned", description: "OBS 对象存储 provider 占位。" },
+      { provider: "s3", label: "S3", status: "planned", description: "S3 对象存储 provider 暂未启用。" },
+      { provider: "oss", label: "OSS", status: "planned", description: "OSS 对象存储 provider 暂未启用。" },
     ]
   ).map((provider) => ({
     name: provider.label || provider.provider,
     status: statusText(provider.status),
     rawStatus: provider.status,
-    description: provider.path || provider.description || provider.fix_suggestion || "对象存储 provider 占位。",
-  })),
+    description: provider.path || provider.description || provider.fix_suggestion || "对象存储 provider 未提供说明。",
+  })).filter((provider) => provider.rawStatus !== "planned"),
 ]);
 
 const systemStatusText = computed(() => retrieval.runtimeStatus?.system?.status || "unknown");
@@ -92,7 +94,6 @@ function selectSection(section: SettingsSection) {
 
 function statusText(status: string | undefined): string {
   if (status === "ok") return "已启用";
-  if (status === "planned") return "计划接入";
   if (status === "missing") return "未配置";
   if (status === "error") return "异常";
   return status || "未知";
@@ -100,7 +101,6 @@ function statusText(status: string | undefined): string {
 
 function statusColor(status: string | undefined): string {
   if (status === "ok") return "green";
-  if (status === "planned") return "orange";
   if (status === "missing") return "gold";
   if (status === "error") return "red";
   return "gray";

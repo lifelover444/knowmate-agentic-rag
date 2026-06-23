@@ -1,7 +1,8 @@
 param(
     [switch]$SkipDocker,
     [switch]$SkipFrontend,
-    [switch]$NoHiddenWindows
+    [switch]$NoHiddenWindows,
+    [switch]$Rebuild
 )
 
 $ErrorActionPreference = "Stop"
@@ -30,6 +31,33 @@ function Invoke-CheckedNative {
     if ($LASTEXITCODE -ne 0) {
         throw "Command failed with exit code $LASTEXITCODE`: $FilePath $($ArgumentList -join ' ')"
     }
+}
+
+function Get-FileSha256 {
+    param([string]$Path)
+    if (-not (Test-Path $Path)) {
+        return "missing:$Path"
+    }
+    return (Get-FileHash -Algorithm SHA256 -LiteralPath $Path).Hash
+}
+
+function Get-DockerBuildSignature {
+    $Inputs = @(
+        "Dockerfile",
+        "pyproject.toml",
+        "docker-compose.yml"
+    )
+    $Parts = foreach ($Item in $Inputs) {
+        $Path = Join-Path $RepoRoot $Item
+        "$Item=$((Get-FileSha256 -Path $Path))"
+    }
+    return ($Parts -join "`n")
+}
+
+function Test-ComposeServiceImageExists {
+    param([string]$ServiceName)
+    $ImageId = (& docker compose images -q $ServiceName 2>$null | Select-Object -First 1)
+    return [bool]$ImageId
 }
 
 function Stop-RecordedProcess {
@@ -114,16 +142,44 @@ Stop-KnowmatePythonProcessPattern -Pattern "uvicorn.*app\.main:app|app\.main:app
 Stop-KnowmatePythonProcessPattern -Pattern "app\.workers\.celery_app:celery_app|celery_app"
 Stop-ProjectProcessPattern -Pattern "vite|npm.*--prefix.*frontend"
 
-Test-RequiredCommand "npm.cmd"
-
 if (-not $SkipDocker) {
     Test-RequiredCommand "docker"
-    Write-Step "Starting Docker backend stack"
-    # Equivalent command: docker compose up -d --build
-    Invoke-CheckedNative -FilePath "docker" -ArgumentList @("compose", "up", "-d", "--build")
+    $BuildSignatureFile = Join-Path $LogDir "docker-build.inputs.sha256"
+    $HasBuildSignature = Test-Path $BuildSignatureFile
+    $CurrentBuildSignature = Get-DockerBuildSignature
+    $PreviousBuildSignature = if ($HasBuildSignature) {
+        Get-Content -Path $BuildSignatureFile -Raw
+    } else {
+        ""
+    }
+    $ApiImageExists = Test-ComposeServiceImageExists -ServiceName "api"
+    $WorkerImageExists = Test-ComposeServiceImageExists -ServiceName "worker"
+    $ShouldBuild = $Rebuild `
+        -or (-not $ApiImageExists) `
+        -or (-not $WorkerImageExists) `
+        -or ($HasBuildSignature -and ($CurrentBuildSignature.Trim() -ne $PreviousBuildSignature.Trim()))
+
+    if ($ShouldBuild) {
+        Write-Step "Starting Docker backend stack with rebuild"
+        # Equivalent command: docker compose up -d --build
+        Invoke-CheckedNative -FilePath "docker" -ArgumentList @("compose", "up", "-d", "--build")
+        Set-Content -Path $BuildSignatureFile -Value $CurrentBuildSignature -Encoding ascii
+    } else {
+        if (-not $HasBuildSignature) {
+            Write-Step "Bootstrapping Docker build signature from existing images"
+            Set-Content -Path $BuildSignatureFile -Value $CurrentBuildSignature -Encoding ascii
+        }
+        Write-Step "Starting Docker backend stack without rebuild"
+        # Equivalent command: docker compose up -d
+        Invoke-CheckedNative -FilePath "docker" -ArgumentList @("compose", "up", "-d")
+        Write-Step "Restarting API and worker to load mounted source changes"
+        # Equivalent command: docker compose restart api worker
+        Invoke-CheckedNative -FilePath "docker" -ArgumentList @("compose", "restart", "api", "worker")
+    }
 }
 
 if (-not $SkipFrontend) {
+    Test-RequiredCommand "npm.cmd"
     Write-Step "Starting Vue frontend"
     # Equivalent command: npm --prefix frontend run dev
     Start-DevProcess `
@@ -139,4 +195,5 @@ Write-Host "  Docs:     http://127.0.0.1:8000/docs"
 Write-Host "  Worker:   docker compose logs -f worker"
 Write-Host "  Frontend: check .runtime-logs/frontend.out.log for the Vite URL, usually http://127.0.0.1:5173"
 Write-Host ""
+Write-Host "Rebuild: double-click rebuild-dev.bat or run scripts/start-dev.ps1 -Rebuild"
 Write-Host "Stop: double-click stop-dev.bat or run scripts/stop-dev.ps1"

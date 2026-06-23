@@ -13,6 +13,7 @@ from app.db.repositories.model_config import ModelConfigRepository
 from app.db.repositories.vector_store import VectorStoreRepository
 from app.integrations.vector_store import mask_vector_store_config
 from app.rag.parser import ParserEngineRegistry
+from app.services.parser_config import MINERU_PROVIDER, ParserProviderConfigService
 from app.services.vector_store import VectorStoreService, to_safe_vector_store
 
 router = APIRouter()
@@ -29,7 +30,7 @@ def get_runtime_status(request: Request, db: DBSession, settings: AppSettings):
     vector_store = _vector_store_status(request.app.state.vector_store)
     vector_stores = _vector_stores_status(db, settings)
     model_configs = _model_config_status(db, settings)
-    parser_engines = _parser_engine_status()
+    parser_engines = _parser_engine_status(db, settings)
     fix_suggestions = _fix_suggestions(
         database=database,
         storage=storage,
@@ -224,22 +225,37 @@ def _runtime_model_name(model, model_type: str) -> str | None:
     return model.chat_model
 
 
-def _parser_engine_status() -> list[dict]:
+def _parser_engine_status(db: Session, settings: Settings) -> list[dict]:
+    mineru_config = ParserProviderConfigService(db, settings).get_read(MINERU_PROVIDER)
     engines = ParserEngineRegistry().list_engines()
-    items = [
-        {
-            **engine,
-            "status": "ok" if engine["available"] else "planned",
-            "error_message": engine.get("unavailable_reason") or None,
-            "fix_suggestion": None
-            if engine["available"]
-            else f"{engine['name']} parser 暂未接入；当前请使用 builtin parser 或接入对应外部服务。",
-        }
-        for engine in engines
-    ]
+    items = []
+    for engine in engines:
+        if engine["name"] == MINERU_PROVIDER:
+            configured = mineru_config.status == "active" and mineru_config.api_key_configured
+            items.append(
+                {
+                    **engine,
+                    "available": configured,
+                    "status": "ok" if configured else "missing",
+                    "api_key_configured": mineru_config.api_key_configured,
+                    "api_key_last4": mineru_config.api_key_last4,
+                    "error_message": None if configured else "MinerU API Key 未配置",
+                    "fix_suggestion": None if configured else "请在设置中心的解析器页面填写 MinerU API Key。",
+                }
+            )
+            continue
+        items.append(
+            {
+                **engine,
+                "status": "ok" if engine["available"] else "planned",
+                "error_message": engine.get("unavailable_reason") or None,
+                "fix_suggestion": None
+                if engine["available"]
+                else f"{engine['name']} parser 暂未接入；当前请使用 builtin parser 或接入对应外部服务。",
+            }
+        )
     known = {item["name"] for item in items}
     for name, label, file_types in [
-        ("mineru", "MinerU OCR / Advanced Parser", ["pdf", "jpg", "jpeg", "png"]),
         ("docreader", "DocReader", ["pdf", "docx", "pptx"]),
     ]:
         if name not in known:

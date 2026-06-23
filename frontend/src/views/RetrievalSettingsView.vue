@@ -116,14 +116,14 @@ onMounted(() => {
 
         <a-tab-pane key="chunking" title="切分配置">
           <div class="form-grid">
-            <a-form-item label="PDF 解析引擎">
+            <a-form-item label="文档类解析引擎">
               <a-select v-model="retrieval.parserEngineRules[0].engine" data-testid="parser-pdf">
                 <a-option v-for="engine in retrieval.parserEngines" :key="engine.name" :value="engine.name" :disabled="!engine.available">
                   {{ engine.name }}{{ engine.available ? "" : "（不可用）" }}
                 </a-option>
               </a-select>
             </a-form-item>
-            <a-form-item label="Office 解析引擎">
+            <a-form-item label="文本类解析引擎">
               <a-select v-model="retrieval.parserEngineRules[1].engine" data-testid="parser-office">
                 <a-option v-for="engine in retrieval.parserEngines" :key="engine.name" :value="engine.name" :disabled="!engine.available">
                   {{ engine.name }}{{ engine.available ? "" : "（不可用）" }}

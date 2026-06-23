@@ -93,6 +93,7 @@ function defaultName() {
 
 function applyProviderPreset() {
   if (applyingSelected.value) return;
+  if (selectedModel.value && currentProvider.value === selectedModel.value.provider) return;
   localError.value = "";
   const backendPreset = selectedProviderPreset.value;
   if (backendPreset) {

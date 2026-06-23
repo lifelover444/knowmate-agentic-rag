@@ -2,7 +2,7 @@
 
 knowmate 知友是一个参考 [Tencent/WeKnora](https://github.com/Tencent/WeKnora) 核心思路实现的知识库 RAG 项目。后端技术栈从 WeKnora 的 Go 实现改为 Python / FastAPI；项目不是 Tencent/WeKnora 官方项目。
 
-当前版本为 v0.91，主线是在 v0.9 WeKnora-style 固定 Quick Q&A 链路上补齐召回运行态排障、rerank 纠偏和 Chat 前端交互体验。v0.91 继续固定采用 Query Understand + over-retrieval + Qdrant dense retrieval + ParadeDB pg_search BM25 + RRF + mandatory composite rerank/MMR + parent-child context，不把 vector-only、keyword-only、rerank 开关或 planned vector backends 暴露为用户配置项。当前上线链路和召回排障说明见 [Quick Q&A WeKnora 对齐召回链路](docs/quick-answer-weknora-aligned-chain-2026-06-10.zh-CN.md)：
+当前版本为 v0.92，主线是在 v0.9/v0.91 固定 Quick Q&A 链路基础上补齐 MinerU 云端精准解析、解析器配置管理、大 PDF 自动分片和模型配置体验修复。v0.92 继续固定采用 Query Understand + over-retrieval + Qdrant dense retrieval + ParadeDB pg_search BM25 + RRF + mandatory composite rerank/MMR + parent-child context，不把 vector-only、keyword-only、rerank 开关或 planned vector backends 暴露为用户配置项。当前上线链路和召回排障说明见 [Quick Q&A WeKnora 对齐召回链路](docs/quick-answer-weknora-aligned-chain-2026-06-10.zh-CN.md)：
 
 ```text
 模型管理
@@ -10,7 +10,10 @@ knowmate 知友是一个参考 [Tencent/WeKnora](https://github.com/Tencent/WeKn
   -> 标签组织
   -> 文档上传
   -> 上传队列 / 多文件进度
+  -> 解析器配置 / MinerU API Key 加密保存
   -> Celery Worker 解析文档
+  -> PDF/Office/图片类文档默认走 MinerU
+  -> PDF 超 200 页自动拆成 <=200 页分片并合并 Markdown
   -> Adaptive Chunking 切片
   -> 文档预览 / chunk outline
   -> 生成 embedding
@@ -182,13 +185,20 @@ knowmate 知友是一个参考 [Tencent/WeKnora](https://github.com/Tencent/WeKn
   - Quick Answer 默认 prompt 要求在上下文包含可适用规则时进行规则适用分析，不因事实没有逐字出现在上下文中就直接判定知识库不足。
   - 前端品牌统一为 `knowmate知友`，移除右下角用户头像/身份区，侧边栏“开放能力”改为“设置”。
   - Chat 消息区发送后和流式生成时自动滚到底部；用户主动上滑或滚轮离开底部时暂停自动跟随，避免回答被输入框挡住。
+- v0.92 MinerU 解析和配置体验：
+  - 新增独立 `parser_provider_configs` 配置表和 `/api/v1/parser-configs/mineru` API，MinerU API Key 使用后端加密保存，前端只展示已配置状态和尾号。
+  - `mineru` 成为正式 parser engine；新建知识库默认把 `pdf/doc/docx/ppt/pptx/xls/xlsx/png/jpg/jpeg/jp2/webp/gif/bmp` 交给 MinerU，`txt/md/markdown/csv/json` 仍走 builtin。
+  - MinerU 标准精准解析使用签名 URL 上传、异步轮询、下载结果 zip 并读取 `full.md`，解析元数据写入 `document.doc_metadata`。
+  - PDF 超过 MinerU 200 页限制时，后端自动按 200 页切成临时 PDF 分片，逐片调用 MinerU，再以页码范围标题合并 Markdown，最终仍作为一个文档进入 chunk、embedding、BM25 和 Qdrant。
+  - 设置中心新增“解析器”页，可配置 MinerU base URL、API Key、`vlm/ch/表格/公式/OCR` 等参数；文档上传 accept 扩展到 MinerU 支持格式。
+  - 修复 DeepSeek QA 模型名称被 provider preset 重置的问题，保存 `deepseek-v4-pro` 等自定义模型名后不再回落为 `deepseek-chat`；模型测试失败时前端显示中文可读错误。
 - 自动化测试：覆盖多模型 CRUD、凭据加密、知识库模型校验、重处理、检索配置、hybrid/RRF/rerank/parent-child retrieval、knowledge-search API、前端关键逻辑、API 和文档处理 payload。
-- v0.91 质量验证详见下方“验证命令”和 [CHANGELOG.md](CHANGELOG.md)。
+- v0.92 质量验证详见下方“验证命令”和 [CHANGELOG.md](CHANGELOG.md)。
 
 暂未实现：
 
 - 登录、RBAC、多租户隔离。
-- OCR / MinerU / 图片类文件解析。
+- 本地 OCR/VLM/ASR、Office 超 200 页自动拆分和离线 MinerU 部署；当前生产解析默认使用 MinerU 云端 API。
 - pg_jieba、Elasticsearch/OpenSearch 集群、Milvus、Weaviate、Doris、Tencent VectorDB 等额外检索后端。
 - GraphRAG、多维索引、Agent Mode、Wiki Mode。
 - WeKnoraCloud、Ollama 拉取、VLM、ASR。
@@ -214,7 +224,13 @@ knowmate 知友是一个参考 [Tencent/WeKnora](https://github.com/Tencent/WeKn
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start-dev.ps1
 ```
 
-脚本会先清理本机残留的 API / Celery / Vite 进程，再执行 `docker compose up -d --build` 启动 `postgres / redis / qdrant / api / worker`，最后拉起本机 Vite dev server。后端统一运行在 Docker 中，避免 Windows 本机 worker 和 Linux Docker worker 混跑导致上传文件路径不一致。v0.9 的 `postgres` 服务使用 ParadeDB PostgreSQL 16 镜像，并通过 `shared_preload_libraries=pg_search` 加载 BM25 扩展；如果扩展未加载，BM25 migration 和生产 keyword search 会明确失败。
+脚本会先清理本机残留的 API / Celery / Vite 进程，再启动 `postgres / redis / qdrant / api / worker`，最后拉起本机 Vite dev server。默认路径是 `docker compose up -d` + `docker compose restart api worker`，用于快速加载挂载代码；当 `Dockerfile`、`pyproject.toml` 或 `docker-compose.yml` 变化、镜像不存在，或显式传入 `-Rebuild` 时，脚本才会执行 `docker compose up -d --build`。后端统一运行在 Docker 中，避免 Windows 本机 worker 和 Linux Docker worker 混跑导致上传文件路径不一致。v0.9 的 `postgres` 服务使用 ParadeDB PostgreSQL 16 镜像，并通过 `shared_preload_libraries=pg_search` 加载 BM25 扩展；如果扩展未加载，BM25 migration 和生产 keyword search 会明确失败。
+
+需要强制重建镜像时，可以双击 `rebuild-dev.bat`，或运行：
+
+```powershell
+scripts/start-dev.ps1 -Rebuild
+```
 
 更新项目代码后，推荐流程是：
 
@@ -319,15 +335,16 @@ Vite 会把 `/api` 和 `/health` 代理到 `http://127.0.0.1:8000`。
 2. QA 模型可选择 Qwen / DashScope、DeepSeek 或 OpenAI-compatible；Embedding 模型当前主要使用 Qwen / DashScope。
 3. 填入 API Key 后点击“测试模型”。
 4. 保存模型后，API Key 输入框会清空；再次测试会使用后端已加密保存的 Key。
-5. 在 `/#/settings` 的“检索与分块”分区查看 v0.9 固定主链路：Qdrant、ParadeDB BM25、RRF、mandatory rerank、parent-child 参数和 parser/chunking 配置；可先点“切分预览”。
-6. 进入 `/#/knowledge-bases` 创建知识库，知识库会绑定选择的 QA 和 Embedding 模型，并保存切分配置与解析规则。
-7. 进入知识库的文档管理页，上传 `.txt/.md/.pdf/.docx/.csv/.json/.xlsx` 文档，可按标签组织文档。
-8. 等待 Worker 处理到“解析完成”，页面可在预览抽屉中查看摘要、outline 和 chunks。
-9. FAQ 知识库可进入 `/#/knowledge-bases/:kbId/faqs`，手动维护 FAQ，或使用 CSV/XLSX append/replace 导入并导出。
-10. 切换向量模型、维度或切分参数后，点击“重新处理”或“重建知识库”重建向量；批量操作结果会显示成功/失败摘要。
-11. 进入 `/#/chat`，选择知识库后新建会话，或从左侧会话列表继续历史会话；可搜索会话、批量删除会话，空会话会显示推荐问题。
-12. 在输入区提问，页面会流式追加 assistant 消息；每条回答可展开来源依据和 retrieval trace。
-13. 需要调试召回时，展开“检索调试”，只返回 sources，不调用 LLM。
+5. 在 `/#/settings` 的“解析器”分区配置 MinerU API Key；Key 只会加密保存，页面仅显示配置状态和尾号。
+6. 在 `/#/settings` 的“检索与分块”分区查看 v0.9 固定主链路：Qdrant、ParadeDB BM25、RRF、mandatory rerank、parent-child 参数和 parser/chunking 配置；可先点“切分预览”。
+7. 进入 `/#/knowledge-bases` 创建知识库，知识库会绑定选择的 QA 和 Embedding 模型，并保存切分配置与解析规则。
+8. 进入知识库的文档管理页，上传 `.txt/.md/.pdf/.doc/.docx/.ppt/.pptx/.xls/.xlsx/.csv/.json` 以及常见图片格式；默认文本类走 builtin，PDF/Office/图片类走 MinerU。
+9. 等待 Worker 处理到“解析完成”，页面可在预览抽屉中查看摘要、outline 和 chunks；PDF 超过 200 页时后端会自动分片调用 MinerU 后合并为同一文档。
+10. FAQ 知识库可进入 `/#/knowledge-bases/:kbId/faqs`，手动维护 FAQ，或使用 CSV/XLSX append/replace 导入并导出。
+11. 切换向量模型、维度、解析器或切分参数后，点击“重新处理”或“重建知识库”重建向量；批量操作结果会显示成功/失败摘要。
+12. 进入 `/#/chat`，选择知识库后新建会话，或从左侧会话列表继续历史会话；可搜索会话、批量删除会话，空会话会显示推荐问题。
+13. 在输入区提问，页面会流式追加 assistant 消息；每条回答可展开来源依据和 retrieval trace。
+14. 需要调试召回时，展开“检索调试”，只返回 sources，不调用 LLM。
 
 ## 核心 API
 
@@ -349,6 +366,11 @@ Vite 会把 `/api` 和 `/health` 代理到 `http://127.0.0.1:8000`。
 | `GET` | `/api/v1/retrieval-config` | 查询租户检索配置 |
 | `PUT` | `/api/v1/retrieval-config` | 更新租户检索配置 |
 | `GET` | `/api/v1/parser-engines` | 查询 parser engine 可用性 |
+| `GET` | `/api/v1/parser-configs` | 查询解析器安全配置列表 |
+| `GET` | `/api/v1/parser-configs/mineru` | 查询 MinerU 解析器安全配置，不回显 API Key |
+| `PUT` | `/api/v1/parser-configs/mineru` | 保存 MinerU base URL、解析参数和可选 API Key |
+| `PUT` | `/api/v1/parser-configs/mineru/credentials` | 更新 MinerU API Key |
+| `DELETE` | `/api/v1/parser-configs/mineru/credentials/api_key` | 清除 MinerU API Key |
 | `POST` | `/api/v1/chunker/preview` | 预览切分结果 |
 | `POST` | `/api/v1/knowledge-bases` | 创建知识库，必须绑定 QA 和 Embedding 模型 |
 | `GET` | `/api/v1/knowledge-bases` | 查询知识库列表 |
@@ -1000,7 +1022,7 @@ storage/               本地上传文件目录
 
 启动脚本和测试命令分工如下：
 
-- `scripts/start-dev.ps1`：启动 Docker 后端栈和本机 Vite，便于手工验收页面、上传、解析和问答。
+- `scripts/start-dev.ps1`：智能启动 Docker 后端栈和本机 Vite；默认不重建镜像，但会重启 `api / worker` 加载挂载代码，便于手工验收页面、上传、解析和问答。
 - `python -m pytest -q`：跑自动化测试，确认代码行为没有回归。
 - `ruff check .` / `python -m compileall app tests` / `npm --prefix frontend run build`：做代码质量、语法和前端构建检查。
 
@@ -1013,28 +1035,29 @@ npm --prefix frontend run build
 
 最近一次本地验证结果：
 
-- `python -m pytest -q`：`220 passed`
+- `python -m pytest -q`：`233 passed`
 - `ruff check .`：通过
 - `python -m compileall app tests`：通过
 - `npm --prefix frontend run build`：通过，仍有既有 Vite 大 chunk 提示。
-- `python -m pytest tests/test_frontend_v06_chat.py tests/test_frontend_v07_chat_experience.py tests/test_frontend_v071_command_palette.py -q`：`9 passed`
+- `python -m pytest tests/test_mineru_integration.py tests/test_document_processing_chunk_payload.py tests/test_v07_processing_spans.py -q`：`17 passed`
+- `python -m pytest tests/test_frontend_v02_model_management.py -q`：通过
 - Browser smoke：`http://localhost:8000/#/chat` 确认左上角为 `knowmate知友`，侧边栏入口为“设置”，右下角身份头像区不存在。
-- `docker compose up -d --build`：完整后端栈包含 PostgreSQL/ParadeDB、Redis、Qdrant、FastAPI 和 Celery worker；PostgreSQL 运行 `paradedb/paradedb:pg16` 并加载 `shared_preload_libraries=pg_search`。
+- `scripts/start-dev.ps1 -Rebuild` / `rebuild-dev.bat`：强制重建完整后端栈镜像；PostgreSQL 运行 `paradedb/paradedb:pg16` 并加载 `shared_preload_libraries=pg_search`。
 - 本地服务 E2E：使用真实 PostgreSQL/ParadeDB 和 Qdrant、进程内 fake Embedding/Chat/Rerank，验证知识库创建、文档上传、同步处理、parent-child chunks、Qdrant point、ParadeDB BM25 hit、knowledge-search 和 quick-answer trace/sources 均通过。
-- v0.91 分项验收详见 [CHANGELOG.md](CHANGELOG.md) 的 v0.91 Verification。
-- v0.91 本地服务端到端验证需要 PostgreSQL/ParadeDB `pg_search`、Redis、Qdrant、API、Celery Worker，以及可用 QA / Embedding / Rerank 模型配置；自动化验收可使用 fake model client，真实生产问答仍需人工配置可用模型。
+- v0.92 分项验收详见 [CHANGELOG.md](CHANGELOG.md) 的 v0.92 Verification。
+- v0.92 本地服务端到端验证需要 PostgreSQL/ParadeDB `pg_search`、Redis、Qdrant、API、Celery Worker、可用 QA / Embedding / Rerank 模型配置，以及已配置的 MinerU API Key；自动化验收可使用 fake model client / mocked MinerU client，真实生产解析和问答仍需人工配置可用外部服务。
 
 ## 开发备注
 
-- v0.91 仍默认单租户，`DEFAULT_TENANT_ID=10000`。
+- v0.92 仍默认单租户，`DEFAULT_TENANT_ID=10000`。
 - Docker Compose 当前提供完整后端栈：`postgres / redis / qdrant / api / worker`。前端 dev server 仍通过 `npm --prefix frontend run dev` 或 `scripts/start-dev.ps1` 启动。
 - 默认开发方式是 Docker API + Docker worker + 本机 Vite。不要同时运行本机 `uvicorn` / `celery` 和 Docker `api` / `worker`，否则上传文件路径可能在 Windows 与 Linux 容器之间不兼容。
-- 文档上传后必须有 Celery Worker 在线；`docker compose up -d --build` 会自动启动 worker，否则文档会停留在 `pending` 或 `processing`。
+- 文档上传后必须有 Celery Worker 在线；`scripts/start-dev.ps1` 会自动启动并重启 worker，否则文档会停留在 `pending` 或 `processing`。
 - 切换 embedding 模型、维度、parser/chunking 参数或 keyword 检索文本策略后，需要重处理文档或重建知识库来刷新 PostgreSQL chunks、Qdrant 向量和 ParadeDB BM25 索引。
 - 默认 keyword search 是 PostgreSQL + ParadeDB `pg_search` BM25；测试环境可使用 fake repository / injected client，生产 Quick Q&A 不会静默退回 simple FTS。
-- Rerank 是 v0.91 必需项；必须先创建可用的 `Rerank` 模型，并在检索配置中绑定 `rerank_model_id`，否则有候选命中时 Quick Q&A 返回中文明确错误。
-- 当前 OCR / MinerU 未接入，图片类文件会明确显示 unsupported/unavailable。
-- 模型测试会透传 provider 的真实错误，例如认证失败、模型不存在、维度不匹配等，前端会渲染中文可读文本，不渲染 `[object Object]`。
+- Rerank 是 v0.92 必需项；必须先创建可用的 `Rerank` 模型，并在检索配置中绑定 `rerank_model_id`，否则有候选命中时 Quick Q&A 返回中文明确错误。
+- MinerU 云端解析已接入；PDF/Office/图片类文档会发送到 MinerU，PDF 超过 200 页会自动本地分片后逐片解析，非 PDF 超限仍需人工拆分或后续转换为 PDF 再处理。
+- 模型测试会透传 provider 的真实错误，例如认证失败、模型不存在、维度不匹配等，前端会渲染中文可读文本，不渲染 `[object Object]`；DeepSeek 自定义模型名保存后不会被 provider preset 重置。
 - 生产部署前需要更换默认数据库密码，固定并妥善保存 `MODEL_CONFIG_ENCRYPTION_KEY`，并增加鉴权和访问控制。
 
 ## 版本记录

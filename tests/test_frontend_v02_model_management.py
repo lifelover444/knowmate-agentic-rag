@@ -54,6 +54,22 @@ def test_frontend_uses_provider_presets_and_grouped_model_list():
     assert "Rerank 模型组" in app
 
 
+def test_frontend_does_not_reset_selected_model_name_to_provider_default():
+    form = (ROOT / "frontend" / "src" / "components" / "ModelConfigForm.vue").read_text(encoding="utf-8")
+
+    assert "selectedModel.value" in form
+    assert "currentProvider.value === selectedModel.value.provider" in form
+    assert "return;" in form
+
+
+def test_frontend_model_test_failure_uses_error_toast_not_success_toast():
+    view = (ROOT / "frontend" / "src" / "views" / "ModelSettingsView.vue").read_text(encoding="utf-8")
+
+    assert "function modelTestPassed" in view
+    assert "!modelTestPassed(result, payload.type)" in view
+    assert "Message.error(message || \"模型测试失败\")" in view
+
+
 def test_frontend_uses_qwen_rerank_preset_instead_of_qwen_plus():
     app = frontend_source()
 

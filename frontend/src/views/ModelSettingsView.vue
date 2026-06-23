@@ -28,10 +28,23 @@ async function saveModel(data: { modelId?: string; payload: ModelPayload }) {
 async function testModel(payload: ModelTestPayload) {
   try {
     const result = await modelStore.testModel(payload);
-    Message.success(String(result.message || "模型测试完成"));
+    const message = String(result.message || "");
+    if (!modelTestPassed(result, payload.type)) {
+      Message.error(message || "模型测试失败");
+      return;
+    }
+    Message.success(message || "模型测试完成");
   } catch (error) {
     Message.error(formatApiError(error instanceof Error ? error.message : error));
   }
+}
+
+function modelTestPassed(result: Record<string, unknown>, modelType: string): boolean {
+  if (modelType === "KnowledgeQA") return result.chat_ok === true;
+  if (modelType === "Embedding") return result.embedding_ok === true;
+  if (modelType === "Rerank") return result.rerank_ok === true;
+  const statusFields = [result.chat_ok, result.embedding_ok, result.rerank_ok].filter((value) => value !== undefined);
+  return statusFields.length > 0 && statusFields.every((value) => value === true);
 }
 
 async function deleteModel(model: ModelRead) {

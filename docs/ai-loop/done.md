@@ -1,5 +1,11 @@
 # AI Done Log
 
+### 2026-06-21 | v0.92 | MinerU 解析、PDF 自动分片和模型配置修复归档
+- summary: 将解析模块升级归档为 `v0.92`：新增独立 parser provider 配置表和 `/api/v1/parser-configs` API，MinerU API Key 加密保存且前端只显示配置状态/尾号；接入 MinerU 标准精准解析，本地文件经签名 URL 上传、异步轮询、下载 zip 并读取 `full.md`；默认文档/Office/图片类解析走 MinerU，文本类仍走 builtin；PDF 超 200 页时自动按 200 页生成临时分片、逐片调用 MinerU、按页码范围合并 Markdown 并写入 `mineru_split/page_count/mineru_parts` 元数据；修复 DeepSeek 自定义模型名保存后被 preset 重置和模型测试失败仍显示成功的问题；记录下一阶段 RAG 量化评测方向。
+- files: `README.md`, `CHANGELOG.md`, `docs/ai-loop/requirements.md`, `docs/ai-loop/done.md`, `app/api/v1/parser_configs.py`, `app/services/parser_config.py`, `app/integrations/mineru.py`, `app/integrations/pdf_splitter.py`, `app/services/document_processing.py`, `frontend/src/views/ParserSettingsView.vue`, `frontend/src/components/ModelConfigForm.vue`, `frontend/src/views/ModelSettingsView.vue`, `tests/test_mineru_integration.py`, `tests/test_frontend_v02_model_management.py`
+- verification: `python -m pytest tests/test_mineru_integration.py -q` -> 8 passed；`python -m pytest tests/test_mineru_integration.py tests/test_document_processing_chunk_payload.py tests/test_v07_processing_spans.py -q` -> 17 passed；`python -m pytest -q` -> 233 passed；`ruff check .` -> All checks passed；`python -m compileall app tests` -> exit 0；`npm --prefix frontend run build` -> passed with existing Vite large chunk warning；Browser mock smoke 确认 `deepseek-v4-pro` 保存后不回落为 `deepseek-chat`，模型测试失败显示 error message。
+- follow_ups: 下一阶段优先建设可重复 RAG eval 闭环：维护问题集、计算 retrieval Recall@K/MRR/nDCG、source hit rate、answer faithfulness/relevancy，并评估 DeepEval/Ragas/Phoenix 接入；非 PDF 超 200 页拆分、离线 MinerU、本地 OCR/VLM/ASR 继续保留为后续解析增强。
+
 ### 2026-06-17 | v0.91 | 召回质量和 Chat 体验修复归档
 - summary: 将真实运行态召回排障和前端交互优化归档为 `v0.91`：记录 embedding 维度与 Qdrant collection 不一致导致 `vector_hits=0` 的根因；说明 rerank composite score 新增 `lexical_score`、FAQ 仍由 FAQ merge/boost 控制、parent chunk 不进入初始检索候选；同步 Quick Answer prompt 从“过度保守”改为可基于上下文规则做适用分析；记录 Chat 前端品牌 `knowmate知友`、侧边“设置”、移除右下角身份区、发送和流式生成自动滚动到底部且用户上滑暂停跟随。
 - files: `README.md`, `CHANGELOG.md`, `docs/quick-answer-weknora-aligned-chain-2026-06-10.zh-CN.md`, `docs/ai-loop/done.md`

@@ -8,15 +8,22 @@ def _powershell_function_body(content: str, name: str) -> str:
     return match.group("body")
 
 
-def test_windows_dev_start_script_documents_full_stack_commands():
+def test_windows_dev_start_script_uses_smart_docker_startup():
     script = Path("scripts/start-dev.ps1")
     assert script.exists()
 
     content = script.read_text(encoding="utf-8")
     assert "docker compose up -d --build" in content
+    assert "docker compose up -d" in content
+    assert "docker compose restart api worker" in content
     assert "Invoke-CheckedNative" in content
     assert "$LASTEXITCODE" in content
+    assert "$BuildSignatureFile" in content
+    assert "docker-build.inputs.sha256" in content
+    assert "$Rebuild" in content
     assert 'Invoke-CheckedNative -FilePath "docker" -ArgumentList @("compose", "up", "-d", "--build")' in content
+    assert 'Invoke-CheckedNative -FilePath "docker" -ArgumentList @("compose", "up", "-d")' in content
+    assert 'Invoke-CheckedNative -FilePath "docker" -ArgumentList @("compose", "restart", "api", "worker")' in content
     assert "uvicorn app.main:app --reload" not in content
     assert "celery -A app.workers.celery_app:celery_app worker --loglevel=info --pool=solo" not in content
     assert "alembic upgrade head" not in content
@@ -24,16 +31,28 @@ def test_windows_dev_start_script_documents_full_stack_commands():
     assert "scripts/stop-dev.ps1" in content
 
 
+def test_windows_dev_start_script_bootstraps_missing_build_signature_without_rebuild():
+    content = Path("scripts/start-dev.ps1").read_text(encoding="utf-8")
+
+    assert "$HasBuildSignature = Test-Path $BuildSignatureFile" in content
+    assert "Bootstrapping Docker build signature from existing images" in content
+    assert "-or ($HasBuildSignature -and" in content
+
+
 def test_double_click_batch_wrappers_call_powershell_scripts():
     start = Path("start-dev.bat")
     stop = Path("stop-dev.bat")
+    rebuild = Path("rebuild-dev.bat")
     restart_frontend = Path("restart-frontend.bat")
 
     assert start.exists()
     assert stop.exists()
+    assert rebuild.exists()
     assert restart_frontend.exists()
     assert "scripts\\start-dev.ps1" in start.read_text(encoding="utf-8")
     assert "scripts\\stop-dev.ps1" in stop.read_text(encoding="utf-8")
+    assert "scripts\\start-dev.ps1" in rebuild.read_text(encoding="utf-8")
+    assert "-Rebuild" in rebuild.read_text(encoding="utf-8")
     assert "scripts\\restart-frontend.ps1" in restart_frontend.read_text(encoding="utf-8")
 
 
@@ -62,6 +81,7 @@ def test_windows_scripts_use_crlf_and_ascii_safe_content():
     for script in [
         Path("start-dev.bat"),
         Path("stop-dev.bat"),
+        Path("rebuild-dev.bat"),
         Path("restart-frontend.bat"),
         Path("scripts/start-dev.ps1"),
         Path("scripts/stop-dev.ps1"),

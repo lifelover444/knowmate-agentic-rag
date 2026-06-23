@@ -30,7 +30,7 @@ function submitUpload() {
         data-testid="file-input"
         type="file"
         multiple
-        accept=".txt,.md,.pdf,.docx,.csv,.json,.xlsx"
+        accept=".txt,.md,.pdf,.doc,.docx,.ppt,.pptx,.xls,.xlsx,.csv,.json,.png,.jpg,.jpeg,.jp2,.webp,.gif,.bmp"
         :disabled="uploading || polling"
         @change="handleFileSelected"
       />
