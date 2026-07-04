@@ -9,7 +9,7 @@ v0.8 更新：2026-06-03 已完成 TASK-025 到 TASK-045。本文件仍保留 20
 - knowmate：`D:\myproject\knowmate-agentic-rag`，commit `a97bb47`
 - WeKnora：`D:\myproject\_references\WeKnora`，`VERSION=0.6.0`，commit `e352721`
 
-本文件基于本地源码静态对比，是后续继续复刻 Tencent/WeKnora 时使用的全量差距基线。Quick Q&A 后续任务提示词见 `docs/quick-qa-weknora-task-prompts.zh-CN.md`。
+本文件基于本地源码静态对比，是后续继续复刻 Tencent/WeKnora 时使用的全量差距基线。当前 Quick Q&A 主链路见 `docs/quick-answer-weknora-aligned-chain-2026-06-10.zh-CN.md`，v0.9 固定主链路设计备忘见 `docs/v0.9.md`。
 
 ## 总结结论
 

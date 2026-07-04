@@ -1,4 +1,4 @@
-import{i as q,w as e,n as v,u as B,t as D}from"./index-CqAVGaWJ.js";const r={strategy:"auto",chunk_size:512,chunk_overlap:80,separators:[`
+import{i as q,x as e,n as v,v as B,u as D}from"./index-DOvz7OZ3.js";const r={strategy:"auto",chunk_size:512,chunk_overlap:80,separators:[`
 
 `,`
 `,"。"],token_limit:0,languages:[],enable_parent_child:!0,parent_chunk_size:4096,child_chunk_size:384},L=q("retrieval",()=>{const _=e("hybrid"),c=e(50),d=e(50),p=e(.15),h=e(.2),k=e(8),g=e(.2),t=e(""),f=e(!0),y=e(60),w=e(.65),m=e(.35),b=e(30),l=e([]),a=e(null),R=e([{file_types:["pdf","doc","docx","ppt","pptx","xls","xlsx","png","jpg","jpeg","jp2","webp","gif","bmp"],engine:"mineru"},{file_types:["md","markdown"],engine:"builtin"},{file_types:["txt"],engine:"builtin"},{file_types:["csv","json"],engine:"builtin"}]),x=e("auto"),z=e(512),C=e(80),K=e("\\n\\n,\\n,。"),S=e(0),T=e(""),E=e(!0),j=e(4096),I=e(384),P=e(`# 产品手册

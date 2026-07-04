@@ -4,6 +4,7 @@ import type { RouteRecordRaw } from "vue-router";
 export const routes: RouteRecordRaw[] = [
   { path: "/", redirect: "/chat" },
   { path: "/chat", component: () => import("../views/ChatView.vue"), meta: { title: "快速问答" } },
+  { path: "/evaluations", component: () => import("../views/EvaluationsView.vue"), meta: { title: "RAGas 评测" } },
   { path: "/knowledge-bases", component: () => import("../views/KnowledgeBaseView.vue"), meta: { title: "知识库" } },
   {
     path: "/knowledge-bases/:kbId",

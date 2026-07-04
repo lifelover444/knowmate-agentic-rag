@@ -14,6 +14,7 @@ from app.integrations.llm_openai import OpenAIEmbedder
 from app.integrations.mineru import MinerUClient, MinerUConfig, MinerUError, MinerUParseResult
 from app.integrations.pdf_splitter import PdfSplitError, get_pdf_page_count, split_pdf_by_page_limit
 from app.rag.chunker import AdaptiveTextChunker, ChunkingConfig, ParsedChunk, split_parent_child
+from app.rag.legal_structure import build_legal_search_text, extract_legal_metadata
 from app.rag.parser import DocumentParser, ParsedDocument
 from app.services.knowledge_base import normalize_chunking_config
 from app.services.model_config import ModelConfigService
@@ -346,7 +347,8 @@ def _build_db_chunks(document, text: str, chunking: dict) -> tuple[list[Chunk], 
 
 def _to_db_chunk(document, item: ParsedChunk, index: int, chunk_type: str) -> Chunk:
     metadata = {**(item.metadata or {}), "title": document.title}
-    search_text = _search_text(document.title, item.context_header, item.content)
+    metadata.update(extract_legal_metadata(document.title, item.context_header, item.content))
+    search_text = _search_text(document.title, item.context_header, item.content, metadata=metadata)
     return Chunk(
         id=str(uuid.uuid4()),
         tenant_id=document.tenant_id,
@@ -416,6 +418,7 @@ def _apply_generated_questions(document, chunks: list[Chunk], generator) -> None
             chunk.context_header,
             chunk.content,
             generated_questions=questions,
+            metadata=metadata,
         )
         _apply_chunk_contract(document, chunk)
 
@@ -449,6 +452,12 @@ def _search_text(
     content: str,
     *,
     generated_questions: list[dict[str, str]] | None = None,
+    metadata: dict | None = None,
 ) -> str:
-    questions = [item["question"] for item in generated_questions or [] if item.get("question")]
-    return "\n".join(item for item in (title, context_header, content, *questions) if item).strip()
+    return build_legal_search_text(
+        title,
+        context_header,
+        content,
+        metadata=metadata,
+        generated_questions=generated_questions,
+    )

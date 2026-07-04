@@ -730,6 +730,125 @@ export interface QuickAnswerResponse {
   retrieval_trace?: (Record<string, unknown> & { stages?: RetrievalTraceStage[]; diagnostics?: RetrievalDiagnostics }) | null;
 }
 
+export interface EvaluationMetricSummary {
+  label?: string;
+  average: number;
+  min?: number | null;
+  max?: number | null;
+  count: number;
+}
+
+export interface EvaluationMetricsSummary {
+  overall_score?: number;
+  metrics?: Record<string, EvaluationMetricSummary>;
+}
+
+export interface EvaluationMetricComparison {
+  current: number;
+  baseline: number;
+  delta: number;
+}
+
+export interface EvaluationComparison {
+  overall?: EvaluationMetricComparison;
+  metrics?: Record<string, EvaluationMetricComparison>;
+}
+
+export interface EvaluationRunRead {
+  id: string;
+  tenant_id: number;
+  knowledge_base_id: string;
+  knowledge_base_name?: string | null;
+  testset_id?: string | null;
+  testset_source: string;
+  metric_version: string;
+  is_baseline: boolean;
+  status: "queued" | "processing" | "completed" | "failed" | string;
+  testset_size: number;
+  top_k?: number | null;
+  enable_rerank?: boolean | null;
+  sample_count: number;
+  completed_sample_count: number;
+  failed_sample_count: number;
+  metrics_summary?: EvaluationMetricsSummary | null;
+  model_config?: Record<string, unknown> | null;
+  evaluator_config?: Record<string, unknown> | null;
+  baseline_run_id?: string | null;
+  baseline_metrics_summary?: EvaluationMetricsSummary | null;
+  comparison?: EvaluationComparison | null;
+  error_message?: string | null;
+  started_at?: string | null;
+  finished_at?: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface EvaluationSampleRead {
+  id: string;
+  evaluation_run_id: string;
+  sample_index: number;
+  user_input: string;
+  reference?: string | null;
+  reference_contexts: string[];
+  expected_chunk_ids: string[];
+  expected_law_name?: string | null;
+  expected_article_no?: string | null;
+  synthesizer_name?: string | null;
+  response?: string | null;
+  retrieved_contexts: string[];
+  sources: SourceRead[];
+  retrieval_trace?: Record<string, unknown> | null;
+  scores: Record<string, number>;
+  diagnostics?: Record<string, unknown> | null;
+  status: "queued" | "processing" | "completed" | "failed" | string;
+  error_message?: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface EvaluationRunDetail extends EvaluationRunRead {
+  samples: EvaluationSampleRead[];
+}
+
+export interface EvaluationCreatePayload {
+  knowledge_base_id: string;
+  testset_size: number;
+  top_k?: number | null;
+  enable_rerank?: boolean | null;
+  testset_id?: string | null;
+}
+
+export interface EvaluationTestsetItemRead {
+  id: string;
+  sample_index: number;
+  question: string;
+  reference_answer: string;
+  expected_chunk_ids: string[];
+  expected_law_name?: string | null;
+  expected_article_no?: string | null;
+  tags: string[];
+  metadata: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface EvaluationTestsetRead {
+  id: string;
+  tenant_id: number;
+  knowledge_base_id: string;
+  knowledge_base_name?: string | null;
+  name: string;
+  description?: string | null;
+  item_count: number;
+  status: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface EvaluationTestsetDetail extends EvaluationTestsetRead {
+  items: EvaluationTestsetItemRead[];
+}
+
 export interface KnowledgeSearchResponse {
   hits: SourceRead[];
   diagnostics?: RetrievalDiagnostics | null;

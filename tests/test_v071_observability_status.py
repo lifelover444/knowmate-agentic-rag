@@ -43,8 +43,10 @@ def test_quick_answer_stream_returns_stage_trace(client, fake_vector_store, monk
         "keyword",
         "rrf",
         "query_expansion",
+        "legal_exact_lookup",
         "deduplicate",
         "faq_merge",
+        "legal_boost",
         "rerank",
         "parent_expand",
         "context_select",
@@ -57,9 +59,11 @@ def test_quick_answer_stream_returns_stage_trace(client, fake_vector_store, monk
     assert stages["keyword"]["status"] == "done"
     assert stages["rrf"]["status"] == "done"
     assert stages["query_expansion"]["status"] in {"done", "skipped"}
+    assert stages["legal_exact_lookup"]["status"] in {"done", "skipped"}
     assert stages["deduplicate"]["status"] == "done"
     assert stages["faq_merge"]["status"] == "done"
     assert stages["faq_merge"]["output"]["boost_count"] == 0
+    assert stages["legal_boost"]["status"] in {"done", "skipped"}
     assert stages["rerank"]["status"] == "done"
     assert stages["parent_expand"]["status"] == "done"
     assert stages["context_select"]["status"] == "done"

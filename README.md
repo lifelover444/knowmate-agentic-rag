@@ -1,8 +1,8 @@
 # knowmate 知友
 
-knowmate 知友是一个参考 [Tencent/WeKnora](https://github.com/Tencent/WeKnora) 核心思路实现的知识库 RAG 项目。后端技术栈从 WeKnora 的 Go 实现改为 Python / FastAPI；项目不是 Tencent/WeKnora 官方项目。
+knowmate 知友是一个知识库 RAG 项目，面向模型配置、知识库管理、文档解析、混合检索、快速问答和自动评测闭环。后端采用 Python / FastAPI。
 
-当前版本为 v0.92，主线是在 v0.9/v0.91 固定 Quick Q&A 链路基础上补齐 MinerU 云端精准解析、解析器配置管理、大 PDF 自动分片和模型配置体验修复。v0.92 继续固定采用 Query Understand + over-retrieval + Qdrant dense retrieval + ParadeDB pg_search BM25 + RRF + mandatory composite rerank/MMR + parent-child context，不把 vector-only、keyword-only、rerank 开关或 planned vector backends 暴露为用户配置项。当前上线链路和召回排障说明见 [Quick Q&A WeKnora 对齐召回链路](docs/quick-answer-weknora-aligned-chain-2026-06-10.zh-CN.md)：
+当前版本为 v1.0，主线是在 v0.9/v0.91 固定 Quick Q&A 链路和 v0.92 MinerU 解析能力基础上补齐 RAGas 知识库级自动评测闭环：可从已解析 chunks 生成/保存评测集，复用知识库绑定的 QA / Embedding 模型运行 Quick Q&A，计算五项 0-1 量化指标，并在前端“评测”页面展示总分、基线对比、指标分布、逐题明细和 sources。v1.0 继续固定采用 Query Understand + over-retrieval + Qdrant dense retrieval + ParadeDB pg_search BM25 + RRF + mandatory composite rerank/MMR + parent-child context，不把 vector-only、keyword-only、rerank 开关或 planned vector backends 暴露为用户配置项。v1.0 版本说明见 [docs/v1.0.md](docs/v1.0.md)：
 
 ```text
 模型管理
@@ -34,6 +34,10 @@ knowmate 知友是一个参考 [Tencent/WeKnora](https://github.com/Tencent/WeKn
   -> parent-child / neighbor context expansion
   -> chat model 生成 answer
   -> 返回 answer + sources + retrieval trace
+  -> RAGas evaluation testset / golden testset
+  -> evaluation run 调用 Quick Q&A
+  -> context_precision / context_recall / faithfulness / response_relevancy / factual_correctness
+  -> 总分、基线对比、逐题明细和 source 命中诊断
   -> 阶段化 retrieval trace
   -> sources 显示知识库来源
   -> 保存 chat session / messages
@@ -59,7 +63,7 @@ knowmate 知友是一个参考 [Tencent/WeKnora](https://github.com/Tencent/WeKn
 
 - FastAPI 后端骨架：API router、service、repository、配置、日志、健康检查。
 - PostgreSQL 元数据存储：知识库、文档、chunks、租户检索配置、模型实体等表结构和 Alembic migration。
-- WeKnora 风格模型管理：
+- 模型管理：
   - `KnowledgeQA` 和 `Embedding` 两类模型可创建、编辑、删除、测试。
   - 预留 `Rerank / VLLM / ASR` 类型枚举。
   - 支持 Qwen / DashScope、DeepSeek、OpenAI-compatible 配置。
@@ -70,11 +74,15 @@ knowmate 知友是一个参考 [Tencent/WeKnora](https://github.com/Tencent/WeKn
   - 文档处理使用知识库绑定的 Embedding 模型。
   - quick-answer 使用知识库绑定的 Embedding + QA 模型。
   - 模型缺失、停用、类型不匹配时返回中文可读错误。
-- WeKnora 风格检索配置：
+- 检索配置：
   - 单租户 `retrieval_config` JSON。
   - v0.9 固定模式：`retrieval_mode=hybrid`、`vector_engine=qdrant`、`keyword_engine=paradedb_bm25`。
   - v0.9 固定值：`embedding_top_k=50`、`keyword_top_k=50`、`vector_threshold=0.15`、`keyword_threshold=0.2`、`rrf_k=60`、`rrf_vector_weight=0.65`、`rrf_keyword_weight=0.35`、`rrf_top_k=30`、`rerank_top_k=8`、`rerank_threshold=0.2`、`final_context_count=6`、`max_context_chars=8000`；实际检索内部会按 `min(max(rerank_top_k * 5, 50) * scope_count, 500)` 放大候选池，再进入 RRF、mandatory composite rerank 和 MMR。
   - 用户侧不再支持 `vector_only / keyword_only / hybrid` 模式切换；Quick Q&A 固定执行混合召回和 mandatory rerank。
+- v0.2.1 基础 CRUD 补齐：
+  - 知识库列表、更新、软删除。
+  - 文档软删除。
+  - 知识库下文档列表。
 - v0.3 检索增强：
   - 新增统一 `app/rag/retriever/` 检索层。
   - `VectorRetriever` 包装 Qdrant dense retrieval。
@@ -95,23 +103,19 @@ knowmate 知友是一个参考 [Tencent/WeKnora](https://github.com/Tencent/WeKn
 - PostgreSQL keyword 检索字段：
   - `chunks.search_text` 存储标题、context header 和 chunk content 的检索文本。
   - Alembic `0005_v03_keyword_retrieval` 为 PostgreSQL 添加 `to_tsvector('simple', search_text)` GIN 表达式索引。
-- v0.2.1 基础 CRUD 补齐：
-  - 知识库列表、更新、软删除。
-  - 文档软删除。
-  - 知识库下文档列表。
 - 文档重处理：
   - 单文档重处理。
   - 知识库批量重处理。
   - 重处理前按 `knowledge_id` 清理旧向量并替换 PostgreSQL chunks。
-- WeKnora 风格通用解析注册表：`builtin` 支持 `.txt/.md/.pdf/.docx/.csv/.json/.xlsx`。
-- WeKnora 风格自适应切分：`auto / heading / heuristic / legacy`，支持 protected blocks、context header、parent-child chunking。
+- 通用解析注册表：`builtin` 支持 `.txt/.md/.pdf/.docx/.csv/.json/.xlsx`。
+- 自适应切分：`auto / heading / heuristic / legacy`，支持 protected blocks、context header、parent-child chunking。
 - Chunking preview/debug API：可预览命中策略、profile、chunk 统计和切片内容。
 - v0.4 Vue / TypeScript Dashboard：
   - 使用 Vue 3、Vite、TypeScript、Arco Design Vue、Pinia、vue-router、markdown-it 和 highlight.js。
   - 使用 hash router，生产路径形态为 `/#/chat`、`/#/knowledge-bases`、`/#/knowledge-bases/:kbId/documents`、`/#/knowledge-bases/:kbId/faqs`、`/#/settings`。
   - 从旧单文件 `App.vue` 拆分为布局、复用组件、Pinia stores、API utils、类型定义和多个业务视图。
   - 页面覆盖快速问答、知识搜索、知识库列表、文档管理、FAQ 管理、设置中心、模型配置、VectorStore、检索配置和切分预览。
-  - 保持 WeKnora 风格浅色界面：近白页面背景、绿色品牌主色、低饱和边框、中文企业软件观感。
+  - 保持浅色企业软件界面：近白页面背景、绿色品牌主色、低饱和边框、中文企业软件观感。
   - quick-answer 回答使用 `markdown-it` 渲染，禁用 HTML 直通，sources 使用复用 `SourceCard` 展示完整检索 metadata。
 - v0.5 Knowledge Base Platform Foundation：
   - 新增 `processing_tasks` 任务中心，统一记录上传处理、单文档重处理、知识库重建任务。
@@ -130,7 +134,7 @@ knowmate 知友是一个参考 [Tencent/WeKnora](https://github.com/Tencent/WeKn
   - assistant message 保存 `sources_json`、`retrieval_trace_json` 和非敏感 `model_config_json`。
   - query rewrite 在 v0.6 作为历史追问增强引入；当前 v0.9+ 已升级为每轮 Quick Q&A 都执行的 query understand，trace 展示 original / rewritten query、intent 和失败/回退状态。
   - 前端 `/#/chat` 升级为会话化聊天工作台：左侧会话栏、流式消息、每条 assistant 消息 sources/trace 折叠面板、基础会话设置和保留的检索调试入口。
-- v0.61 WeKnora 对齐补强：
+- v0.61 平台能力补强：
   - 新增知识库标签体系：标签 CRUD、文档/FAQ 标签筛选、批量设置标签，并把 `tag_id` 写入 Knowledge、FAQEntry、Chunk 和 Qdrant payload。
   - 新增文档预览 API 和前端预览抽屉，展示摘要、正文预览、chunk outline 和 chunk 内容导航。
   - 新增 FAQ CSV/XLSX 导入导出，支持 append/replace、逐行失败摘要、metadata、enabled 和 tag_id。
@@ -138,8 +142,8 @@ knowmate 知友是一个参考 [Tencent/WeKnora](https://github.com/Tencent/WeKn
   - 批量删除/重处理响应新增 requested/succeeded/failed/failures，任务列表新增 batch_summary，文档页展示批处理进度和失败任务重试。
   - 新增 `/#/settings` 设置中心外壳，整合模型、VectorStore、检索、解析器和存储状态；parser/storage provider 未接入项以禁用占位展示。
   - 会话列表支持搜索、批量删除；新会话空态展示来自 FAQ 和 chunk generated_questions 的推荐问题。
-- v0.7 WeKnora P0 对齐：
-  - 知识库列表和详情返回 WeKnora-like `capabilities`，支持单租户 KB pin/unpin 和置顶排序。
+- v0.7 知识库工作流补强：
+  - 知识库列表和详情返回 `capabilities`，支持单租户 KB pin/unpin 和置顶排序。
   - 新增 KB 详情一体化页面骨架，把概览、文档/FAQ 工作流、设置、任务/状态入口收敛到同一页面。
   - KB 设置面板支持创建后编辑基础信息、模型绑定、parser rules、chunking config、indexing strategy 和 vector store，保存后提示需要重处理/重建索引。
   - `knowledge-search` 和 `quick-answer` 支持 `knowledge_base_ids` 与 `knowledge_ids` scope，允许多知识库或文件范围检索，并校验跨 KB embedding 模型一致性。
@@ -192,8 +196,17 @@ knowmate 知友是一个参考 [Tencent/WeKnora](https://github.com/Tencent/WeKn
   - PDF 超过 MinerU 200 页限制时，后端自动按 200 页切成临时 PDF 分片，逐片调用 MinerU，再以页码范围标题合并 Markdown，最终仍作为一个文档进入 chunk、embedding、BM25 和 Qdrant。
   - 设置中心新增“解析器”页，可配置 MinerU base URL、API Key、`vlm/ch/表格/公式/OCR` 等参数；文档上传 accept 扩展到 MinerU 支持格式。
   - 修复 DeepSeek QA 模型名称被 provider preset 重置的问题，保存 `deepseek-v4-pro` 等自定义模型名后不再回落为 `deepseek-chat`；模型测试失败时前端显示中文可读错误。
+- v1.0 RAGas 评测闭环：
+  - 新增知识库级评测数据模型：`evaluation_runs` / `evaluation_samples` 记录运行状态、聚合指标、逐题问题、参考答案、模型回答、sources、retrieval trace、逐题分数和脱敏模型信息。
+  - 新增黄金评测集：`evaluation_testsets` / `evaluation_testset_items` 支持从已解析 chunks 生成并复用固定题集，便于同一题集下做优化前后对比。
+  - 新增评测 API：`POST /api/v1/evaluations`、`GET /api/v1/evaluations`、`GET /api/v1/evaluations/{run_id}`、`POST /api/v1/evaluations/{run_id}/baseline`、`POST /api/v1/evaluations/testsets`、`GET /api/v1/evaluations/testsets`、`GET /api/v1/evaluations/testsets/{testset_id}`。
+  - 新增 Celery 任务 `evaluations.run`：读取知识库 enabled chunks，生成/复用测试集，逐题调用现有 Quick Q&A 链路，再计算 `context_precision`、`context_recall`、`faithfulness`、`response_relevancy`、`factual_correctness` 五项 0-1 指标。
+  - RAGas adapter 支持小批量 native RAGas；大批量默认走 `semantic_proxy` guard，避免外部 judge 长时间挂起，并把 `evaluator_config` 保存到评测运行。
+  - 前端新增 `/#/evaluations` 页面、侧边栏入口和命令面板入口，展示总分、基线对比、指标条形图、逐题热力表、答案、参考答案、sources 和诊断信息。
+  - 法律知识库质量优化：抽取 `law_name/article_no/article_no_normalized/part/chapter/section/item_no/knowledge_piece_index` 等法律结构化 metadata，增加 legal exact lookup、legal boost、父子来源命中诊断和更严格的法律回答 prompt。
+  - 30 题基线运行 `0d160b0c-31ae-490a-a06e-2bdaaa087a8e` 总分 `0.5228`；同一法律知识库在 50 题黄金集 `26f4a44b-91f4-4479-a6a2-a42e92218e5a` 上复测两次分别为 `0.8822` 和 `0.8819`，波动 `0.0003`。
 - 自动化测试：覆盖多模型 CRUD、凭据加密、知识库模型校验、重处理、检索配置、hybrid/RRF/rerank/parent-child retrieval、knowledge-search API、前端关键逻辑、API 和文档处理 payload。
-- v0.92 质量验证详见下方“验证命令”和 [CHANGELOG.md](CHANGELOG.md)。
+- v1.0 质量验证详见下方“验证命令”、[CHANGELOG.md](CHANGELOG.md) 和 [docs/v1.0.md](docs/v1.0.md)。
 
 暂未实现：
 
@@ -201,7 +214,7 @@ knowmate 知友是一个参考 [Tencent/WeKnora](https://github.com/Tencent/WeKn
 - 本地 OCR/VLM/ASR、Office 超 200 页自动拆分和离线 MinerU 部署；当前生产解析默认使用 MinerU 云端 API。
 - pg_jieba、Elasticsearch/OpenSearch 集群、Milvus、Weaviate、Doris、Tencent VectorDB 等额外检索后端。
 - GraphRAG、多维索引、Agent Mode、Wiki Mode。
-- WeKnoraCloud、Ollama 拉取、VLM、ASR。
+- 云端知识服务、Ollama 拉取、VLM、ASR。
 
 ## 技术栈
 
@@ -213,6 +226,7 @@ knowmate 知友是一个参考 [Tencent/WeKnora](https://github.com/Tencent/WeKn
 | 向量库 | Qdrant |
 | 模型接入 | OpenAI Python SDK, OpenAI-compatible API, OpenAI-compatible rerank API |
 | 检索 | Qdrant dense retrieval, ParadeDB pg_search BM25, RRF, mandatory rerank, parent-child context |
+| 评测 | RAGas, knowledge-base evaluation runs, golden testsets, semantic proxy guard |
 | 前端 | Vue 3, TypeScript, Vite, Arco Design Vue, Pinia, vue-router, markdown-it, highlight.js |
 | 测试与质量 | pytest, Ruff |
 
@@ -441,6 +455,81 @@ Vite 会把 `/api` 和 `/health` 代理到 `http://127.0.0.1:8000`。
 | `DELETE` | `/api/v1/vector-stores/{id}` | 删除 VectorStore |
 | `POST` | `/api/v1/vector-stores/test` | 测试 VectorStore 配置 |
 
+## v0.3 / v0.3.1 Schema 变化
+
+`KnowledgeBaseCreate` 新增必填字段：
+
+```json
+{
+  "embedding_model_id": "Embedding 模型 ID",
+  "summary_model_id": "KnowledgeQA 模型 ID"
+}
+```
+
+`KnowledgeBaseRead` 返回：
+
+```json
+{
+  "embedding_model_id": "...",
+  "summary_model_id": "..."
+}
+```
+
+`QuickAnswerResponse.sources[]` 保持兼容，并允许包含：
+
+```json
+{
+  "chunk_id": "...",
+  "score": 0.92,
+  "chunk_type": "child",
+  "parent_chunk_id": "...",
+  "context_header": "...",
+  "retrieval_method": "hybrid",
+  "vector_score": 0.88,
+  "keyword_score": 0.6,
+  "rrf_score": 0.0149,
+  "rerank_score": null,
+  "context_chunk_id": "parent chunk id when expanded",
+  "context_content": "parent chunk content when expanded"
+}
+```
+
+`context_content` 是 v0.3.1 新增的可选字段；不影响旧客户端读取已有 sources 字段。
+
+`RetrievalConfigSchema` v0.3 关键字段：
+
+```json
+{
+  "retrieval_mode": "hybrid",
+  "embedding_top_k": 50,
+  "vector_threshold": 0.15,
+  "keyword_threshold": 0.3,
+  "rerank_top_k": 10,
+  "rerank_threshold": 0.2,
+  "rerank_model_id": null,
+  "enable_rerank": false,
+  "rrf_k": 60,
+  "rrf_vector_weight": 0.7,
+  "rrf_keyword_weight": 0.3
+}
+```
+
+`KnowledgeSearchResponse`：
+
+```json
+{
+  "hits": [
+    {
+      "document_id": "...",
+      "chunk_id": "...",
+      "content": "...",
+      "retrieval_method": "keyword",
+      "score": 0.75
+    }
+  ]
+}
+```
+
 ## v0.5 Schema 变化
 
 `KnowledgeBaseCreate` / `KnowledgeBaseRead` 新增：
@@ -471,295 +560,52 @@ Vite 会把 `/api` 和 `/health` 代理到 `http://127.0.0.1:8000`。
 }
 ```
 
-## v0.7 Schema / API 变化
+## v0.6 Schema 变化
 
-`KnowledgeBaseRead` 新增或强化：
+新增 `chat_sessions`：
 
 ```json
 {
-  "capabilities": {
-    "document": true,
-    "faq": false,
-    "vector": true,
-    "keyword": true,
-    "parent_child": false,
-    "rerank": false,
-    "wiki": false,
-    "graph": false
+  "knowledge_base_id": "KB ID",
+  "title": "会话标题",
+  "is_pinned": false,
+  "settings": {
+    "mode": "hybrid",
+    "top_k": 10,
+    "enable_rerank": false,
+    "enable_query_rewrite": false
+  }
+}
+```
+
+新增 `chat_messages`，assistant 消息会保存：
+
+```json
+{
+  "role": "assistant",
+  "content": "回答正文",
+  "original_query": "用户原问题",
+  "rewritten_query": "改写后的检索 query",
+  "sources": [],
+  "retrieval_trace": {
+    "original_query": "用户原问题",
+    "rewritten_query": "改写后的检索 query",
+    "rewrite_enabled": true,
+    "rewrite_failed": false,
+    "rewrite_skipped": false,
+    "retrieval_mode": "hybrid",
+    "top_k": 10,
+    "enable_rerank": false,
+    "hit_count": 3
   },
-  "is_pinned": true,
-  "pinned_at": "2026-05-31T12:00:00Z",
-  "faq_config": {
-    "index_mode": "question_answer",
-    "question_index_mode": "combined"
+  "model_config": {
+    "qa_model_id": "KnowledgeQA 模型 ID",
+    "embedding_model_id": "Embedding 模型 ID"
   }
 }
 ```
 
-新增 KB pin API：
-
-```http
-PUT /api/v1/knowledge-bases/{kb_id}/pin
-```
-
-请求体：
-
-```json
-{
-  "pinned": true
-}
-```
-
-`knowledge-search` / `quick-answer` scope 支持：
-
-```json
-{
-  "knowledge_base_ids": ["kb-a", "kb-b"],
-  "knowledge_ids": ["document-or-faq-knowledge-id"]
-}
-```
-
-`SourceRead` 新增可选 `knowledge_base_name`，用于多 KB 检索后的来源展示。
-
-`FAQEntryRead` / 创建 / 更新 / 导入导出新增 `similar_questions`：
-
-```json
-{
-  "question": "发票怎么申请？",
-  "similar_questions": ["哪里下载发票", "发票入口在哪"],
-  "answer": "..."
-}
-```
-
-新增文档处理 timeline API：
-
-```http
-GET /api/v1/documents/{document_id}/spans
-```
-
-返回 root span、当前 attempt 和 parse/chunk/embed/upsert/finalize 五阶段状态；历史文档无 span 时返回 attempt `0` 占位阶段。
-
-## v0.9 Schema / API 变化
-
-v0.9 将 Quick Q&A 和 knowledge-search 收敛为唯一固定主链路：
-
-```json
-{
-  "retrieval_mode": "hybrid",
-  "vector_engine": "qdrant",
-  "keyword_engine": "paradedb_bm25",
-  "embedding_top_k": 50,
-  "keyword_top_k": 50,
-  "rrf_top_k": 30,
-  "rerank_top_k": 8,
-  "enable_rerank": true,
-  "enable_parent_child": true,
-  "final_context_count": 6,
-  "max_context_chars": 8000
-}
-```
-
-`POST /api/v1/knowledge-search` 和 `POST /api/v1/quick-answer` 不再提供用户可选 `mode` 字段；旧请求体里带 `mode` 会被忽略，实际链路始终是 Qdrant 向量召回 + ParadeDB BM25 关键词召回 + RRF + mandatory rerank。
-
-`retrieval_trace` v0.9 关键字段：
-
-```json
-{
-  "query_original": "原始问题",
-  "query_normalized": "标准化问题",
-  "query_rewritten": "改写后问题或 null",
-  "vector_hits": 50,
-  "keyword_hits": 50,
-  "rrf_hits": 30,
-  "rerank_hits": 8,
-  "selected_contexts": [
-    {
-      "document_id": "document-id",
-      "chunk_id": "child-chunk-id",
-      "parent_chunk_id": "parent-chunk-id",
-      "context_index": 1
-    }
-  ],
-  "model_config_used": {
-    "embedding_model_id": "embedding-id",
-    "qa_model_id": "qa-id",
-    "rerank_model_id": "rerank-id"
-  }
-}
-```
-
-`sources` v0.9 关键字段：
-
-```json
-{
-  "document_id": "document-id",
-  "document_title": "文档标题",
-  "chunk_id": "child-chunk-id",
-  "parent_chunk_id": "parent-chunk-id",
-  "source_type": "document",
-  "snippet": "命中片段",
-  "score": 0.73,
-  "rerank_score": 0.88,
-  "metadata": {}
-}
-```
-
-## v0.8 Schema / API 变化
-
-`retrieval_trace` 增强 diagnostics：
-
-```json
-{
-  "stages": [
-    {
-      "name": "vector",
-      "status": "completed",
-      "duration_ms": 18,
-      "summary": "vector hits: 8",
-      "input_count": 1,
-      "output_count": 8
-    },
-    {
-      "name": "faq_merge",
-      "status": "completed",
-      "boost_count": 1
-    }
-  ],
-  "retrievers": [
-    {
-      "knowledge_base_id": "kb-id",
-      "engine": "qdrant+postgres",
-      "mode": "hybrid",
-      "status": "completed",
-      "hit_count": 5
-    }
-  ]
-}
-```
-
-Quick Answer / Chat message 保存上下文摘要：
-
-```json
-{
-  "rendered_context": "用于 prompt 的上下文正文",
-  "prompt_context_summary": {
-    "source_count": 5,
-    "history_used": true,
-    "attachments_used": 1
-  }
-}
-```
-
-Quick Answer 支持临时文本附件：
-
-```json
-{
-  "question": "请总结附件内容",
-  "attachments": [
-    {
-      "filename": "notes.md",
-      "content_type": "text/markdown",
-      "content": "# 会议纪要\n..."
-    }
-  ]
-}
-```
-
-附件只进入本轮 prompt，不写入知识库、不写入 Qdrant，也不会作为 sources 返回。
-
-FAQ 导入和字段批量更新新增：
-
-```http
-GET /api/v1/knowledge-bases/{kb_id}/faqs/import-progress/{task_id}
-GET /api/v1/knowledge-bases/{kb_id}/faqs/import-last-result
-PUT /api/v1/knowledge-bases/{kb_id}/faqs/import-last-result/display-status
-PUT /api/v1/knowledge-bases/{kb_id}/faqs/fields
-```
-
-Chunk 管理新增：
-
-```http
-GET /api/v1/chunks/by-id/{chunk_id}
-PUT /api/v1/chunks/{knowledge_id}/{chunk_id}
-DELETE /api/v1/chunks/{knowledge_id}/{chunk_id}
-POST /api/v1/chunks/by-id/{chunk_id}/questions
-DELETE /api/v1/chunks/by-id/{chunk_id}/questions
-```
-
-模型、向量后端和历史消息新增：
-
-```http
-GET /api/v1/models/providers
-GET /api/v1/vector-stores/types
-POST /api/v1/messages/search
-GET /api/v1/messages/chat-history-stats
-```
-
-## v0.71 Schema / API 变化
-
-文档上传行为：
-
-- 同一知识库内存在活跃同 hash 文件时，上传接口返回 `409 Conflict` 和中文错误 `该文件已上传，请勿重复上传。`。
-- 如果历史同 hash 文件已经软删除，重新上传会生成新的 document id，不复用已删除记录的主键。
-
-文档生命周期新增：
-
-```http
-GET /api/v1/documents/{document_id}/download
-POST /api/v1/documents/{document_id}/cancel-parse
-POST /api/v1/documents/move
-```
-
-`DocumentMoveRequest`：
-
-```json
-{
-  "document_ids": ["document-id"],
-  "target_knowledge_base_id": "target-kb-id"
-}
-```
-
-会话生成生命周期新增：
-
-```http
-POST /api/v1/chat-sessions/{session_id}/stop
-```
-
-`ChatSessionRead.settings.last_request_state` 会保存最近一次请求的非敏感状态，例如：
-
-```json
-{
-  "status": "completed",
-  "knowledge_base_ids": ["kb-id"],
-  "knowledge_ids": [],
-  "hit_count": 5,
-  "model": "qwen-max",
-  "elapsed_ms": 1234
-}
-```
-
-`retrieval_trace` 新增阶段列表：
-
-```json
-{
-  "stages": [
-    {
-      "name": "search",
-      "status": "completed",
-      "duration_ms": 35,
-      "summary": "hybrid hits: 5"
-    }
-  ]
-}
-```
-
-运行状态新增：
-
-```http
-GET /api/v1/runtime-status
-```
-
-返回 database、local storage、vector store、parser registry 和 system 概览，供设置页展示真实状态。
+`model_config` 只保存模型 id、name、type、provider、model_name 等非敏感信息，不保存 API Key。
 
 ## v0.61 Schema 变化
 
@@ -878,125 +724,293 @@ GET /api/v1/runtime-status
 }
 ```
 
-## v0.6 Schema 变化
+## v0.7 Schema / API 变化
 
-新增 `chat_sessions`：
-
-```json
-{
-  "knowledge_base_id": "KB ID",
-  "title": "会话标题",
-  "is_pinned": false,
-  "settings": {
-    "mode": "hybrid",
-    "top_k": 10,
-    "enable_rerank": false,
-    "enable_query_rewrite": false
-  }
-}
-```
-
-新增 `chat_messages`，assistant 消息会保存：
+`KnowledgeBaseRead` 新增或强化：
 
 ```json
 {
-  "role": "assistant",
-  "content": "回答正文",
-  "original_query": "用户原问题",
-  "rewritten_query": "改写后的检索 query",
-  "sources": [],
-  "retrieval_trace": {
-    "original_query": "用户原问题",
-    "rewritten_query": "改写后的检索 query",
-    "rewrite_enabled": true,
-    "rewrite_failed": false,
-    "rewrite_skipped": false,
-    "retrieval_mode": "hybrid",
-    "top_k": 10,
-    "enable_rerank": false,
-    "hit_count": 3
+  "capabilities": {
+    "document": true,
+    "faq": false,
+    "vector": true,
+    "keyword": true,
+    "parent_child": false,
+    "rerank": false,
+    "wiki": false,
+    "graph": false
   },
-  "model_config": {
-    "qa_model_id": "KnowledgeQA 模型 ID",
-    "embedding_model_id": "Embedding 模型 ID"
+  "is_pinned": true,
+  "pinned_at": "2026-05-31T12:00:00Z",
+  "faq_config": {
+    "index_mode": "question_answer",
+    "question_index_mode": "combined"
   }
 }
 ```
 
-`model_config` 只保存模型 id、name、type、provider、model_name 等非敏感信息，不保存 API Key。
+新增 KB pin API：
 
-## v0.3 / v0.3.1 Schema 变化
+```http
+PUT /api/v1/knowledge-bases/{kb_id}/pin
+```
 
-`KnowledgeBaseCreate` 新增必填字段：
+请求体：
 
 ```json
 {
-  "embedding_model_id": "Embedding 模型 ID",
-  "summary_model_id": "KnowledgeQA 模型 ID"
+  "pinned": true
 }
 ```
 
-`KnowledgeBaseRead` 返回：
+`knowledge-search` / `quick-answer` scope 支持：
 
 ```json
 {
-  "embedding_model_id": "...",
-  "summary_model_id": "..."
+  "knowledge_base_ids": ["kb-a", "kb-b"],
+  "knowledge_ids": ["document-or-faq-knowledge-id"]
 }
 ```
 
-`QuickAnswerResponse.sources[]` 保持兼容，并允许包含：
+`SourceRead` 新增可选 `knowledge_base_name`，用于多 KB 检索后的来源展示。
+
+`FAQEntryRead` / 创建 / 更新 / 导入导出新增 `similar_questions`：
 
 ```json
 {
-  "chunk_id": "...",
-  "score": 0.92,
-  "chunk_type": "child",
-  "parent_chunk_id": "...",
-  "context_header": "...",
-  "retrieval_method": "hybrid",
-  "vector_score": 0.88,
-  "keyword_score": 0.6,
-  "rrf_score": 0.0149,
-  "rerank_score": null,
-  "context_chunk_id": "parent chunk id when expanded",
-  "context_content": "parent chunk content when expanded"
+  "question": "发票怎么申请？",
+  "similar_questions": ["哪里下载发票", "发票入口在哪"],
+  "answer": "..."
 }
 ```
 
-`context_content` 是 v0.3.1 新增的可选字段；不影响旧客户端读取已有 sources 字段。
+新增文档处理 timeline API：
 
-`RetrievalConfigSchema` v0.3 关键字段：
+```http
+GET /api/v1/documents/{document_id}/spans
+```
+
+返回 root span、当前 attempt 和 parse/chunk/embed/upsert/finalize 五阶段状态；历史文档无 span 时返回 attempt `0` 占位阶段。
+
+## v0.71 Schema / API 变化
+
+文档上传行为：
+
+- 同一知识库内存在活跃同 hash 文件时，上传接口返回 `409 Conflict` 和中文错误 `该文件已上传，请勿重复上传。`。
+- 如果历史同 hash 文件已经软删除，重新上传会生成新的 document id，不复用已删除记录的主键。
+
+文档生命周期新增：
+
+```http
+GET /api/v1/documents/{document_id}/download
+POST /api/v1/documents/{document_id}/cancel-parse
+POST /api/v1/documents/move
+```
+
+`DocumentMoveRequest`：
+
+```json
+{
+  "document_ids": ["document-id"],
+  "target_knowledge_base_id": "target-kb-id"
+}
+```
+
+会话生成生命周期新增：
+
+```http
+POST /api/v1/chat-sessions/{session_id}/stop
+```
+
+`ChatSessionRead.settings.last_request_state` 会保存最近一次请求的非敏感状态，例如：
+
+```json
+{
+  "status": "completed",
+  "knowledge_base_ids": ["kb-id"],
+  "knowledge_ids": [],
+  "hit_count": 5,
+  "model": "qwen-max",
+  "elapsed_ms": 1234
+}
+```
+
+`retrieval_trace` 新增阶段列表：
+
+```json
+{
+  "stages": [
+    {
+      "name": "search",
+      "status": "completed",
+      "duration_ms": 35,
+      "summary": "hybrid hits: 5"
+    }
+  ]
+}
+```
+
+运行状态新增：
+
+```http
+GET /api/v1/runtime-status
+```
+
+返回 database、local storage、vector store、parser registry 和 system 概览，供设置页展示真实状态。
+
+## v0.8 Schema / API 变化
+
+`retrieval_trace` 增强 diagnostics：
+
+```json
+{
+  "stages": [
+    {
+      "name": "vector",
+      "status": "completed",
+      "duration_ms": 18,
+      "summary": "vector hits: 8",
+      "input_count": 1,
+      "output_count": 8
+    },
+    {
+      "name": "faq_merge",
+      "status": "completed",
+      "boost_count": 1
+    }
+  ],
+  "retrievers": [
+    {
+      "knowledge_base_id": "kb-id",
+      "engine": "qdrant+postgres",
+      "mode": "hybrid",
+      "status": "completed",
+      "hit_count": 5
+    }
+  ]
+}
+```
+
+Quick Answer / Chat message 保存上下文摘要：
+
+```json
+{
+  "rendered_context": "用于 prompt 的上下文正文",
+  "prompt_context_summary": {
+    "source_count": 5,
+    "history_used": true,
+    "attachments_used": 1
+  }
+}
+```
+
+Quick Answer 支持临时文本附件：
+
+```json
+{
+  "question": "请总结附件内容",
+  "attachments": [
+    {
+      "filename": "notes.md",
+      "content_type": "text/markdown",
+      "content": "# 会议纪要\n..."
+    }
+  ]
+}
+```
+
+附件只进入本轮 prompt，不写入知识库、不写入 Qdrant，也不会作为 sources 返回。
+
+FAQ 导入和字段批量更新新增：
+
+```http
+GET /api/v1/knowledge-bases/{kb_id}/faqs/import-progress/{task_id}
+GET /api/v1/knowledge-bases/{kb_id}/faqs/import-last-result
+PUT /api/v1/knowledge-bases/{kb_id}/faqs/import-last-result/display-status
+PUT /api/v1/knowledge-bases/{kb_id}/faqs/fields
+```
+
+Chunk 管理新增：
+
+```http
+GET /api/v1/chunks/by-id/{chunk_id}
+PUT /api/v1/chunks/{knowledge_id}/{chunk_id}
+DELETE /api/v1/chunks/{knowledge_id}/{chunk_id}
+POST /api/v1/chunks/by-id/{chunk_id}/questions
+DELETE /api/v1/chunks/by-id/{chunk_id}/questions
+```
+
+模型、向量后端和历史消息新增：
+
+```http
+GET /api/v1/models/providers
+GET /api/v1/vector-stores/types
+POST /api/v1/messages/search
+GET /api/v1/messages/chat-history-stats
+```
+
+## v0.9 Schema / API 变化
+
+v0.9 将 Quick Q&A 和 knowledge-search 收敛为唯一固定主链路：
 
 ```json
 {
   "retrieval_mode": "hybrid",
+  "vector_engine": "qdrant",
+  "keyword_engine": "paradedb_bm25",
   "embedding_top_k": 50,
-  "vector_threshold": 0.15,
-  "keyword_threshold": 0.3,
-  "rerank_top_k": 10,
-  "rerank_threshold": 0.2,
-  "rerank_model_id": null,
-  "enable_rerank": false,
-  "rrf_k": 60,
-  "rrf_vector_weight": 0.7,
-  "rrf_keyword_weight": 0.3
+  "keyword_top_k": 50,
+  "rrf_top_k": 30,
+  "rerank_top_k": 8,
+  "enable_rerank": true,
+  "enable_parent_child": true,
+  "final_context_count": 6,
+  "max_context_chars": 8000
 }
 ```
 
-`KnowledgeSearchResponse`：
+`POST /api/v1/knowledge-search` 和 `POST /api/v1/quick-answer` 不再提供用户可选 `mode` 字段；旧请求体里带 `mode` 会被忽略，实际链路始终是 Qdrant 向量召回 + ParadeDB BM25 关键词召回 + RRF + mandatory rerank。
+
+`retrieval_trace` v0.9 关键字段：
 
 ```json
 {
-  "hits": [
+  "query_original": "原始问题",
+  "query_normalized": "标准化问题",
+  "query_rewritten": "改写后问题或 null",
+  "vector_hits": 50,
+  "keyword_hits": 50,
+  "rrf_hits": 30,
+  "rerank_hits": 8,
+  "selected_contexts": [
     {
-      "document_id": "...",
-      "chunk_id": "...",
-      "content": "...",
-      "retrieval_method": "keyword",
-      "score": 0.75
+      "document_id": "document-id",
+      "chunk_id": "child-chunk-id",
+      "parent_chunk_id": "parent-chunk-id",
+      "context_index": 1
     }
-  ]
+  ],
+  "model_config_used": {
+    "embedding_model_id": "embedding-id",
+    "qa_model_id": "qa-id",
+    "rerank_model_id": "rerank-id"
+  }
+}
+```
+
+`sources` v0.9 关键字段：
+
+```json
+{
+  "document_id": "document-id",
+  "document_title": "文档标题",
+  "chunk_id": "child-chunk-id",
+  "parent_chunk_id": "parent-chunk-id",
+  "source_type": "document",
+  "snippet": "命中片段",
+  "score": 0.73,
+  "rerank_score": 0.88,
+  "metadata": {}
 }
 ```
 
@@ -1035,28 +1049,31 @@ npm --prefix frontend run build
 
 最近一次本地验证结果：
 
-- `python -m pytest -q`：`233 passed`
+- `python -m pytest -q`：`253 passed`
 - `ruff check .`：通过
 - `python -m compileall app tests`：通过
 - `npm --prefix frontend run build`：通过，仍有既有 Vite 大 chunk 提示。
-- `python -m pytest tests/test_mineru_integration.py tests/test_document_processing_chunk_payload.py tests/test_v07_processing_spans.py -q`：`17 passed`
-- `python -m pytest tests/test_frontend_v02_model_management.py -q`：通过
-- Browser smoke：`http://localhost:8000/#/chat` 确认左上角为 `knowmate知友`，侧边栏入口为“设置”，右下角身份头像区不存在。
+- `python -m pytest tests/test_v10_ragas_evaluations.py tests/test_frontend_v10_evaluations.py -q`：`11 passed`
+- RAGas 法律知识库 50 题黄金集复测：run `d675c9a7-4abc-4c8a-8e25-6e1d576fbc85` 总分 `0.8822`，run `0f650beb-ba66-471e-814b-48b17e5c9cb9` 总分 `0.8819`，两次波动 `0.0003`。
+- 法律检索 A/B：`.runtime-logs/ab-legal-exact-v3.json` 中 `recall_at_10=0.98`、`precision_at_5=0.98`、`miss_count=1`、`failed=0`。
+- Browser smoke：`http://127.0.0.1:5173/#/evaluations` 可查看评测运行、总分、五项指标、基线对比、逐题明细和 source 诊断。
 - `scripts/start-dev.ps1 -Rebuild` / `rebuild-dev.bat`：强制重建完整后端栈镜像；PostgreSQL 运行 `paradedb/paradedb:pg16` 并加载 `shared_preload_libraries=pg_search`。
 - 本地服务 E2E：使用真实 PostgreSQL/ParadeDB 和 Qdrant、进程内 fake Embedding/Chat/Rerank，验证知识库创建、文档上传、同步处理、parent-child chunks、Qdrant point、ParadeDB BM25 hit、knowledge-search 和 quick-answer trace/sources 均通过。
-- v0.92 分项验收详见 [CHANGELOG.md](CHANGELOG.md) 的 v0.92 Verification。
-- v0.92 本地服务端到端验证需要 PostgreSQL/ParadeDB `pg_search`、Redis、Qdrant、API、Celery Worker、可用 QA / Embedding / Rerank 模型配置，以及已配置的 MinerU API Key；自动化验收可使用 fake model client / mocked MinerU client，真实生产解析和问答仍需人工配置可用外部服务。
+- v1.0 分项验收详见 [CHANGELOG.md](CHANGELOG.md) 的 v1.0 Verification。
+- v1.0 本地服务端到端验证需要 PostgreSQL/ParadeDB `pg_search`、Redis、Qdrant、API、Celery Worker、可用 QA / Embedding / Rerank 模型配置；生产解析 PDF/Office/图片类文档还需要已配置的 MinerU API Key；真实 RAGas native judge 评测需要可用 evaluator/QA 模型和外部模型服务。
 
 ## 开发备注
 
-- v0.92 仍默认单租户，`DEFAULT_TENANT_ID=10000`。
+- v1.0 仍默认单租户，`DEFAULT_TENANT_ID=10000`。
 - Docker Compose 当前提供完整后端栈：`postgres / redis / qdrant / api / worker`。前端 dev server 仍通过 `npm --prefix frontend run dev` 或 `scripts/start-dev.ps1` 启动。
 - 默认开发方式是 Docker API + Docker worker + 本机 Vite。不要同时运行本机 `uvicorn` / `celery` 和 Docker `api` / `worker`，否则上传文件路径可能在 Windows 与 Linux 容器之间不兼容。
 - 文档上传后必须有 Celery Worker 在线；`scripts/start-dev.ps1` 会自动启动并重启 worker，否则文档会停留在 `pending` 或 `processing`。
 - 切换 embedding 模型、维度、parser/chunking 参数或 keyword 检索文本策略后，需要重处理文档或重建知识库来刷新 PostgreSQL chunks、Qdrant 向量和 ParadeDB BM25 索引。
 - 默认 keyword search 是 PostgreSQL + ParadeDB `pg_search` BM25；测试环境可使用 fake repository / injected client，生产 Quick Q&A 不会静默退回 simple FTS。
-- Rerank 是 v0.92 必需项；必须先创建可用的 `Rerank` 模型，并在检索配置中绑定 `rerank_model_id`，否则有候选命中时 Quick Q&A 返回中文明确错误。
+- Rerank 是 v1.0 Quick Q&A 主链路必需项；必须先创建可用的 `Rerank` 模型，并在检索配置中绑定 `rerank_model_id`，否则有候选命中时 Quick Q&A 返回中文明确错误。
 - MinerU 云端解析已接入；PDF/Office/图片类文档会发送到 MinerU，PDF 超过 200 页会自动本地分片后逐片解析，非 PDF 超限仍需人工拆分或后续转换为 PDF 再处理。
+- RAGas 评测复用知识库绑定的 QA / Embedding 模型，API Key 只在后端解密使用；评测运行只返回模型名、provider、是否配置和 `api_key_last4`，不会回传明文或密文。
+- 大批量评测默认 `RAGAS_EVALUATOR_MODE=auto`，超过 `RAGAS_NATIVE_MAX_ROWS=20` 时使用 `semantic_proxy` 计算可重复指标；需要强制 native judge 时再显式设置 `RAGAS_EVALUATOR_MODE=native` 并控制题量。
 - 模型测试会透传 provider 的真实错误，例如认证失败、模型不存在、维度不匹配等，前端会渲染中文可读文本，不渲染 `[object Object]`；DeepSeek 自定义模型名保存后不会被 provider preset 重置。
 - 生产部署前需要更换默认数据库密码，固定并妥善保存 `MODEL_CONFIG_ENCRYPTION_KEY`，并增加鉴权和访问控制。
 

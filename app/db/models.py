@@ -205,6 +205,119 @@ class ChatMessage(Base):
     session: Mapped[ChatSession] = relationship(back_populates="messages")
 
 
+class EvaluationRun(Base):
+    __tablename__ = "evaluation_runs"
+    __table_args__ = (
+        Index("ix_evaluation_runs_tenant_kb_created", "tenant_id", "knowledge_base_id", "created_at"),
+        Index("ix_evaluation_runs_tenant_kb_baseline", "tenant_id", "knowledge_base_id", "is_baseline"),
+        Index("ix_evaluation_runs_tenant_status", "tenant_id", "status"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    tenant_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    knowledge_base_id: Mapped[str] = mapped_column(ForeignKey("knowledge_bases.id"), nullable=False, index=True)
+    testset_id: Mapped[str | None] = mapped_column(ForeignKey("evaluation_testsets.id"), nullable=True, index=True)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="queued", index=True)
+    is_baseline: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, index=True)
+    testset_source: Mapped[str] = mapped_column(String(32), nullable=False, default="chunk_derived")
+    metric_version: Mapped[str] = mapped_column(String(64), nullable=False, default="ragas_semantic_v1")
+    testset_size: Mapped[int] = mapped_column(Integer, nullable=False, default=10)
+    top_k: Mapped[int | None] = mapped_column(Integer)
+    enable_rerank: Mapped[bool | None] = mapped_column(Boolean)
+    sample_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    completed_sample_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    failed_sample_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    metrics_summary: Mapped[dict | None] = mapped_column(JSON)
+    model_config_json: Mapped[dict | None] = mapped_column(JSON)
+    evaluator_config_json: Mapped[dict | None] = mapped_column(JSON)
+    error_message: Mapped[str | None] = mapped_column(Text)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+    samples: Mapped[list["EvaluationSample"]] = relationship(back_populates="run")
+
+
+class EvaluationTestset(Base):
+    __tablename__ = "evaluation_testsets"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "knowledge_base_id", "name", name="uq_evaluation_testsets_tenant_kb_name"),
+        Index("ix_evaluation_testsets_tenant_kb_created", "tenant_id", "knowledge_base_id", "created_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    tenant_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    knowledge_base_id: Mapped[str] = mapped_column(ForeignKey("knowledge_bases.id"), nullable=False, index=True)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    description: Mapped[str | None] = mapped_column(Text)
+    item_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="active", index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+    items: Mapped[list["EvaluationTestsetItem"]] = relationship(back_populates="testset")
+
+
+class EvaluationTestsetItem(Base):
+    __tablename__ = "evaluation_testset_items"
+    __table_args__ = (
+        UniqueConstraint("testset_id", "sample_index", name="uq_evaluation_testset_items_testset_index"),
+        Index("ix_evaluation_testset_items_tenant_testset", "tenant_id", "testset_id"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    tenant_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    testset_id: Mapped[str] = mapped_column(ForeignKey("evaluation_testsets.id"), nullable=False, index=True)
+    knowledge_base_id: Mapped[str] = mapped_column(ForeignKey("knowledge_bases.id"), nullable=False, index=True)
+    sample_index: Mapped[int] = mapped_column(Integer, nullable=False)
+    question: Mapped[str] = mapped_column(Text, nullable=False)
+    reference_answer: Mapped[str] = mapped_column(Text, nullable=False)
+    expected_chunk_ids: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    expected_law_name: Mapped[str | None] = mapped_column(String(255))
+    expected_article_no: Mapped[str | None] = mapped_column(String(64))
+    tags_json: Mapped[list | None] = mapped_column(JSON)
+    metadata_json: Mapped[dict | None] = mapped_column(JSON)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+    testset: Mapped[EvaluationTestset] = relationship(back_populates="items")
+
+
+class EvaluationSample(Base):
+    __tablename__ = "evaluation_samples"
+    __table_args__ = (
+        UniqueConstraint("evaluation_run_id", "sample_index", name="uq_evaluation_samples_run_index"),
+        Index("ix_evaluation_samples_tenant_run", "tenant_id", "evaluation_run_id"),
+        Index("ix_evaluation_samples_kb_status", "knowledge_base_id", "status"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    tenant_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    evaluation_run_id: Mapped[str] = mapped_column(ForeignKey("evaluation_runs.id"), nullable=False, index=True)
+    knowledge_base_id: Mapped[str] = mapped_column(ForeignKey("knowledge_bases.id"), nullable=False, index=True)
+    sample_index: Mapped[int] = mapped_column(Integer, nullable=False)
+    user_input: Mapped[str] = mapped_column(Text, nullable=False)
+    reference: Mapped[str | None] = mapped_column(Text)
+    reference_contexts: Mapped[list | None] = mapped_column(JSON)
+    expected_chunk_ids: Mapped[list | None] = mapped_column(JSON)
+    expected_law_name: Mapped[str | None] = mapped_column(String(255))
+    expected_article_no: Mapped[str | None] = mapped_column(String(64))
+    synthesizer_name: Mapped[str | None] = mapped_column(String(128))
+    response: Mapped[str | None] = mapped_column(Text)
+    retrieved_contexts: Mapped[list | None] = mapped_column(JSON)
+    sources_json: Mapped[list | None] = mapped_column(JSON)
+    retrieval_trace_json: Mapped[dict | None] = mapped_column(JSON)
+    scores_json: Mapped[dict | None] = mapped_column(JSON)
+    diagnostics_json: Mapped[dict | None] = mapped_column(JSON)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="queued", index=True)
+    error_message: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+    run: Mapped[EvaluationRun] = relationship(back_populates="samples")
+
+
 class Knowledge(Base):
     __tablename__ = "knowledges"
 

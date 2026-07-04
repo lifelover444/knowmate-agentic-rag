@@ -27,6 +27,9 @@ def test_quick_answer_default_prompt_applies_rules_from_context():
     assert "apply those rules to the user's facts" in system_prompt
     assert "not repeated verbatim" in system_prompt
     assert "specific part is not covered" in system_prompt
+    assert "cite the relevant source number" in system_prompt
+    assert "not grounded in those sources" in system_prompt
+    assert "preserve exact law names, article numbers" in system_prompt
 
 
 def add_completed_document(db_session, kb_id: str) -> None:

@@ -1,5 +1,70 @@
 # Changelog
 
+## v1.0
+
+v1.0 是 v0.92 之后的 RAGas 评测闭环与法律知识库质量达标版本。主链路继续保持 WeKnora-style 固定 Quick Q&A：Query Understand + Qdrant dense + ParadeDB BM25 + RRF + mandatory rerank + parent-child context；本版本重点把“能回答”推进到“能量化、能对比、能复测”，并在法律知识库上完成 50 题黄金集 0.88+ 的稳定验收。
+
+### Added
+
+- 新增知识库级评测数据模型：
+  - `evaluation_runs` 存运行状态、聚合指标、baseline 标记、评测配置、诊断信息和脱敏模型信息。
+  - `evaluation_samples` 存生成问题、参考答案、模型回答、sources、retrieval trace、逐题 RAGas 分数和失败原因。
+  - `evaluation_testsets` / `evaluation_testset_items` 存可复用黄金评测集，支持同一题集下做优化前后对比。
+- 新增评测 API：
+  - `POST /api/v1/evaluations`
+  - `GET /api/v1/evaluations?knowledge_base_id=...`
+  - `GET /api/v1/evaluations/{run_id}`
+  - `POST /api/v1/evaluations/{run_id}/baseline`
+  - `POST /api/v1/evaluations/testsets`
+  - `GET /api/v1/evaluations/testsets`
+  - `GET /api/v1/evaluations/testsets/{testset_id}`
+- 新增 Celery 任务 `evaluations.run`：读取知识库 enabled chunks，生成或复用测试集，逐题调用现有 Quick Q&A 链路，再计算量化指标。
+- 新增 RAGas adapter：
+  - 默认五项指标为 `context_precision`、`context_recall`、`faithfulness`、`response_relevancy`、`factual_correctness`。
+  - 所有指标按 `0-1` 保存；总分为五项聚合均值的平均值。
+  - 小批量可走 native RAGas；大批量默认 `semantic_proxy` guard，避免 native judge 在长批次中挂起，并将 `evaluator_config` 写入运行记录。
+- 新增前端 `/#/evaluations` 页面、侧边栏入口和命令面板入口：
+  - 支持创建评测、选择黄金集、轮询运行状态、查看 baseline/current 对比。
+  - 展示总分、五项指标条形图、逐题热力表、答案、参考答案、sources、retrieval trace 和诊断信息。
+  - 前端只展示模型名、provider、配置状态和 `api_key_last4`，不回显 API Key 明文或密文。
+- 新增评测 A/B 工具 `scripts/evaluation_ab.py`，支持固定测试集下输出 retrieval recall/precision、失败样本和可选自动执行评测运行。
+
+### Changed
+
+- 法律知识库摄入与检索增强：
+  - 从 chunks 中抽取 `law_name`、`article_no`、`article_no_normalized`、`part`、`chapter`、`section`、`item_no`、`knowledge_piece_index` 等结构化法律 metadata。
+  - 新增法律 metadata backfill，并同步 PostgreSQL chunks 与 Qdrant payload。
+  - 在 knowledge search 中增加 legal exact lookup 和 legal boost，优先命中明确法律名称、条号、编章节目和知识片段编号。
+  - 评测链路可尊重 `top_k` / `enable_rerank` 覆盖，用于 A/B；公开 Quick Q&A 仍保持 v0.9+ 固定 mandatory rerank。
+- Quick Answer 法律场景 prompt 收紧：
+  - 只基于编号来源回答，要求用 `[1]` 这类 source 编号引用。
+  - 不补充上下文没有提供的法律、日期、处罚、例外或程序。
+  - 保留法律名称和条文编号；缺失时说明知识库未覆盖具体部分。
+- 逐题 source 命中诊断把命中 expected child 的 parent context 视为有效来源，符合 parent-child 回答上下文契约。
+
+### Verification
+
+- `python -m pytest -q`：`253 passed`
+- `python -m pytest tests/test_v10_ragas_evaluations.py tests/test_frontend_v10_evaluations.py -q`：`11 passed`
+- `ruff check .`：通过
+- `python -m compileall app tests`：通过
+- `npm --prefix frontend run build`：通过，仍有既有 Vite large chunk warning。
+- 法律知识库黄金集：
+  - knowledge base：`84fb2530-25ff-4f64-8aea-cfbadb057b26`
+  - golden testset：`26f4a44b-91f4-4479-a6a2-a42e92218e5a`
+  - baseline run：`0d160b0c-31ae-490a-a06e-2bdaaa087a8e`，30/30 completed，overall `0.5228`
+  - final run：`d675c9a7-4abc-4c8a-8e25-6e1d576fbc85`，50/50 completed，overall `0.8822`
+  - final repeat：`0f650beb-ba66-471e-814b-48b17e5c9cb9`，50/50 completed，overall `0.8819`
+  - repeat delta：`0.0003`
+- final run 指标：`context_precision=0.9478`、`context_recall=0.9800`、`faithfulness=0.8555`、`response_relevancy=0.8150`、`factual_correctness=0.8127`。
+- legal exact v3 A/B：`recall_at_10=0.98`、`precision_at_5=0.98`、`miss_count=1`、`failed=0`。
+
+### Not Included
+
+- v1.0 不新增人工上传基准集 UI；当前以自动生成/保存黄金集为主。
+- v1.0 不新增专用 evaluator 模型配置页；评测默认复用知识库绑定模型和后端 evaluator mode。
+- v1.0 不新增评测取消按钮、多租户权限隔离或线上成本预算控制。
+
 ## v0.92
 
 v0.92 是 v0.91 之后的解析能力和模型配置体验版本。主链路继续保持 WeKnora-style 固定 Quick Q&A：Query Understand + Qdrant dense + ParadeDB BM25 + RRF + mandatory rerank + parent-child context；本版本重点把文档解析从 builtin 扩展到 MinerU 标准精准解析，并补齐大 PDF 自动分片。

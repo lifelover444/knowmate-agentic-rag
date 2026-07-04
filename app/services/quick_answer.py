@@ -75,6 +75,7 @@ class QuickAnswerService:
         system_prompt: str | None = None,
         generate_answer: bool = True,
         attachments: list | None = None,
+        respect_retrieval_overrides: bool = False,
     ) -> QuickAnswerPrepared:
         primary_kb_id = knowledge_base_id or _primary_knowledge_base_id(knowledge_base_ids, knowledge_ids, self.db)
         prepared_attachments, attachments_context = prepare_attachments(attachments or [])
@@ -119,7 +120,7 @@ class QuickAnswerService:
             knowledge_ids=knowledge_ids,
             query=search_query,
             top_k=top_k,
-            enable_rerank=enable_rerank,
+            enable_rerank=enable_rerank if respect_retrieval_overrides else None,
         )
         hits = search_result.hits
         stages.extend(search_result.diagnostics.get("stages") or [])

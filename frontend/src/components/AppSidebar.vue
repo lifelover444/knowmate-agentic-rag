@@ -18,6 +18,7 @@ const renameTitle = ref("");
 const renamingSessionId = ref("");
 
 const selectedKeys = computed(() => {
+  if (route.path.startsWith("/evaluations")) return ["/evaluations"];
   if (route.path.startsWith("/knowledge-bases")) return ["/knowledge-bases"];
   if (route.path.startsWith("/settings")) return ["/settings"];
   return ["/chat"];
@@ -100,6 +101,10 @@ onMounted(() => {
       <button type="button" :class="{ active: false }" @click="navigate('/chat')">
         <span class="nav-icon nav-icon--search"></span>
         <span>搜索</span>
+      </button>
+      <button type="button" :class="{ active: selectedKeys[0] === '/evaluations' }" @click="navigate('/evaluations')">
+        <span class="nav-icon nav-icon--eval"></span>
+        <span>RAGas 评测</span>
       </button>
       <button type="button" :class="{ active: selectedKeys[0] === '/settings' }" @click="navigate('/settings')">
         <span class="nav-icon nav-icon--plug"></span>
@@ -301,6 +306,31 @@ onMounted(() => {
   background: currentColor;
   transform: rotate(45deg);
   content: "";
+}
+
+.nav-icon--eval {
+  border: 2px solid currentColor;
+  border-radius: 6px;
+}
+
+.nav-icon--eval::before,
+.nav-icon--eval::after {
+  position: absolute;
+  bottom: 4px;
+  width: 3px;
+  border-radius: 3px 3px 0 0;
+  background: currentColor;
+  content: "";
+}
+
+.nav-icon--eval::before {
+  left: 6px;
+  height: 8px;
+}
+
+.nav-icon--eval::after {
+  right: 6px;
+  height: 14px;
 }
 
 .nav-icon--plug::before,

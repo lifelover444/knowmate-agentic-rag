@@ -5,6 +5,7 @@ from app.api.v1 import (
     chunker,
     chunks,
     documents,
+    evaluations,
     faqs,
     knowledge_bases,
     knowledge_search,
@@ -31,6 +32,7 @@ api_router.include_router(knowledge_search.router, prefix="/knowledge-search", t
 api_router.include_router(documents.router, prefix="/documents", tags=["documents"])
 api_router.include_router(chunks.router, prefix="/chunks", tags=["chunks"])
 api_router.include_router(quick_answer.router, prefix="/quick-answer", tags=["quick-answer"])
+api_router.include_router(evaluations.router, prefix="/evaluations", tags=["evaluations"])
 api_router.include_router(model_config.router, prefix="/model-config", tags=["model-config"])
 api_router.include_router(models.router, prefix="/models", tags=["models"])
 api_router.include_router(parser_configs.router, prefix="/parser-configs", tags=["parser-configs"])

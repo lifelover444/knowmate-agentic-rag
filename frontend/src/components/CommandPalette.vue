@@ -28,6 +28,13 @@ const commands = computed<CommandItem[]>(() => [
   },
   { id: "kb", label: "知识库", description: "创建和管理知识库", keywords: "kb knowledge base", to: "/knowledge-bases" },
   {
+    id: "evaluations",
+    label: "RAGas 评测",
+    description: "查看 Quick Q&A 量化结果",
+    keywords: "ragas evaluation metrics 评测 量化",
+    to: "/evaluations",
+  },
+  {
     id: "documents",
     label: "文档管理",
     description: "上传、解析、查看 chunks",

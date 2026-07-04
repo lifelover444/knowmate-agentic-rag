@@ -2,15 +2,22 @@ import re
 import time
 from dataclasses import dataclass, replace
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from app.core.config import Settings
-from app.db.models import Knowledge
+from app.db.models import Chunk, Knowledge
 from app.db.repositories.chunk import ChunkRepository
 from app.db.repositories.knowledge_base import KnowledgeBaseRepository
 from app.integrations.llm_openai import OpenAIEmbedder
 from app.integrations.reranker import RerankerClient
+from app.rag.legal_structure import (
+    extract_legal_metadata,
+    extract_legal_query_hints,
+    legal_article_variants,
+    legal_match_score,
+    normalize_article_no,
+)
 from app.rag.retriever import (
     HybridRetriever,
     KeywordRetriever,
@@ -95,7 +102,7 @@ class KnowledgeSearchService:
             raise ValueError("不支持的检索模式")
         limit = top_k or config.rerank_top_k
         over_retrieval_limit = _over_retrieval_limit(config, scope_count=len(resolved_kbs))
-        should_rerank = bool(config.enable_rerank)
+        should_rerank = bool(config.enable_rerank if enable_rerank is None else enable_rerank)
         diagnostics = _DiagnosticsBuilder(
             query=query,
             mode=resolved_mode,
@@ -104,7 +111,7 @@ class KnowledgeSearchService:
             over_retrieval_limit=over_retrieval_limit,
             knowledge_base_ids=[kb.id for kb in resolved_kbs],
             knowledge_ids=knowledge_ids or [],
-            enable_rerank=config.enable_rerank,
+            enable_rerank=should_rerank,
         )
         hits: list[RetrievalHit] = []
         knowledge_ids_by_kb = _knowledge_ids_by_kb(self.db, knowledge_ids or [])
@@ -170,6 +177,34 @@ class KnowledgeSearchService:
             input_summary=expansion_stage["input"],
             output_summary=expansion_stage["output"],
         )
+        legal_hints = extract_legal_query_hints(query)
+        exact_started = time.perf_counter()
+        exact_hits = self._lookup_exact_legal_hits(
+            query=query,
+            legal_hints=legal_hints,
+            resolved_kbs=resolved_kbs,
+            limit=over_retrieval_limit,
+            knowledge_ids_by_kb=knowledge_ids_by_kb,
+            has_knowledge_filter=bool(knowledge_ids),
+        )
+        if exact_hits:
+            hits.extend(exact_hits)
+        diagnostics.add_stage(
+            "legal_exact_lookup",
+            "done" if exact_hits else "skipped",
+            duration_ms=_duration_ms(exact_started),
+            input_summary={
+                "hints": legal_hints,
+                "knowledge_base_ids": [kb.id for kb in resolved_kbs],
+                "knowledge_ids": knowledge_ids or [],
+                "limit": over_retrieval_limit,
+            },
+            output_summary={
+                "hit_count": len(exact_hits),
+                "article_variants": sorted(legal_article_variants(legal_hints.get("article_no"))),
+                "reason": None if exact_hits else _legal_exact_skip_reason(legal_hints),
+            },
+        )
         deduplicate_input_count = len(hits)
         hits = diagnostics.run_stage(
             "deduplicate",
@@ -208,6 +243,34 @@ class KnowledgeSearchService:
                 ),
             },
         )
+        legal_boost_input_count = len(hits)
+        if legal_hints:
+            hits = diagnostics.run_stage(
+                "legal_boost",
+                "done",
+                input_summary={"candidate_count": legal_boost_input_count, "hints": legal_hints},
+                action=lambda: _boost_legal_hits(query, hits, legal_hints=legal_hints),
+                output_summary=lambda boosted: {
+                    "input_count": legal_boost_input_count,
+                    "output_count": len(boosted),
+                    "boost_count": sum(1 for hit in boosted if (hit.metadata or {}).get("legal_boosted") is True),
+                    "max_bonus": max(
+                        [
+                            float((hit.metadata or {}).get("legal_boost_bonus") or 0)
+                            for hit in boosted
+                            if (hit.metadata or {}).get("legal_boosted") is True
+                        ],
+                        default=0,
+                    ),
+                },
+            )
+        else:
+            diagnostics.add_stage(
+                "legal_boost",
+                "skipped",
+                input_summary={"candidate_count": legal_boost_input_count},
+                output_summary={"reason": "no_legal_hints"},
+            )
         if should_rerank:
             if any(not normalize_indexing_strategy(kb.indexing_strategy)["enable_rerank"] for kb in resolved_kbs):
                 raise ValueError("当前知识库未启用重排")
@@ -545,6 +608,98 @@ class KnowledgeSearchService:
         }
         return expanded
 
+    def _lookup_exact_legal_hits(
+        self,
+        *,
+        query: str,
+        legal_hints: dict,
+        resolved_kbs,
+        limit: int,
+        knowledge_ids_by_kb: dict[str, list[str]],
+        has_knowledge_filter: bool,
+    ) -> list[RetrievalHit]:
+        if not legal_hints.get("law_name"):
+            return []
+        article_variants = sorted(legal_article_variants(legal_hints.get("article_no")))
+        normalized_article = normalize_article_no(legal_hints.get("article_no"))
+        heading_key = _legal_heading_key(legal_hints)
+        heading_value = str(legal_hints.get(heading_key) or "").strip() if heading_key else ""
+        piece_index = _positive_int(legal_hints.get("knowledge_piece_index"))
+        if not article_variants and not normalized_article and not heading_value and not piece_index:
+            return []
+
+        exact_hits: list[RetrievalHit] = []
+        seen: set[str] = set()
+        per_kb_limit = max(3, min(limit, 20))
+        for kb in resolved_kbs:
+            scoped_knowledge_ids = knowledge_ids_by_kb.get(kb.id) if has_knowledge_filter else None
+            if has_knowledge_filter and not scoped_knowledge_ids:
+                continue
+            filters = [
+                Chunk.knowledge_base_id == kb.id,
+                Chunk.deleted_at.is_(None),
+                Chunk.is_enabled.is_(True),
+                Chunk.chunk_type != "parent",
+            ]
+            if scoped_knowledge_ids:
+                filters.append(Chunk.knowledge_id.in_(scoped_knowledge_ids))
+            law_name = str(legal_hints["law_name"]).strip()
+            law_filter = or_(
+                Chunk.chunk_metadata["law_name"].as_string() == law_name,
+                Chunk.search_text.ilike(f"%{law_name}%"),
+                Chunk.content.ilike(f"%{law_name}%"),
+            )
+            if piece_index and not article_variants and not heading_value:
+                rows = list(
+                    self.db.scalars(
+                        select(Chunk)
+                        .where(*filters, law_filter)
+                        .order_by(Chunk.knowledge_id.asc(), Chunk.chunk_index.asc())
+                        .offset(piece_index - 1)
+                        .limit(1)
+                    ).all()
+                )
+                for chunk in rows:
+                    if chunk.id in seen:
+                        continue
+                    seen.add(chunk.id)
+                    exact_hits.append(_chunk_to_exact_legal_hit(query, chunk, legal_hints=legal_hints, kb_name=kb.name))
+                continue
+
+            article_conditions = [Chunk.search_text.ilike(f"%{variant}%") for variant in article_variants]
+            article_conditions.extend(Chunk.content.ilike(f"%{variant}%") for variant in article_variants)
+            if article_variants:
+                article_conditions.append(Chunk.chunk_metadata["article_no"].as_string().in_(article_variants))
+            if normalized_article:
+                article_conditions.append(
+                    Chunk.chunk_metadata["article_no_normalized"].as_string() == normalized_article
+                )
+            heading_conditions = []
+            if heading_key and heading_value:
+                heading_conditions = [
+                    Chunk.chunk_metadata[heading_key].as_string() == heading_value,
+                    Chunk.context_header.ilike(f"%{heading_value}%"),
+                    Chunk.search_text.ilike(f"%{heading_value}%"),
+                    Chunk.content.ilike(f"%{heading_value}%"),
+                ]
+            exact_conditions = article_conditions or heading_conditions
+            if not exact_conditions:
+                continue
+            rows = list(
+                self.db.scalars(
+                    select(Chunk)
+                    .where(*filters, law_filter, or_(*exact_conditions))
+                    .order_by(Chunk.chunk_index.asc())
+                    .limit(per_kb_limit)
+                ).all()
+            )
+            for chunk in rows:
+                if chunk.id in seen:
+                    continue
+                seen.add(chunk.id)
+                exact_hits.append(_chunk_to_exact_legal_hit(query, chunk, legal_hints=legal_hints, kb_name=kb.name))
+        return sorted(exact_hits, key=lambda item: float(item.score or 0), reverse=True)[:limit]
+
 
 def _deduplicate_hits(hits: list[RetrievalHit]) -> list[RetrievalHit]:
     by_chunk: dict[str, RetrievalHit] = {}
@@ -596,6 +751,99 @@ def _merge_faq_hits(hits: list[RetrievalHit]) -> list[RetrievalHit]:
         )
         merged.append(replace(hit, score=boosted_score, metadata=metadata))
     return sorted(merged, key=lambda item: float(item.score or 0), reverse=True)
+
+
+def _boost_legal_hits(query: str, hits: list[RetrievalHit], *, legal_hints: dict | None = None) -> list[RetrievalHit]:
+    hints = legal_hints or extract_legal_query_hints(query)
+    if not hints:
+        return hits
+    boosted: list[RetrievalHit] = []
+    for hit in hits:
+        hit_metadata = _hit_legal_metadata(hit)
+        bonus = legal_match_score(hints, hit_metadata)
+        if bonus <= 0:
+            boosted.append(hit)
+            continue
+        metadata = dict(hit.metadata or {})
+        metadata.update(hit_metadata)
+        metadata.update(
+            {
+                "legal_boosted": True,
+                "legal_boost_bonus": bonus,
+                "legal_query_hints": hints,
+                "legal_original_score": float(hit.score or 0),
+            }
+        )
+        boosted.append(replace(hit, score=float(hit.score or 0) + bonus, metadata=metadata))
+    return sorted(boosted, key=lambda item: float(item.score or 0), reverse=True)
+
+
+def _chunk_to_exact_legal_hit(query: str, chunk: Chunk, *, legal_hints: dict, kb_name: str | None) -> RetrievalHit:
+    metadata = dict(chunk.chunk_metadata or {})
+    extracted = extract_legal_metadata(
+        metadata.get("title") or getattr(getattr(chunk, "knowledge", None), "title", None),
+        chunk.context_header,
+        chunk.content,
+    )
+    merged_metadata = {**extracted, **metadata}
+    bonus = legal_match_score(legal_hints, merged_metadata)
+    merged_metadata.update(
+        {
+            "legal_exact_lookup": True,
+            "legal_query_hints": legal_hints,
+            "legal_exact_bonus": bonus,
+        }
+    )
+    return RetrievalHit(
+        chunk_id=chunk.id,
+        document_id=chunk.knowledge_id,
+        knowledge_base_id=chunk.knowledge_base_id,
+        knowledge_base_name=kb_name,
+        title=merged_metadata.get("title") or getattr(getattr(chunk, "knowledge", None), "title", None),
+        content=chunk.content,
+        context_header=chunk.context_header,
+        parent_chunk_id=chunk.parent_chunk_id,
+        chunk_type=chunk.chunk_type,
+        metadata=merged_metadata,
+        retrieval_method="legal_exact",
+        score=1.0 + bonus,
+        keyword_score=1.0,
+    )
+
+
+def _hit_legal_metadata(hit: RetrievalHit) -> dict:
+    metadata = dict(hit.metadata or {})
+    extracted = extract_legal_metadata(hit.title, hit.context_header, hit.context_content or hit.content)
+    return {**extracted, **metadata}
+
+
+def _legal_exact_skip_reason(legal_hints: dict) -> str:
+    if not legal_hints:
+        return "no_legal_hints"
+    if not legal_hints.get("law_name"):
+        return "missing_law_name"
+    if (
+        not legal_hints.get("article_no")
+        and not _legal_heading_key(legal_hints)
+        and not _positive_int(legal_hints.get("knowledge_piece_index"))
+    ):
+        return "missing_article_or_heading"
+    return "not_found"
+
+
+def _legal_heading_key(legal_hints: dict) -> str | None:
+    for key in ("section", "chapter", "part"):
+        if str(legal_hints.get(key) or "").strip():
+            return key
+    return None
+
+
+def _positive_int(value) -> int | None:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed > 0 else None
 
 
 def _is_faq_hit(hit: RetrievalHit) -> bool:
