@@ -2,7 +2,19 @@
 
 knowmate 知友是一个知识库 RAG 项目，面向模型配置、知识库管理、文档解析、混合检索、快速问答和自动评测闭环。后端采用 Python / FastAPI。
 
-当前版本为 v1.0，主线是在 v0.9/v0.91 固定 Quick Q&A 链路和 v0.92 MinerU 解析能力基础上补齐 RAGas 知识库级自动评测闭环：可从已解析 chunks 生成/保存评测集，复用知识库绑定的 QA / Embedding 模型运行 Quick Q&A，计算五项 0-1 量化指标，并在前端“评测”页面展示总分、基线对比、指标分布、逐题明细和 sources。v1.0 继续固定采用 Query Understand + over-retrieval + Qdrant dense retrieval + ParadeDB pg_search BM25 + RRF + mandatory composite rerank/MMR + parent-child context，不把 vector-only、keyword-only、rerank 开关或 planned vector backends 暴露为用户配置项。v1.0 版本说明见 [docs/v1.0.md](docs/v1.0.md)：
+当前版本为 v1.0，主线是在 v0.9/v0.91 固定 Quick Q&A 链路和 v0.92 MinerU 解析能力基础上补齐 RAGas 知识库级自动评测闭环：可从已解析 chunks 生成/保存评测集，复用知识库绑定的 QA / Embedding 模型运行 Quick Q&A，计算五项 0-1 量化指标，并在前端“评测”页面展示总分、基线对比、指标分布、逐题明细和 sources。v1.0 继续固定采用 Query Understand + over-retrieval + Qdrant dense retrieval + ParadeDB pg_search BM25 + RRF + mandatory composite rerank/MMR + parent-child context，不把 vector-only、keyword-only、rerank 开关或 planned vector backends 暴露为用户配置项。v1.0 版本说明见 [docs/v1.0.md](docs/v1.0.md)。
+
+## 界面预览
+
+| RAGas 评测 | 快速问答 |
+| --- | --- |
+| ![RAGas 评测页面](docs/assets/v1.0/evaluations.png) | ![快速问答页面](docs/assets/v1.0/chat.png) |
+
+| 知识库管理 | 设置中心 |
+| --- | --- |
+| ![知识库管理页面](docs/assets/v1.0/knowledge-bases.png) | ![设置中心页面](docs/assets/v1.0/settings.png) |
+
+## 核心流程
 
 ```text
 模型管理
