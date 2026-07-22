@@ -15,6 +15,7 @@ class ProcessingTaskBatchSummary(BaseModel):
     processing: int = 0
     completed: int = 0
     failed: int = 0
+    cancelled: int = 0
     failures: list[ProcessingTaskFailure] = Field(default_factory=list)
 
 

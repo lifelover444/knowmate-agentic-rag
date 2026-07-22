@@ -1,5 +1,59 @@
 # Changelog
 
+## v1.1
+
+v1.1 在 v1.0 知识库级评测闭环上增加 CMRC2018 中文可复现 native RAGAS 验收。版本重点是把
+“能够创建评测”推进到“数据来源固定、知识库污染可控、expected chunk 可审计、rerank 可对比、实际
+evaluator mode 可证明”，并保留 v1.0 法律知识库和原始截图作为历史基线。
+
+### Added
+
+- 新增 `app/services/cmrc2018_validation.py` 与 `scripts/cmrc2018_e2e.py`：
+  - 锁定 CMRC2018 官方 dev/validation 文件、commit、SHA-256 和许可证。
+  - 固定 seed `20240722`，生成 20 篇目标 + 180 篇干扰的 200 个互异纯 context 文档。
+  - 生成 20 道来自不同目标 context 的原始黄金题 manifest。
+  - 支持上传恢复、处理状态轮询、稳定文件名与动态 document ID 映射。
+  - 从启用、非 parent、实际包含答案的知识库 chunk 中绑定 `expected_chunk_ids`。
+  - 生成并幂等导入 `POST /api/v1/evaluations/testsets` 请求体。
+  - 自动运行 `top_k=5` 的 rerank off/on 两组 Evaluation，并保存完整 JSON 和 Markdown 对照报告。
+- 新增 `docs/cmrc2018-validation.md`，覆盖准备、上传、绑定、导入、运行和 native mode 验收命令。
+- 新增 `docs/v1.1.md` 与 CMRC2018 native RAGAS 实测截图；v1.0 截图不删除。
+- 评测页面摘要新增 evaluator mode、`top_k` 和 rerank 状态，方便截图和人工验收直接确认运行配置。
+
+### Changed
+
+- `RAGAS_EVALUATOR_MODE=native` 现在是严格模式：native judge 异常时运行失败并记录
+  `evaluator_config.mode=native_ragas_failed`，不再静默回退 `semantic_proxy`。
+- `semantic_proxy` 仍可在 `auto` 大批量 guard 或显式 `proxy` 模式下使用，但页面会明确提示它不是原生
+  RAGAS，CMRC2018 脚本也会拒绝把该结果报告为 native。
+- 修复逐题表格的 `1280px` 内在宽度撑大评测主列并被页面裁切的问题；摘要、五项指标和表格现在保持在
+  内容列宽度内，表格横向滚动被限制在自身卡片中。
+- 项目版本更新为 `1.1.0`。
+
+### Verification
+
+- 数据准备：200 个互异 context 文件、20 个目标、180 个干扰、20 道不同目标 context 的黄金题；文件
+  内容与官方 context 一致，不含附加 question/answer。
+- 上传处理：200/200 文档完成，文件哈希互异。
+- chunk 绑定：20/20 expected chunks 属于专用知识库、启用、非 parent 且包含参考答案。
+- 黄金集导入：20 题；重复绑定/导入复用同一 testset。
+- native RAGAS rerank off：run `fe73573c-613c-4d22-8b77-271f91eacfe9`，20/20 completed，
+  overall `0.8769`，expected source hit rate `1.0`，`mode=native_ragas`。
+- native RAGAS rerank on：run `90e8fe8e-3469-411b-a287-80a49b6eb574`，20/20 completed，
+  overall `0.8733`，expected source hit rate `1.0`，`mode=native_ragas`。
+- `python -m pytest -q tests/test_cmrc2018_validation.py tests/test_v10_ragas_evaluations.py`：`15 passed`。
+- Ruff、compileall、前端生产构建和 `git diff --check`：通过。
+- 全量 pytest：`259 passed, 2 failed`；失败项分别为既有 Windows batch CRLF 检查，以及 Docker API
+  镜像缺少 Node.js 导致前端 Node 脚本无法执行，与 CMRC2018/native RAGAS 逻辑无关。
+
+### Known Limitations
+
+- `context_precision`、`context_recall`、`faithfulness`、`response_relevancy` 使用 native RAGAS；
+  `factual_correctness` 仍为项目确定性 proxy。
+- RAGAS judge 复用知识库 `qa_model_id`，并非独立 evaluator；当前分数用于工程功能验收和同环境回归，
+  不作为正式科研分数。
+- 前端可以选择已有黄金集，但仍没有黄金集导入 UI；v1.1 使用脚本和 API 导入。
+
 ## v1.0
 
 v1.0 是 v0.92 之后的 RAGas 评测闭环与法律知识库质量达标版本。主链路继续保持 WeKnora-style 固定 Quick Q&A：Query Understand + Qdrant dense + ParadeDB BM25 + RRF + mandatory rerank + parent-child context；本版本重点把“能回答”推进到“能量化、能对比、能复测”，并在法律知识库上完成 50 题黄金集 0.88+ 的稳定验收。

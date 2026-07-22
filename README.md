@@ -2,9 +2,18 @@
 
 knowmate 知友是一个知识库 RAG 项目，面向模型配置、知识库管理、文档解析、混合检索、快速问答和自动评测闭环。后端采用 Python / FastAPI。
 
-当前版本为 v1.0，主线是在 v0.9/v0.91 固定 Quick Q&A 链路和 v0.92 MinerU 解析能力基础上补齐 RAGas 知识库级自动评测闭环：可从已解析 chunks 生成/保存评测集，复用知识库绑定的 QA / Embedding 模型运行 Quick Q&A，计算五项 0-1 量化指标，并在前端“评测”页面展示总分、基线对比、指标分布、逐题明细和 sources。v1.0 继续固定采用 Query Understand + over-retrieval + Qdrant dense retrieval + ParadeDB pg_search BM25 + RRF + mandatory composite rerank/MMR + parent-child context，不把 vector-only、keyword-only、rerank 开关或 planned vector backends 暴露为用户配置项。v1.0 版本说明见 [docs/v1.0.md](docs/v1.0.md)。
+当前版本为 v1.1。它在 v1.0 RAGAS 评测闭环上新增可复现的 CMRC2018 中文端到端验收：固定 200 篇纯 context（20 篇目标 + 180 篇干扰）和 20 道黄金题，完成上传、动态 chunk 绑定、黄金集导入、Quick Answer rerank A/B，并强制确认 `evaluator_config.mode=native_ragas`。主线继续采用 Query Understand + over-retrieval + Qdrant dense retrieval + ParadeDB pg_search BM25 + RRF + composite rerank/MMR + parent-child context；正式产品 Quick Q&A 仍保持 mandatory rerank，评测服务中的 rerank 开关仅用于固定测试集 A/B。v1.1 版本说明见 [docs/v1.1.md](docs/v1.1.md)，复现命令见 [docs/cmrc2018-validation.md](docs/cmrc2018-validation.md)。
 
 ## 界面预览
+
+### v1.1 CMRC2018 native RAGAS 实测
+
+![CMRC2018 native RAGAS 评测结果](docs/assets/v1.1/evaluations-native-ragas-cmrc2018.png)
+
+截图中的运行是 20 题黄金集、`top_k=5`、rerank 开启的真实结果；摘要栏直接显示
+`评测模式 native_ragas`。v1.0 的原始界面截图继续保留如下。
+
+### v1.0 原始界面
 
 | RAGas 评测 | 快速问答 |
 | --- | --- |
@@ -217,8 +226,15 @@ knowmate 知友是一个知识库 RAG 项目，面向模型配置、知识库管
   - 前端新增 `/#/evaluations` 页面、侧边栏入口和命令面板入口，展示总分、基线对比、指标条形图、逐题热力表、答案、参考答案、sources 和诊断信息。
   - 法律知识库质量优化：抽取 `law_name/article_no/article_no_normalized/part/chapter/section/item_no/knowledge_piece_index` 等法律结构化 metadata，增加 legal exact lookup、legal boost、父子来源命中诊断和更严格的法律回答 prompt。
   - 30 题基线运行 `0d160b0c-31ae-490a-a06e-2bdaaa087a8e` 总分 `0.5228`；同一法律知识库在 50 题黄金集 `26f4a44b-91f4-4479-a6a2-a42e92218e5a` 上复测两次分别为 `0.8822` 和 `0.8819`，波动 `0.0003`。
+- v1.1 CMRC2018 native RAGAS 可复现验收：
+  - 固定官方 dev/validation、随机种子 `20240722`，生成 20 篇目标 + 180 篇干扰的纯 context 语料以及 20 道不同目标 context 的黄金题。
+  - 新增稳定 `dataset_context_id`、可恢复上传、答案 chunk 绑定、黄金集 JSON 生成/导入和幂等复用。
+  - 新增 `scripts/cmrc2018_e2e.py`，自动完成 prepare/upload/bind/run，并保存 rerank off/on 的逐题 JSON 与对照报告。
+  - `RAGAS_EVALUATOR_MODE=native` 失败时不再回退 proxy；成功结果必须明确保存 `mode=native_ragas`。
+  - 前端评测摘要显示 evaluator mode、`top_k` 和 rerank 状态，`semantic_proxy` 会显示非原生警告。
+  - 真实 20 题运行：rerank off 总分 `0.8769`、rerank on 总分 `0.8733`，两次 expected source hit rate 均为 `1.0`，均确认 `mode=native_ragas`。
 - 自动化测试：覆盖多模型 CRUD、凭据加密、知识库模型校验、重处理、检索配置、hybrid/RRF/rerank/parent-child retrieval、knowledge-search API、前端关键逻辑、API 和文档处理 payload。
-- v1.0 质量验证详见下方“验证命令”、[CHANGELOG.md](CHANGELOG.md) 和 [docs/v1.0.md](docs/v1.0.md)。
+- v1.1 质量验证详见下方“验证命令”、[CHANGELOG.md](CHANGELOG.md) 和 [docs/v1.1.md](docs/v1.1.md)。v1.0 历史说明保留在 [docs/v1.0.md](docs/v1.0.md)。
 
 暂未实现：
 
@@ -250,7 +266,7 @@ knowmate 知友是一个知识库 RAG 项目，面向模型配置、知识库管
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start-dev.ps1
 ```
 
-脚本会先清理本机残留的 API / Celery / Vite 进程，再启动 `postgres / redis / qdrant / api / worker`，最后拉起本机 Vite dev server。默认路径是 `docker compose up -d` + `docker compose restart api worker`，用于快速加载挂载代码；当 `Dockerfile`、`pyproject.toml` 或 `docker-compose.yml` 变化、镜像不存在，或显式传入 `-Rebuild` 时，脚本才会执行 `docker compose up -d --build`。后端统一运行在 Docker 中，避免 Windows 本机 worker 和 Linux Docker worker 混跑导致上传文件路径不一致。v0.9 的 `postgres` 服务使用 ParadeDB PostgreSQL 16 镜像，并通过 `shared_preload_libraries=pg_search` 加载 BM25 扩展；如果扩展未加载，BM25 migration 和生产 keyword search 会明确失败。
+脚本会先清理本机残留的 API / Celery / Vite 进程，再启动 `postgres / redis / qdrant / api / worker`，最后拉起本机 Vite dev server。默认路径是 `docker compose up -d` + `docker compose restart api worker`，用于快速加载挂载代码；当 `Dockerfile`、`pyproject.toml` 或 `docker-compose.yml` 变化、镜像不存在，或显式传入 `-Rebuild` 时，脚本才会执行 `docker compose up -d --build`。后端统一运行在 Docker 中，避免 Windows 本机 worker 和 Linux Docker worker 混跑导致上传文件路径不一致。v0.9 的 `postgres` 服务固定使用 ParadeDB PostgreSQL 16 镜像，并通过 `shared_preload_libraries=pg_search,pg_cron` 加载 BM25 与镜像初始化所需扩展；如果扩展未加载，BM25 migration 和生产 keyword search 会明确失败。
 
 需要强制重建镜像时，可以双击 `rebuild-dev.bat`，或运行：
 
@@ -1059,30 +1075,31 @@ python -m compileall app tests
 npm --prefix frontend run build
 ```
 
-最近一次本地验证结果：
+最近一次本地验证结果（v1.1）：
 
-- `python -m pytest -q`：`253 passed`
+- `python -m pytest -q`：`259 passed, 2 failed`；失败项是既有 Windows batch CRLF 检查和 Docker API 镜像缺少 Node.js，CMRC2018/native RAGAS 相关测试通过。
 - `ruff check .`：通过
-- `python -m compileall app tests`：通过
+- `python -m compileall app scripts tests`：通过
 - `npm --prefix frontend run build`：通过，仍有既有 Vite 大 chunk 提示。
-- `python -m pytest tests/test_v10_ragas_evaluations.py tests/test_frontend_v10_evaluations.py -q`：`11 passed`
+- `python -m pytest tests/test_cmrc2018_validation.py tests/test_v10_ragas_evaluations.py -q`：`15 passed`
 - RAGas 法律知识库 50 题黄金集复测：run `d675c9a7-4abc-4c8a-8e25-6e1d576fbc85` 总分 `0.8822`，run `0f650beb-ba66-471e-814b-48b17e5c9cb9` 总分 `0.8819`，两次波动 `0.0003`。
+- CMRC2018 native RAGAS：rerank off run `fe73573c-613c-4d22-8b77-271f91eacfe9` 总分 `0.8769`，rerank on run `90e8fe8e-3469-411b-a287-80a49b6eb574` 总分 `0.8733`；两次均 20/20 completed、expected source hit rate `1.0`、`mode=native_ragas`。
 - 法律检索 A/B：`.runtime-logs/ab-legal-exact-v3.json` 中 `recall_at_10=0.98`、`precision_at_5=0.98`、`miss_count=1`、`failed=0`。
-- Browser smoke：`http://127.0.0.1:5173/#/evaluations` 可查看评测运行、总分、五项指标、基线对比、逐题明细和 source 诊断。
-- `scripts/start-dev.ps1 -Rebuild` / `rebuild-dev.bat`：强制重建完整后端栈镜像；PostgreSQL 运行 `paradedb/paradedb:pg16` 并加载 `shared_preload_libraries=pg_search`。
+- Browser smoke：`http://127.0.0.1:8000/#/evaluations` 已验证真实 CMRC2018 运行可显示总分、五项指标、`native_ragas` evaluator mode、`top_k=5`、rerank 状态、逐题明细和 source 诊断。
+- `scripts/start-dev.ps1 -Rebuild` / `rebuild-dev.bat`：强制重建完整后端栈镜像；PostgreSQL 运行固定版本 `paradedb/paradedb:v0.24.3-pg16` 并加载 `shared_preload_libraries=pg_search,pg_cron`。
 - 本地服务 E2E：使用真实 PostgreSQL/ParadeDB 和 Qdrant、进程内 fake Embedding/Chat/Rerank，验证知识库创建、文档上传、同步处理、parent-child chunks、Qdrant point、ParadeDB BM25 hit、knowledge-search 和 quick-answer trace/sources 均通过。
-- v1.0 分项验收详见 [CHANGELOG.md](CHANGELOG.md) 的 v1.0 Verification。
-- v1.0 本地服务端到端验证需要 PostgreSQL/ParadeDB `pg_search`、Redis、Qdrant、API、Celery Worker、可用 QA / Embedding / Rerank 模型配置；生产解析 PDF/Office/图片类文档还需要已配置的 MinerU API Key；真实 RAGas native judge 评测需要可用 evaluator/QA 模型和外部模型服务。
+- v1.1 分项验收详见 [CHANGELOG.md](CHANGELOG.md) 的 v1.1 Verification。
+- v1.1 本地服务端到端验证需要 PostgreSQL/ParadeDB `pg_search`、Redis、Qdrant、API、Celery Worker、可用 QA / Embedding / Rerank 模型配置；生产解析 PDF/Office/图片类文档还需要已配置的 MinerU API Key；真实 RAGAS native judge 评测需要可用 evaluator/QA 模型和外部模型服务。
 
 ## 开发备注
 
-- v1.0 仍默认单租户，`DEFAULT_TENANT_ID=10000`。
+- v1.1 仍默认单租户，`DEFAULT_TENANT_ID=10000`。
 - Docker Compose 当前提供完整后端栈：`postgres / redis / qdrant / api / worker`。前端 dev server 仍通过 `npm --prefix frontend run dev` 或 `scripts/start-dev.ps1` 启动。
 - 默认开发方式是 Docker API + Docker worker + 本机 Vite。不要同时运行本机 `uvicorn` / `celery` 和 Docker `api` / `worker`，否则上传文件路径可能在 Windows 与 Linux 容器之间不兼容。
 - 文档上传后必须有 Celery Worker 在线；`scripts/start-dev.ps1` 会自动启动并重启 worker，否则文档会停留在 `pending` 或 `processing`。
 - 切换 embedding 模型、维度、parser/chunking 参数或 keyword 检索文本策略后，需要重处理文档或重建知识库来刷新 PostgreSQL chunks、Qdrant 向量和 ParadeDB BM25 索引。
 - 默认 keyword search 是 PostgreSQL + ParadeDB `pg_search` BM25；测试环境可使用 fake repository / injected client，生产 Quick Q&A 不会静默退回 simple FTS。
-- Rerank 是 v1.0 Quick Q&A 主链路必需项；必须先创建可用的 `Rerank` 模型，并在检索配置中绑定 `rerank_model_id`，否则有候选命中时 Quick Q&A 返回中文明确错误。
+- Rerank 是 v1.1 正式 Quick Q&A 主链路必需项；必须先创建可用的 `Rerank` 模型，并在检索配置中绑定 `rerank_model_id`，否则有候选命中时 Quick Q&A 返回中文明确错误。关闭 rerank 只用于评测内部 A/B。
 - MinerU 云端解析已接入；PDF/Office/图片类文档会发送到 MinerU，PDF 超过 200 页会自动本地分片后逐片解析，非 PDF 超限仍需人工拆分或后续转换为 PDF 再处理。
 - RAGas 评测复用知识库绑定的 QA / Embedding 模型，API Key 只在后端解密使用；评测运行只返回模型名、provider、是否配置和 `api_key_last4`，不会回传明文或密文。
 - 大批量评测默认 `RAGAS_EVALUATOR_MODE=auto`，超过 `RAGAS_NATIVE_MAX_ROWS=20` 时使用 `semantic_proxy` 计算可重复指标；需要强制 native judge 时再显式设置 `RAGAS_EVALUATOR_MODE=native` 并控制题量。

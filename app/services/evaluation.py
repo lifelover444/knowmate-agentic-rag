@@ -286,6 +286,10 @@ class EvaluationService:
         try:
             score_rows = adapter.evaluate(rows=eval_rows, model_config=run.model_config_json or {})
         except Exception as exc:
+            evaluator_config = getattr(adapter, "last_evaluator_config", None)
+            if evaluator_config:
+                run.evaluator_config_json = evaluator_config
+                self.repo.save_run(run)
             return self._mark_run_failed(run, f"RAGas 评分失败：{exc}")
         evaluator_config = getattr(adapter, "last_evaluator_config", None)
         if evaluator_config:
@@ -567,6 +571,8 @@ class RagasEvaluationAdapter:
 
     def evaluate(self, *, rows: list[dict], model_config: dict) -> list[EvaluationScoreRow]:
         mode = os.getenv("RAGAS_EVALUATOR_MODE", "auto").strip().lower() or "auto"
+        if mode not in {"auto", "native", "proxy"}:
+            raise ValueError("RAGAS_EVALUATOR_MODE 只支持 auto、native 或 proxy。")
         native_max_rows = int(os.getenv("RAGAS_NATIVE_MAX_ROWS", "20"))
         if mode == "proxy" or (mode == "auto" and len(rows) > native_max_rows):
             self.last_evaluator_config = {
@@ -579,6 +585,14 @@ class RagasEvaluationAdapter:
         try:
             score_rows = self._evaluate_native(rows=rows, model_config=model_config)
         except Exception as exc:
+            if mode == "native":
+                self.last_evaluator_config = {
+                    "mode": "native_ragas_failed",
+                    "reason": "native_failed",
+                    "error_message": str(exc),
+                    "sample_count": len(rows),
+                }
+                raise RuntimeError(f"强制 native RAGAS 评分失败：{exc}") from exc
             self.last_evaluator_config = {
                 "mode": "semantic_proxy",
                 "reason": "native_failed",

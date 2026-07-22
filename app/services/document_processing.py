@@ -51,7 +51,7 @@ class DocumentProcessingService:
         if document is None:
             raise LookupError("document not found")
         if document.parse_status == "cancelled":
-            return
+            raise DocumentProcessingCancelled(document.error_message or "用户已取消解析")
         kb = self.knowledge_bases.get(document.knowledge_base_id, document.tenant_id)
         if kb is None:
             raise LookupError("knowledge base not found")
@@ -72,7 +72,11 @@ class DocumentProcessingService:
             self._raise_if_cancelled(document)
             file_path = Path(document.file_path or "")
             selected_engine = _select_parser_engine(kb.parser_engine_rules, document.file_type)
-            parsed = self._parse_document(file_path, selected_engine)
+            parsed = self._parse_document(
+                file_path,
+                selected_engine,
+                cancel_check=lambda: self._raise_if_cancelled(document),
+            )
             if not parsed.content.strip():
                 raise ValueError("未解析出可入库文本；该文件可能是扫描版或图片型 PDF，请接入 OCR/MinerU 后重试。")
             document.doc_metadata = {**(document.doc_metadata or {}), **parsed.metadata, "pages": parsed.pages}
@@ -170,6 +174,11 @@ class DocumentProcessingService:
             self.documents.save(document)
             raise
         except Exception as exc:
+            self.db.refresh(document)
+            if document.parse_status == "cancelled":
+                cancellation = DocumentProcessingCancelled(document.error_message or "用户已取消解析")
+                spans.cancel_attempt(document.id, attempt, str(cancellation))
+                raise cancellation from exc
             if current_stage is not None:
                 spans.fail_stage(document.id, attempt, current_stage, exc)
             spans.finalize_root(document.id, attempt, "failed", error_message=str(exc))
@@ -183,7 +192,7 @@ class DocumentProcessingService:
         if document.parse_status == "cancelled":
             raise DocumentProcessingCancelled(document.error_message or "用户已取消解析")
 
-    def _parse_document(self, file_path: Path, engine: str | None) -> ParsedDocument:
+    def _parse_document(self, file_path: Path, engine: str | None, *, cancel_check=None) -> ParsedDocument:
         if engine != MINERU_PROVIDER:
             return DocumentParser().parse(file_path, engine=engine)
 
@@ -199,7 +208,8 @@ class DocumentProcessingService:
                 is_ocr=bool(runtime.config.get("is_ocr", False)),
                 poll_interval_seconds=float(runtime.config.get("poll_interval_seconds") or 3),
                 poll_timeout_seconds=float(runtime.config.get("poll_timeout_seconds") or 600),
-            )
+            ),
+            cancel_check=cancel_check,
         )
         max_pages_per_part = _mineru_max_pages_per_part(runtime.config.get("max_pages_per_part"))
         return _parse_with_mineru(file_path, client, max_pages_per_part=max_pages_per_part)
@@ -239,6 +249,8 @@ def _parse_with_mineru(file_path: Path, client: MinerUClient, *, max_pages_per_p
         for part in parts:
             try:
                 result = client.parse_file(part.path)
+            except DocumentProcessingCancelled:
+                raise
             except Exception as exc:
                 raise MinerUError(
                     f"MinerU 分片 {part.index}/{len(parts)}（第 {part.page_start}-{part.page_end} 页）解析失败：{exc}"

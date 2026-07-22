@@ -17,6 +17,8 @@ def test_task_007_frontend_shows_batch_progress_failures_and_retry():
     assert "batchOperationResult" in store
     assert "batchDeleteDocuments" in store
     assert "batchReprocessDocuments" in store
+    assert "cancelAllDocumentParsing" in store
+    assert "/documents/cancel-all" in store
     assert "批处理进度" in view
     assert "成功 {{ kbStore.batchOperationResult.succeeded }} 项" in view
     assert "失败 {{ kbStore.batchOperationResult.failed }} 项" in view
@@ -24,3 +26,5 @@ def test_task_007_frontend_shows_batch_progress_failures_and_retry():
     assert "retryTask" in view
     assert "重试失败任务" in view
     assert "task.batch_summary" in view
+    assert "取消全部解析" in view
+    assert "task.batch_summary.cancelled" in view

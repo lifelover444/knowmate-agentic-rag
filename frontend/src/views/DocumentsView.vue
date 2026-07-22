@@ -7,7 +7,7 @@ import { DocumentProcessingTimeoutError, useKnowledgeBaseStore } from "../stores
 import { formatApiError } from "../utils/api";
 import type { ChunkRead, DocumentRead, GeneratedQuestion } from "../types/api";
 
-type UploadQueueStatus = "pending" | "uploading" | "queued" | "processing" | "completed" | "failed";
+type UploadQueueStatus = "pending" | "uploading" | "queued" | "processing" | "completed" | "failed" | "cancelled";
 
 interface UploadQueueItem {
   id: string;
@@ -41,6 +41,7 @@ const batchTagVisible = ref(false);
 const batchTagId = ref<string>("");
 const uploadQueue = ref<UploadQueueItem[]>([]);
 const uploadQueueRunning = ref(false);
+const uploadQueueCancelRequested = ref(false);
 const moveDocumentVisible = ref(false);
 const targetKnowledgeBaseId = ref("");
 const movingDocumentIds = ref<string[]>([]);
@@ -86,6 +87,7 @@ function uploadQueueStatusText(status: UploadQueueStatus) {
       processing: "解析中",
       completed: "解析完成",
       failed: "失败",
+      cancelled: "已取消",
     }[status] || status
   );
 }
@@ -99,6 +101,7 @@ function uploadQueueStatusColor(status: UploadQueueStatus) {
       processing: "blue",
       completed: "green",
       failed: "red",
+      cancelled: "gray",
     }[status] || "gray"
   );
 }
@@ -107,9 +110,10 @@ const uploadQueueSummary = computed(() => {
   const total = uploadQueue.value.length;
   const completed = uploadQueue.value.filter((item) => item.status === "completed").length;
   const failed = uploadQueue.value.filter((item) => item.status === "failed").length;
+  const cancelled = uploadQueue.value.filter((item) => item.status === "cancelled").length;
   const running = uploadQueue.value.filter((item) => ["pending", "uploading", "queued", "processing"].includes(item.status)).length;
   const partial = total > 0 && completed > 0 && failed > 0;
-  return { total, completed, failed, running, partial };
+  return { total, completed, failed, cancelled, running, partial };
 });
 
 const moveTargetKnowledgeBases = computed(() => {
@@ -205,19 +209,30 @@ async function uploadFiles(files: File[]) {
   }));
   uploadQueue.value = [...uploadQueue.value, ...queueItems];
   uploadQueueRunning.value = true;
+  uploadQueueCancelRequested.value = false;
   try {
     for (let index = 0; index < files.length; index += 1) {
       const file = files[index];
       const queueItem = queueItems[index];
+      if (uploadQueueCancelRequested.value) {
+        queueItems.slice(index).forEach((item) => { item.status = "cancelled"; });
+        break;
+      }
       try {
         queueItem.status = "uploading";
         const uploadedDocument = await kbStore.uploadDocument(kbId.value, file);
         queueItem.documentId = uploadedDocument.id;
+        if (uploadQueueCancelRequested.value) {
+          await kbStore.cancelDocumentParse(uploadedDocument.id);
+          queueItem.status = "cancelled";
+          queueItems.slice(index + 1).forEach((item) => { item.status = "cancelled"; });
+          break;
+        }
         queueItem.status = "queued";
         queueItem.taskId = await resolveUploadTaskId(uploadedDocument.id);
         queueItem.status = "processing";
-        await kbStore.pollDocument(uploadedDocument.id);
-        queueItem.status = "completed";
+        const processedDocument = await kbStore.pollDocument(uploadedDocument.id);
+        queueItem.status = processedDocument.parse_status === "cancelled" ? "cancelled" : "completed";
         queueItem.noticeMessage = undefined;
       } catch (error) {
         if (error instanceof DocumentProcessingTimeoutError) {
@@ -481,6 +496,20 @@ async function batchDelete() {
   }
 }
 
+async function cancelAllDocumentParsing() {
+  try {
+    uploadQueueCancelRequested.value = true;
+    const result = await kbStore.cancelAllDocumentParsing(kbId.value);
+    Message.success(`已取消 ${result.cancelled} 个解析任务`);
+    uploadQueue.value.forEach((item) => {
+      if (["queued", "processing"].includes(item.status)) item.status = "cancelled";
+    });
+    await refresh();
+  } catch (error) {
+    Message.error(formatApiError(error instanceof Error ? error.message : error));
+  }
+}
+
 async function retryTask(taskId: string) {
   try {
     await kbStore.retryTask(taskId);
@@ -645,6 +674,7 @@ onMounted(() => {
             总计 {{ uploadQueueSummary.total }} 个文件，
             完成 {{ uploadQueueSummary.completed }}，
             失败 {{ uploadQueueSummary.failed }}，
+            已取消 {{ uploadQueueSummary.cancelled }}，
             待处理 {{ uploadQueueSummary.running }}。
             <span v-if="uploadQueueSummary.partial">部分成功</span>
           </p>
@@ -712,7 +742,8 @@ onMounted(() => {
             批次 {{ task.batch_summary.total }} 项：
             完成 {{ task.batch_summary.completed }}，
             处理中 {{ task.batch_summary.processing }}，
-            失败 {{ task.batch_summary.failed }}
+            失败 {{ task.batch_summary.failed }}，
+            已取消 {{ task.batch_summary.cancelled }}
           </p>
           <p v-if="task.error_message" class="inline-error">{{ task.error_message }}</p>
           <a-button v-if="task.status === 'failed'" size="mini" @click="retryTask(task.id)">重试</a-button>
@@ -729,6 +760,14 @@ onMounted(() => {
         <a-space>
           <a-button :disabled="!kbStore.selectedDocumentIds.length" @click="batchTagVisible = true">批量设置标签</a-button>
           <a-button :disabled="!kbStore.selectedDocumentIds.length" @click="batchReprocess">批量重处理</a-button>
+          <a-popconfirm content="确认取消当前知识库全部待解析和解析中的文档？" type="warning" @ok="cancelAllDocumentParsing">
+            <a-button
+              status="warning"
+              :disabled="!uploadQueueRunning && !kbStore.documents.some((document) => ['pending', 'processing'].includes(document.parse_status)) && !kbStore.tasks.some((task) => ['queued', 'processing'].includes(task.status))"
+            >
+              取消全部解析
+            </a-button>
+          </a-popconfirm>
           <a-popconfirm content="确认批量删除选中文档？" @ok="batchDelete">
             <a-button status="danger" :disabled="!kbStore.selectedDocumentIds.length">批量删除</a-button>
           </a-popconfirm>

@@ -110,6 +110,51 @@ def test_cancel_parse_marks_document_task_and_timeline_cancelled(client: TestCli
     assert {stage["status"] for stage in timeline["stages"]} == {"cancelled"}
 
 
+def test_cancel_all_parsing_cancels_active_documents_and_tasks(client: TestClient, db_session, tmp_path: Path):
+    kb_id, _ = create_kb(client, "cancel all kb")
+    documents = []
+    tasks = []
+    for index, parse_status in enumerate(["pending", "processing", "completed"]):
+        file_path = tmp_path / f"cancel-all-{index}.txt"
+        file_path.write_text(f"document {index}", encoding="utf-8")
+        document = add_document(db_session, kb_id, str(file_path), status=parse_status)
+        documents.append(document)
+        if parse_status in {"pending", "processing"}:
+            task = ProcessingTask(
+                tenant_id=10000,
+                knowledge_base_id=kb_id,
+                document_id=document.id,
+                task_type="document_upload_process",
+                status="queued" if parse_status == "pending" else "processing",
+                progress=0 if parse_status == "pending" else 30,
+            )
+            db_session.add(task)
+            tasks.append(task)
+    db_session.commit()
+    document_ids = [document.id for document in documents]
+    task_ids = [task.id for task in tasks]
+
+    response = client.post(f"/api/v1/knowledge-bases/{kb_id}/documents/cancel-all")
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["requested"] == 2
+    assert payload["cancelled"] == 2
+    assert payload["succeeded"] == 2
+    assert payload["failed"] == 0
+    db_session.expire_all()
+    assert [db_session.get(Knowledge, document_id).parse_status for document_id in document_ids] == [
+        "cancelled",
+        "cancelled",
+        "completed",
+    ]
+    assert [db_session.get(ProcessingTask, task_id).status for task_id in task_ids] == ["cancelled", "cancelled"]
+
+    task_response = client.get(f"/api/v1/tasks/{task_ids[0]}")
+    assert task_response.status_code == 200
+    assert task_response.json()["batch_summary"]["cancelled"] == 2
+
+
 def test_move_document_updates_document_chunks_and_vector_payload(
     client: TestClient,
     db_session,

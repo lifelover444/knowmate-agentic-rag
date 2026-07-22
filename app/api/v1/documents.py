@@ -104,11 +104,6 @@ def cancel_document_parse(document_id: str, db: DBSession, settings: AppSettings
         ).cancel_parse(document)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    ProcessingTaskRepository(db).cancel_active_for_document(document_id)
-    spans = ProcessingSpanService(db)
-    timeline = spans.get_timeline(document_id)
-    if timeline.attempt > 0:
-        spans.cancel_attempt(document_id, timeline.attempt)
     return to_document_read(cancelled, db)
 
 

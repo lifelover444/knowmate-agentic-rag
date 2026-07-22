@@ -41,6 +41,7 @@ const comparisonItems = computed(() => {
 });
 const sampleRows = computed(() => evaluations.currentRun?.samples || []);
 const modelConfig = computed(() => activeRun.value?.model_config || {});
+const evaluatorMode = computed(() => String(activeRun.value?.evaluator_config?.mode || "未记录"));
 
 let bootstrapping = false;
 
@@ -171,6 +172,13 @@ function statusColor(status: string): string {
   return "gray";
 }
 
+function evaluatorModeColor(mode: string): string {
+  if (mode === "native_ragas") return "green";
+  if (mode === "native_ragas_failed") return "red";
+  if (mode === "semantic_proxy") return "gold";
+  return "gray";
+}
+
 function sampleScore(sample: EvaluationSampleRead, key: string): number {
   return Number(sample.scores?.[key] || 0);
 }
@@ -274,6 +282,9 @@ onMounted(bootstrap);
             <a-tag v-if="activeRun" :color="statusColor(activeRun.status)">{{ statusText(activeRun.status) }}</a-tag>
           </div>
           <div class="summary-meta">
+            <a-tag :color="evaluatorModeColor(evaluatorMode)">评测模式 {{ evaluatorMode }}</a-tag>
+            <span>top_k {{ activeRun?.top_k || "-" }}</span>
+            <span>rerank {{ activeRun?.enable_rerank ? "开启" : "关闭" }}</span>
             <span>样本 {{ activeRun?.completed_sample_count || 0 }} / {{ activeRun?.sample_count || 0 }}</span>
             <span>失败 {{ activeRun?.failed_sample_count || 0 }}</span>
             <span>题集 {{ activeRun?.testset_source === "golden" ? "黄金测试集" : "chunk-derived" }}</span>
@@ -292,13 +303,18 @@ onMounted(bootstrap);
             </a-button>
           </div>
           <a-alert v-if="activeRun?.error_message" type="error" :content="activeRun.error_message" />
+          <a-alert
+            v-else-if="evaluatorMode === 'semantic_proxy'"
+            type="warning"
+            content="当前运行使用 semantic_proxy，不是原生 RAGAS；正式 native 验收必须确认评测模式为 native_ragas。"
+          />
         </section>
 
         <section class="content-card evaluation-metrics">
           <div class="section-heading">
             <div>
               <h2>量化结果</h2>
-              <p>五项 RAGas 指标均按 0-1 保存，条形越长代表当前运行得分越高。</p>
+              <p>指标均按 0-1 保存；native_ragas 运行中四项使用原生 RAGAS，事实正确性仍为项目 proxy。</p>
             </div>
           </div>
           <div class="metric-bars">
@@ -472,7 +488,16 @@ onMounted(bootstrap);
 
 .evaluation-main {
   display: grid;
+  min-width: 0;
   gap: 14px;
+}
+
+.evaluation-main > section {
+  min-width: 0;
+}
+
+.evaluation-heatmap {
+  overflow: hidden;
 }
 
 .evaluation-summary {

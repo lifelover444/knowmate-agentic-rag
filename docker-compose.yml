@@ -18,8 +18,8 @@ x-app-service: &app-service
 
 services:
   postgres:
-    image: paradedb/paradedb:pg16
-    command: ["postgres", "-c", "shared_preload_libraries=pg_search"]
+    image: paradedb/paradedb:v0.24.3-pg16
+    command: ["postgres", "-c", "shared_preload_libraries=pg_search,pg_cron"]
     environment:
       POSTGRES_DB: knowmate
       POSTGRES_USER: knowmate

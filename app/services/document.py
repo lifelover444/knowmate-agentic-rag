@@ -13,6 +13,8 @@ from app.db.models import Knowledge
 from app.db.repositories.chunk import ChunkRepository
 from app.db.repositories.document import DocumentRepository
 from app.db.repositories.knowledge_base import KnowledgeBaseRepository
+from app.db.repositories.task import ProcessingTaskRepository
+from app.services.processing_spans import ProcessingSpanService
 
 
 class DocumentService:
@@ -137,13 +139,18 @@ class DocumentService:
         return deleted
 
     def cancel_parse(self, document: Knowledge) -> Knowledge:
-        if document.parse_status == "cancelled":
-            return document
         if document.parse_status in {"completed", "failed"}:
             raise ValueError("解析已结束，无法取消")
-        document.parse_status = "cancelled"
-        document.error_message = "用户已取消解析"
-        return self.document_repo.save(document)
+        if document.parse_status != "cancelled":
+            document.parse_status = "cancelled"
+            document.error_message = "用户已取消解析"
+            document = self.document_repo.save(document)
+        ProcessingTaskRepository(self.document_repo.db).cancel_active_for_document(document.id)
+        spans = ProcessingSpanService(self.document_repo.db)
+        timeline = spans.get_timeline(document.id)
+        if timeline.attempt > 0:
+            spans.cancel_attempt(document.id, timeline.attempt)
+        return document
 
     def move_to_knowledge_base(self, document: Knowledge, target_kb_id: str, vector_store=None) -> Knowledge:
         target_kb = self.kb_repo.get(target_kb_id, document.tenant_id)

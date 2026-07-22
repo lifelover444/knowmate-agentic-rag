@@ -1,0 +1,15 @@
+import{y as W,q as e,z as v,G as A,A as B}from"./index-DS-w6_v5.js";const r={strategy:"auto",chunk_size:512,chunk_overlap:80,separators:[`
+
+`,`
+`,"。"],token_limit:0,languages:[],enable_parent_child:!0,parent_chunk_size:4096,child_chunk_size:384},H=W("retrieval",()=>{const _=e("hybrid"),c=e(50),d=e(50),p=e(.15),h=e(.2),k=e(8),g=e(.2),t=e(""),y=e(!0),f=e(60),w=e(.65),m=e(.35),b=e(30),l=e([]),a=e(null),R=e([{file_types:["pdf","doc","docx","ppt","pptx","xls","xlsx","png","jpg","jpeg","jp2","webp","gif","bmp"],engine:"mineru"},{file_types:["md","markdown"],engine:"builtin"},{file_types:["txt"],engine:"builtin"},{file_types:["csv","json"],engine:"builtin"}]),x=e("auto"),z=e(512),C=e(80),K=e("\\n\\n,\\n,。"),S=e(0),T=e(""),E=e(!0),j=e(4096),I=e(384),P=e(`# 产品手册
+
+## 安装
+
+安装步骤一。安装步骤二。
+
+## 使用
+
+使用说明一。使用说明二。`),o=e(null),i=e(!1),s=e(!1),u=e(!1);function G(n){_.value=n.retrieval_mode||"hybrid",c.value=n.embedding_top_k,d.value=n.keyword_top_k||50,p.value=n.vector_threshold,h.value=n.keyword_threshold,k.value=n.rerank_top_k,g.value=n.rerank_threshold,t.value=n.rerank_model_id||t.value||"",y.value=!!n.enable_rerank,f.value=n.rrf_k,w.value=n.rrf_vector_weight,m.value=n.rrf_keyword_weight,b.value=n.rrf_top_k||30,x.value=r.strategy,z.value=r.chunk_size,C.value=r.chunk_overlap,K.value="\\n\\n,\\n,。",S.value=r.token_limit,T.value="",E.value=!0,j.value=r.parent_chunk_size,I.value=r.child_chunk_size}function J(){return{...r,separators:[`
+
+`,`
+`,"。"],languages:[],enable_parent_child:!0}}function N(){return R.value.map(n=>({file_types:n.file_types,engine:n.engine}))}async function V(){i.value=!0;try{const n=await v("/retrieval-config");return G(n),n}finally{i.value=!1}}async function q(){s.value=!0;try{const n=await A("/retrieval-config",{rerank_model_id:t.value||null,retrieval_mode:"hybrid",vector_engine:"qdrant",keyword_engine:"paradedb_bm25",embedding_top_k:50,keyword_top_k:50,vector_threshold:.15,keyword_threshold:.2,rerank_top_k:8,rerank_threshold:.2,enable_rerank:!0,rrf_k:60,rrf_vector_weight:.65,rrf_keyword_weight:.35,rrf_top_k:30});return G(n),n}finally{s.value=!1}}async function F(){l.value=await v("/parser-engines")}async function M(){return a.value=await v("/runtime-status"),l.value=a.value.parser_engines,a.value}async function O(){u.value=!0;try{return o.value=await B("/chunker/preview",{text:P.value,chunking_config:J()}),o.value}finally{u.value=!1}}return{retrievalMode:_,retrievalEmbeddingTopK:c,retrievalKeywordTopK:d,retrievalVectorThreshold:p,retrievalKeywordThreshold:h,retrievalRerankTopK:k,retrievalRerankThreshold:g,selectedRerankModelId:t,retrievalEnableRerank:y,retrievalRrfK:f,retrievalRrfVectorWeight:w,retrievalRrfKeywordWeight:m,retrievalRrfTopK:b,parserEngines:l,runtimeStatus:a,parserEngineRules:R,chunkStrategy:x,chunkSize:z,chunkOverlap:C,separatorsText:K,tokenLimit:S,languagesText:T,enableParentChild:E,parentChunkSize:j,childChunkSize:I,previewSample:P,previewResult:o,loading:i,saving:s,previewing:u,loadRetrievalConfig:V,saveRetrievalConfig:q,loadParserEngines:F,loadRuntimeStatus:M,previewChunking:O,chunkingPayload:J,parserEngineRulesPayload:N}});export{H as u};

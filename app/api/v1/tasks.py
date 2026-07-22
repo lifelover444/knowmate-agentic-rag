@@ -75,7 +75,7 @@ def _batch_summary(
         knowledge_base_id=task.knowledge_base_id,
     )
     related = [item for item in related if item.task_type == task.task_type]
-    counts = {"queued": 0, "processing": 0, "completed": 0, "failed": 0}
+    counts = {"queued": 0, "processing": 0, "completed": 0, "failed": 0, "cancelled": 0}
     failures: list[ProcessingTaskFailure] = []
     for item in related:
         if item.status in counts:
@@ -94,5 +94,6 @@ def _batch_summary(
         processing=counts["processing"],
         completed=counts["completed"],
         failed=counts["failed"],
+        cancelled=counts["cancelled"],
         failures=failures,
     )

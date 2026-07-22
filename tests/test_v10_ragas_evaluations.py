@@ -123,6 +123,30 @@ def test_ragas_adapter_auto_uses_semantic_proxy_for_large_batches(client: TestCl
     assert scores["factual_correctness"] >= 0.8
 
 
+def test_ragas_adapter_native_mode_never_falls_back_to_semantic_proxy(
+    client: TestClient,
+    db_session,
+    monkeypatch,
+):
+    monkeypatch.setenv("RAGAS_EVALUATOR_MODE", "native")
+    adapter = RagasEvaluationAdapter(db_session, client.app.state.settings)
+    monkeypatch.setattr(
+        adapter,
+        "_evaluate_native",
+        lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("judge unavailable")),
+    )
+
+    try:
+        adapter.evaluate(rows=[{"user_input": "问题"}], model_config={})
+    except RuntimeError as exc:
+        assert "强制 native RAGAS 评分失败" in str(exc)
+    else:
+        raise AssertionError("native mode must fail instead of silently using semantic_proxy")
+
+    assert adapter.last_evaluator_config["mode"] == "native_ragas_failed"
+    assert adapter.last_evaluator_config["reason"] == "native_failed"
+
+
 def test_retrieval_diagnostics_treats_expected_child_parent_as_hit(db_session):
     db_session.add(
         Chunk(

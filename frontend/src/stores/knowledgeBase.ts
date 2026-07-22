@@ -193,6 +193,10 @@ export const useKnowledgeBaseStore = defineStore("knowledgeBase", () => {
         if (document.parse_status === "failed") {
           throw new Error(document.error_message || "文档解析失败，请检查文件内容或模型配置。");
         }
+        if (document.parse_status === "cancelled") {
+          await loadDocuments(document.knowledge_base_id);
+          return document;
+        }
         await new Promise((resolve) => setTimeout(resolve, 1000));
       }
       throw new DocumentProcessingTimeoutError(latestDocument);
@@ -315,6 +319,15 @@ export const useKnowledgeBaseStore = defineStore("knowledgeBase", () => {
 
   async function batchReprocessDocuments(kbId: string, documentIds: string[]) {
     batchOperationResult.value = await postJson<BatchDocumentResponse>(`/knowledge-bases/${kbId}/documents/batch-reprocess`, { document_ids: documentIds });
+    await Promise.all([loadDocuments(kbId), loadTasks({ knowledge_base_id: kbId })]);
+    selectedDocumentIds.value = [];
+    return batchOperationResult.value;
+  }
+
+  async function cancelAllDocumentParsing(kbId: string) {
+    batchOperationResult.value = await postJson<BatchDocumentResponse>(
+      `/knowledge-bases/${kbId}/documents/cancel-all`,
+    );
     await Promise.all([loadDocuments(kbId), loadTasks({ knowledge_base_id: kbId })]);
     selectedDocumentIds.value = [];
     return batchOperationResult.value;
@@ -508,6 +521,7 @@ export const useKnowledgeBaseStore = defineStore("knowledgeBase", () => {
     reprocessKnowledgeBase,
     batchDeleteDocuments,
     batchReprocessDocuments,
+    cancelAllDocumentParsing,
     importText,
     importUrl,
     loadTasks,

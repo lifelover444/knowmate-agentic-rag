@@ -53,6 +53,7 @@ class BatchDocumentFailure(BaseModel):
 class BatchDocumentResponse(BaseModel):
     deleted: int = 0
     queued: int = 0
+    cancelled: int = 0
     requested: int = 0
     succeeded: int = 0
     failed: int = 0

@@ -17,6 +17,8 @@ def test_docker_compose_defines_api_and_worker_services():
     assert "uvicorn app.main:app" in compose
     assert "celery -A app.workers.celery_app:celery_app worker" in compose
     assert "alembic upgrade head" in compose
+    assert "paradedb/paradedb:v0.24.3-pg16" in compose
+    assert "shared_preload_libraries=pg_search,pg_cron" in compose
     assert "DATABASE_URL=postgresql+psycopg://knowmate:knowmate@postgres:5432/knowmate" in compose
     assert "CELERY_BROKER_URL=redis://redis:6379/0" in compose
     assert "CELERY_RESULT_BACKEND=redis://redis:6379/1" in compose

@@ -1,6 +1,7 @@
 import json
 import time
 from collections import Counter
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from io import BytesIO
 from pathlib import Path
@@ -34,13 +35,20 @@ class MinerUParseResult:
 
 
 class MinerUClient:
-    def __init__(self, config: MinerUConfig, http_client: httpx.Client | None = None) -> None:
+    def __init__(
+        self,
+        config: MinerUConfig,
+        http_client: httpx.Client | None = None,
+        cancel_check: Callable[[], None] | None = None,
+    ) -> None:
         self.config = config
         self.http = http_client or httpx.Client(timeout=60)
+        self.cancel_check = cancel_check
 
     def parse_file(self, path: Path) -> MinerUParseResult:
         if not self.config.api_key:
             raise MinerUError("MinerU API Key 未配置")
+        self._check_cancelled()
         batch_id, upload_url, submit_trace_id = self._create_upload_task(path)
         self._upload_file(path, upload_url)
         result = self._poll_result(batch_id, path.name)
@@ -83,6 +91,7 @@ class MinerUClient:
         deadline = time.monotonic() + self.config.poll_timeout_seconds
         last_state = "unknown"
         while time.monotonic() <= deadline:
+            self._check_cancelled()
             response = self._request("GET", f"{self._base_url}/extract-results/batch/{batch_id}")
             data = response.get("data") or {}
             item = _select_extract_result(data.get("extract_result") or [], file_name)
@@ -100,6 +109,10 @@ class MinerUClient:
             if self.config.poll_interval_seconds > 0:
                 time.sleep(self.config.poll_interval_seconds)
         raise MinerUError(f"MinerU 解析超时：batch_id={batch_id}，最后状态={last_state}")
+
+    def _check_cancelled(self) -> None:
+        if self.cancel_check is not None:
+            self.cancel_check()
 
     def _download_and_read_markdown(self, full_zip_url: str) -> tuple[str, dict[str, Any]]:
         response = self.http.get(full_zip_url)
@@ -150,7 +163,8 @@ def _select_extract_result(items: list[dict[str, Any]], file_name: str) -> dict[
 def _safe_data_id(path: Path) -> str:
     allowed = []
     for char in path.stem:
-        allowed.append(char if char.isalnum() or char in {"_", "-", "."} else "_")
+        is_ascii_alphanumeric = char.isascii() and char.isalnum()
+        allowed.append(char if is_ascii_alphanumeric or char in {"_", "-", "."} else "_")
     value = "".join(allowed).strip("._-") or "document"
     return value[:128]
 

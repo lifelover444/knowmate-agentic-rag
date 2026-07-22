@@ -223,6 +223,35 @@ def batch_reprocess_documents(kb_id: str, payload: BatchDocumentRequest, db: DBS
     )
 
 
+@router.post("/{kb_id}/documents/cancel-all", response_model=BatchDocumentResponse)
+def cancel_all_document_processing(kb_id: str, db: DBSession, settings: AppSettings):
+    if KnowledgeBaseRepository(db).get(kb_id, settings.default_tenant_id) is None:
+        raise HTTPException(status_code=404, detail="knowledge base not found")
+    doc_repo = DocumentRepository(db)
+    service = DocumentService(doc_repo, KnowledgeBaseRepository(db), settings, settings.upload_dir)
+    active_documents = [
+        document
+        for document in doc_repo.list_by_knowledge_base(kb_id)
+        if document.parse_status in {"pending", "processing"}
+    ]
+    cancelled = 0
+    failures: list[BatchDocumentFailure] = []
+    for document in active_documents:
+        try:
+            service.cancel_parse(document)
+        except ValueError as exc:
+            failures.append(BatchDocumentFailure(document_id=document.id, reason=str(exc)))
+            continue
+        cancelled += 1
+    return BatchDocumentResponse(
+        requested=len(active_documents),
+        cancelled=cancelled,
+        succeeded=cancelled,
+        failed=len(failures),
+        failures=failures,
+    )
+
+
 @router.post("/{kb_id}/reprocess", status_code=status.HTTP_202_ACCEPTED)
 def reprocess_knowledge_base(kb_id: str, db: DBSession, settings: AppSettings, request: Request):
     repo = KnowledgeBaseRepository(db)

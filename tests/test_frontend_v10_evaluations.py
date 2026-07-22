@@ -36,4 +36,18 @@ def test_frontend_exposes_ragas_evaluation_workspace():
     assert "诊断" in app
     assert "source 明细" in app
     assert "sources" in app
+    assert "评测模式" in app
+    assert "native_ragas" in app
+    assert "semantic_proxy，不是原生 RAGAS" in app
+    assert "四项使用原生 RAGAS，事实正确性仍为项目 proxy" in app
+    assert "top_k" in app
+    assert "rerank" in app
     assert "formatApiError" in app
+
+
+def test_evaluation_table_does_not_expand_the_result_column():
+    view = (ROOT / "frontend" / "src" / "views" / "EvaluationsView.vue").read_text(encoding="utf-8")
+
+    assert ".evaluation-main {\n  display: grid;\n  min-width: 0;" in view
+    assert ".evaluation-main > section {\n  min-width: 0;" in view
+    assert ".evaluation-heatmap {\n  overflow: hidden;" in view

@@ -314,6 +314,7 @@ export interface TaskBatchSummary {
   processing: number;
   completed: number;
   failed: number;
+  cancelled: number;
   failures: TaskFailure[];
 }
 
@@ -325,6 +326,7 @@ export interface BatchDocumentFailure {
 export interface BatchDocumentResponse {
   deleted: number;
   queued: number;
+  cancelled: number;
   requested: number;
   succeeded: number;
   failed: number;

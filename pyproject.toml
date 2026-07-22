@@ -1,6 +1,6 @@
 [project]
 name = "knowmate-agentic-rag"
-version = "0.1.0"
+version = "1.1.0"
 description = "knowmate知友 FastAPI quick-answer RAG service"
 requires-python = ">=3.11"
 dependencies = [

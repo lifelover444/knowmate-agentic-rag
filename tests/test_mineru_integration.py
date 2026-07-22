@@ -7,7 +7,7 @@ from conftest import create_bound_models
 from pypdf import PdfReader, PdfWriter
 
 from app.db.models import Knowledge
-from app.integrations.mineru import MinerUError, MinerUParseResult
+from app.integrations.mineru import MinerUError, MinerUParseResult, _safe_data_id
 from app.services.document_processing import DocumentProcessingService
 from app.services.knowledge_base import default_parser_engine_rules
 
@@ -64,6 +64,62 @@ def test_default_parser_rules_use_mineru_for_document_formats():
         assert engine_by_type[file_type] == "mineru"
     for file_type in ["txt", "md", "markdown", "csv", "json"]:
         assert engine_by_type[file_type] == "builtin"
+
+
+def test_mineru_data_id_only_contains_supported_ascii_characters():
+    data_id = _safe_data_id(Path("doc-id_中华人民共和国反垄断法_20220624.pdf"))
+
+    assert data_id.startswith("doc-id_")
+    assert data_id.endswith("_20220624")
+    assert set(data_id) <= set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_.-")
+    assert data_id.isascii()
+
+
+def test_mineru_client_checks_cancellation_after_upload(tmp_path: Path):
+    from app.integrations.mineru import MinerUClient, MinerUConfig
+
+    source = tmp_path / "cancel.pdf"
+    source.write_bytes(b"%PDF fake")
+    checks = 0
+    requests: list[str] = []
+
+    class Cancelled(RuntimeError):
+        pass
+
+    def cancel_check() -> None:
+        nonlocal checks
+        checks += 1
+        if checks == 2:
+            raise Cancelled("cancel now")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request.method)
+        if request.method == "POST":
+            return httpx.Response(
+                200,
+                json={
+                    "code": 0,
+                    "msg": "ok",
+                    "data": {"batch_id": "cancel-batch", "file_urls": ["https://upload.example/cancel.pdf"]},
+                },
+            )
+        if request.method == "PUT":
+            return httpx.Response(200)
+        raise AssertionError("polling should stop before the first result request")
+
+    client = MinerUClient(
+        MinerUConfig(api_key="mineru-token", poll_interval_seconds=0),
+        http_client=httpx.Client(transport=httpx.MockTransport(handler)),
+        cancel_check=cancel_check,
+    )
+
+    try:
+        client.parse_file(source)
+    except Cancelled as exc:
+        assert str(exc) == "cancel now"
+    else:
+        raise AssertionError("expected cancellation")
+    assert requests == ["POST", "PUT"]
 
 
 def test_mineru_client_uploads_polls_and_reads_full_markdown(tmp_path: Path):
